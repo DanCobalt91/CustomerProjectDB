@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, Copy, Save, Pencil, X, Search, ChevronRight, ChevronDown } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Customer, Project, WOType } from '../types'
-import { loadDb, saveDb, resetDemo } from '../lib/storage'
+import { loadDb, saveDb } from '../lib/storage'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
@@ -13,12 +13,12 @@ export default function App() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [editingInfo, setEditingInfo] = useState<Record<string, boolean>>({})
 
-  // Search state
+  // Search
   const [customerQuery, setCustomerQuery] = useState('')
   const [projectQuery, setProjectQuery] = useState('')
   const [woQuery, setWoQuery] = useState('')
 
-  // Create customer form (modal)
+  // Create customer (modal)
   const [newCust, setNewCust] = useState({ name: '', address: '', contactName: '', contactPhone: '', contactEmail: '' })
   const [showNewCustomer, setShowNewCustomer] = useState(false)
 
@@ -55,8 +55,13 @@ export default function App() {
     return matches.slice(0, 25)
   }, [db, customerQuery, projectQuery, woQuery])
 
+  // Helpers
+  const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
+
   // Mutators
-  function upsertCustomer(updated: Customer) { setDb(prev => prev.map(c => (c.id === updated.id ? updated : c))) }
+  function upsertCustomer(updated: Customer) {
+    setDb(prev => prev.map(c => (c.id === updated.id ? updated : c)))
+  }
   function deleteProject(customerId: string, projectId: string) {
     setDb(prev => prev.map(c => (c.id !== customerId ? c : { ...c, projects: c.projects.filter(p => p.id !== projectId) })))
   }
@@ -71,31 +76,27 @@ export default function App() {
     })))
   }
   function addWO(customerId: string, projectId: string, data: { number: string; type: WOType; note?: string }) {
-    const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
     setDb(prev => prev.map(c => (c.id !== customerId ? c : {
       ...c, projects: c.projects.map(p => p.id !== projectId ? p : { ...p, wos: [...p.wos, { id: uid('wo'), ...data }] })
     })))
   }
   function addPO(customerId: string, projectId: string, data: { number: string; note?: string }) {
-    const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
     setDb(prev => prev.map(c => (c.id !== customerId ? c : {
       ...c, projects: c.projects.map(p => p.id !== projectId ? p : { ...p, pos: [...p.pos, { id: uid('po'), ...data }] })
     })))
   }
   function addProject(customerId: string, projectNumber: string) {
-    const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
     setDb(prev => prev.map(c => (c.id !== customerId ? c : {
       ...c, projects: [...c.projects, { id: uid('proj'), number: projectNumber, wos: [], pos: [] }]
     })))
   }
   function createCustomer(data: Omit<Customer, 'id' | 'projects'>) {
-    const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
     const c: Customer = { id: uid('cust'), ...data, projects: [] }
     setDb(prev => [c, ...prev])
     setSelectedCustomerId(c.id)
   }
 
-  // Inline editable field
+  // Inline editable input
   function EditableField({
     label, value, onSave, fieldKey, placeholder,
   }: { label: string; value?: string; onSave: (v: string) => void; fieldKey: string; placeholder?: string }) {
@@ -139,28 +140,67 @@ export default function App() {
     const [poForm, setPoForm] = useState({ number: '', note: '' })
 
     return (
-      <Card className='mb-3'>
+      <Card className='mb-3 panel'>
         <CardHeader>
           <div className='flex items-center gap-3'>
-            <Button variant='ghost' onClick={() => setOpenProjects(s => ({ ...s, [project.id]: !isOpen }))} className='p-1' title={isOpen ? 'Collapse' : 'Expand'}>
+            <Button
+              variant='ghost'
+              onClick={() => setOpenProjects(s => ({ ...s, [project.id]: !isOpen }))}
+              className='p-1'
+              title={isOpen ? 'Collapse' : 'Expand'}
+            >
               <ChevronDown size={18} className={isOpen ? '' : 'rotate-90 transition'} />
             </Button>
-            <div className='font-medium text-zinc-100'>Project: {project.number}</div>
+
+            <div className='font-medium text-zinc-100 flex items-center gap-3'>
+              <span>Project: {project.number}</span>
+              {!isOpen && project.note && (
+                <span
+                  className='max-w-[28ch] truncate text-xs font-normal text-zinc-400 italic'
+                  title={project.note}
+                >
+                  • {project.note}
+                </span>
+              )}
+            </div>
+
             <Button variant='outline' onClick={() => navigator.clipboard.writeText(project.number)} title='Copy project number'>
               <Copy size={16} /> Copy
             </Button>
           </div>
+
           <div className='flex items-center gap-2'>
             <Button variant='ghost' className='text-red-300 hover:text-red-200' onClick={() => deleteProject(customer.id, project.id)} title='Delete project'>
               <Trash2 size={18} />
             </Button>
           </div>
         </CardHeader>
+
         <AnimatePresence initial={false}>
           {isOpen && (
             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
               <CardContent className='grid gap-6 md:grid-cols-2'>
-                {/* WOs */}
+                {/* Project note */}
+                <div className='md:col-span-2'>
+                  <div className='rounded-xl border border-zinc-700/40 p-3 panel'>
+                    <div className='mb-1 text-xs uppercase tracking-wide text-zinc-400'>Project Note</div>
+                    <textarea
+                      className='w-full resize-y rounded-lg border border-zinc-700/40 bg-zinc-900 p-2 text-sm text-zinc-100 placeholder-zinc-500'
+                      rows={2}
+                      placeholder='Add a note about this project (optional)…'
+                      value={project.note || ''}
+                      onChange={(e) => {
+                        const v = (e.target as HTMLTextAreaElement).value
+                        setDb(prev => prev.map(c => c.id !== customer.id ? c : {
+                          ...c,
+                          projects: c.projects.map(p => p.id !== project.id ? p : { ...p, note: v })
+                        }))
+                      }}
+                    />
+                  </div>
+                </div>
+
+                {/* Work Orders */}
                 <div>
                   <div className='mb-2 text-sm font-semibold text-zinc-300'>Work Orders</div>
                   <div className='space-y-2'>
@@ -197,7 +237,11 @@ export default function App() {
                       </div>
                       <div>
                         <Label>Type</Label>
-                        <select className='w-full rounded-xl border border-zinc-600/40 bg-zinc-900 px-3 py-2 text-zinc-100' value={woForm.type} onChange={(e) => setWoForm({ ...woForm, type: e.target.value as WOType })}>
+                        <select
+                          className='w-full rounded-xl border border-zinc-600/40 bg-zinc-900 px-3 py-2 text-zinc-100'
+                          value={woForm.type}
+                          onChange={(e) => setWoForm({ ...woForm, type: e.target.value as WOType })}
+                        >
                           <option>Build</option>
                           <option>Onsite</option>
                         </select>
@@ -209,11 +253,10 @@ export default function App() {
                     </div>
                     <div className='mt-2'>
                       <Button onClick={() => {
-                        const t = woForm.number.trim()
-                        if (!t) return
-                        const num = t.startsWith('WO') ? t : `WO${t}`
-                        addWO(customer.id, project.id, { number: num, type: woForm.type, note: woForm.note?.trim() || undefined })
-                        setWoForm({ number: '', type: 'Build', note: '' })
+                        const t = woForm.number.trim(); if (!t) return;
+                        const num = t.startsWith('WO') ? t : `WO${t}`;
+                        addWO(customer.id, project.id, { number: num, type: woForm.type, note: woForm.note?.trim() || undefined });
+                        setWoForm({ number: '', type: 'Build', note: '' });
                       }}>
                         <Plus size={16} /> Add WO
                       </Button>
@@ -221,7 +264,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* POs */}
+                {/* Purchase Orders */}
                 <div>
                   <div className='mb-2 text-sm font-semibold text-zinc-300'>Purchase Orders</div>
                   <div className='space-y-2'>
@@ -258,9 +301,9 @@ export default function App() {
                     </div>
                     <div className='mt-2'>
                       <Button onClick={() => {
-                        if (!poForm.number.trim()) return
-                        addPO(customer.id, project.id, { number: poForm.number.trim(), note: poForm.note?.trim() || undefined })
-                        setPoForm({ number: '', note: '' })
+                        const t = poForm.number.trim(); if (!t) return;
+                        addPO(customer.id, project.id, { number: t, note: poForm.note?.trim() || undefined });
+                        setPoForm({ number: '', note: '' });
                       }}>
                         <Plus size={16} /> Add PO
                       </Button>
@@ -284,11 +327,10 @@ export default function App() {
             <Button onClick={() => setShowNewCustomer(true)} title='Create new customer'>
               <Plus size={16} /> New Customer
             </Button>
-            <Button onClick={() => resetDemo(setDb)} variant='outline' title='Reset demo data'>Reset demo</Button>
           </div>
         </div>
 
-        <Card className='mb-6'>
+        <Card className='mb-6 panel'>
           <CardHeader>
             <div className='flex items-center gap-2'>
               <Search size={18} />
@@ -313,11 +355,11 @@ export default function App() {
               </div>
               <div>
                 <Label>Project Number</Label>
-                <Input value={projectQuery} onChange={(e) => setProjectQuery((e.target as HTMLInputElement).value)} placeholder='e.g. PRJ-2025-001' />
+                <Input value={projectQuery} onChange={(e) => setProjectQuery((e.target as HTMLInputElement).value)} placeholder='e.g. P1403' />
               </div>
               <div>
                 <Label>Work Order Number</Label>
-                <Input value={woQuery} onChange={(e) => setWoQuery((e.target as HTMLInputElement).value)} placeholder='e.g. WO-11021' />
+                <Input value={woQuery} onChange={(e) => setWoQuery((e.target as HTMLInputElement).value)} placeholder='e.g. WO804322' />
               </div>
             </div>
 
@@ -345,7 +387,7 @@ export default function App() {
         </Card>
 
         {selectedCustomer ? (
-          <Card className='mb-6'>
+          <Card className='mb-6 panel'>
             <CardHeader>
               <div className='flex items-center gap-2'>
                 <div className='text-lg font-semibold'>Customer: {selectedCustomer.name}</div>
@@ -391,7 +433,7 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <Card className='w-full max-w-2xl'>
+            <Card className='w-full max-w-2xl panel'>
               <CardHeader>
                 <div className='flex items-center gap-2'><Plus size={18} /> <span className='font-medium'>Create New Customer</span></div>
                 <Button variant='ghost' onClick={() => setShowNewCustomer(false)} title='Close'>
@@ -458,10 +500,14 @@ function AddProjectForm({ onAdd }: { onAdd: (num: string) => void }) {
         <Label>Project Number</Label>
         <div className='flex'>
           <span className='flex items-center rounded-l-xl border border-r-0 border-zinc-600/40 bg-zinc-800 px-3 py-2 text-sm text-zinc-400'>P</span>
-          <Input className='rounded-l-none border-l-0' value={val} onChange={(e) => setVal((e.target as HTMLInputElement).value)} placeholder='0000' />
+          <Input className='rounded-l-none border-l-0' value={val} onChange={(e) => setVal((e.target as HTMLInputElement).value)} placeholder='e.g. 1403' />
         </div>
       </div>
-      <Button onClick={() => { const t = val.trim(); if (!t) return; const num = t.startsWith('P') ? t : `P${t}`; onAdd(num); setVal('') }}>
+      <Button onClick={() => {
+        const t = val.trim(); if (!t) return;
+        const num = t.startsWith('P') ? t : `P${t}`;
+        onAdd(num); setVal('');
+      }}>
         <Plus size={16} /> Add
       </Button>
     </div>
