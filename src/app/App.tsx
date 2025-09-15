@@ -18,7 +18,7 @@ export default function App() {
   const [projectQuery, setProjectQuery] = useState('')
   const [woQuery, setWoQuery] = useState('')
 
-  // Create customer form
+  // Create customer form (modal)
   const [newCust, setNewCust] = useState({ name: '', address: '', contactName: '', contactPhone: '', contactEmail: '' })
   const [showNewCustomer, setShowNewCustomer] = useState(false)
 
@@ -26,7 +26,6 @@ export default function App() {
   useEffect(() => { saveDb(db) }, [db])
 
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
-
   const customerOptions = useMemo(() => db.map(c => c.name).sort(), [db])
 
   const searchMatches = useMemo(() => {
@@ -36,23 +35,142 @@ export default function App() {
       if (!cq || c.name.toLowerCase().includes(cq)) matches.push({ kind: 'customer', label: `${c.name}`, customerId: c.id })
     })
     const pq = projectQuery.trim().toLowerCase()
-    if (pq) db.forEach(c => c.projects.forEach(p => { if (p.number.toLowerCase().includes(pq)) matches.push({ kind: 'project', label: `${p.number}  —  ${c.name}`, customerId: c.id, projectId: p.id }) }))
+    if (pq) {
+      db.forEach(c =>
+        c.projects.forEach(p => {
+          if (p.number.toLowerCase().includes(pq)) matches.push({ kind: 'project', label: `${p.number}  —  ${c.name}`, customerId: c.id, projectId: p.id })
+        })
+      )
+    }
     const wq = woQuery.trim().toLowerCase()
-    if (wq) db.forEach(c => c.projects.forEach(p => p.wos.forEach(w => { if (w.number.toLowerCase().includes(wq)) matches.push({ kind: 'wo', label: `${w.number} (${w.type})  —  ${c.name}`, customerId: c.id, projectId: p.id }) })))
+    if (wq) {
+      db.forEach(c =>
+        c.projects.forEach(p =>
+          p.wos.forEach(w => {
+            if (w.number.toLowerCase().includes(wq)) matches.push({ kind: 'wo', label: `${w.number} (${w.type})  —  ${c.name}`, customerId: c.id, projectId: p.id })
+          })
+        )
+      )
+    }
     return matches.slice(0, 25)
   }, [db, customerQuery, projectQuery, woQuery])
 
+  // Mutators
   function upsertCustomer(updated: Customer) { setDb(prev => prev.map(c => (c.id === updated.id ? updated : c))) }
   function deleteProject(customerId: string, projectId: string) {
     setDb(prev => prev.map(c => (c.id !== customerId ? c : { ...c, projects: c.projects.filter(p => p.id !== projectId) })))
   }
-@@ -131,66 +132,69 @@ export default function App() {
+  function deleteWO(customerId: string, projectId: string, woId: string) {
+    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
+      ...c, projects: c.projects.map(p => p.id !== projectId ? p : { ...p, wos: p.wos.filter(w => w.id !== woId) })
+    })))
+  }
+  function deletePO(customerId: string, projectId: string, poId: string) {
+    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
+      ...c, projects: c.projects.map(p => p.id !== projectId ? p : { ...p, pos: p.pos.filter(po => po.id !== poId) })
+    })))
+  }
+  function addWO(customerId: string, projectId: string, data: { number: string; type: WOType; note?: string }) {
+    const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
+    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
+      ...c, projects: c.projects.map(p => p.id !== projectId ? p : { ...p, wos: [...p.wos, { id: uid('wo'), ...data }] })
+    })))
+  }
+  function addPO(customerId: string, projectId: string, data: { number: string; note?: string }) {
+    const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
+    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
+      ...c, projects: c.projects.map(p => p.id !== projectId ? p : { ...p, pos: [...p.pos, { id: uid('po'), ...data }] })
+    })))
+  }
+  function addProject(customerId: string, projectNumber: string) {
+    const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
+    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
+      ...c, projects: [...c.projects, { id: uid('proj'), number: projectNumber, wos: [], pos: [] }]
+    })))
+  }
+  function createCustomer(data: Omit<Customer, 'id' | 'projects'>) {
+    const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
+    const c: Customer = { id: uid('cust'), ...data, projects: [] }
+    setDb(prev => [c, ...prev])
+    setSelectedCustomerId(c.id)
+  }
+
+  // Inline editable field
+  function EditableField({
+    label, value, onSave, fieldKey, placeholder,
+  }: { label: string; value?: string; onSave: (v: string) => void; fieldKey: string; placeholder?: string }) {
+    const [val, setVal] = useState(value || '')
+    const isEditing = !!editingInfo[fieldKey]
+    useEffect(() => setVal(value || ''), [value])
+    return (
+      <div className='flex flex-col gap-1'>
+        <Label>{label}</Label>
+        <div className='flex items-center gap-2'>
+          {isEditing ? (
+            <>
+              <Input value={val} onChange={(e) => setVal((e.target as HTMLInputElement).value)} placeholder={placeholder} />
+              <Button onClick={() => { onSave(val); setEditingInfo(s => ({ ...s, [fieldKey]: false })) }} title='Save'>
+                <Save size={16} /> Save
+              </Button>
+              <Button variant='ghost' onClick={() => setEditingInfo(s => ({ ...s, [fieldKey]: false }))} title='Cancel'>
+                <X size={16} />
+              </Button>
+            </>
+          ) : (
+            <>
+              <div className='min-h-[38px] flex-1 rounded-xl border border-zinc-700/40 bg-zinc-900 px-3 py-2'>
+                {value ? <span className='text-zinc-100'>{value}</span> : <span className='text-zinc-500'>{placeholder || 'Not set'}</span>}
+              </div>
+              <Button variant='outline' onClick={() => setEditingInfo(s => ({ ...s, [fieldKey]: true }))} title='Edit'>
+                <Pencil size={16} /> Edit
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  // Collapsible project row
+  const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({})
+  function ProjectRow({ project, customer }: { project: Project; customer: Customer }) {
+    const isOpen = !!openProjects[project.id]
+    const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
+    const [poForm, setPoForm] = useState({ number: '', note: '' })
+
+    return (
+      <Card className='mb-3'>
+        <CardHeader>
+          <div className='flex items-center gap-3'>
+            <Button variant='ghost' onClick={() => setOpenProjects(s => ({ ...s, [project.id]: !isOpen }))} className='p-1' title={isOpen ? 'Collapse' : 'Expand'}>
+              <ChevronDown size={18} className={isOpen ? '' : 'rotate-90 transition'} />
+            </Button>
+            <div className='font-medium text-zinc-100'>Project: {project.number}</div>
+            <Button variant='outline' onClick={() => navigator.clipboard.writeText(project.number)} title='Copy project number'>
+              <Copy size={16} /> Copy
+            </Button>
+          </div>
+          <div className='flex items-center gap-2'>
+            <Button variant='ghost' className='text-red-300 hover:text-red-200' onClick={() => deleteProject(customer.id, project.id)} title='Delete project'>
+              <Trash2 size={18} />
+            </Button>
+          </div>
+        </CardHeader>
+        <AnimatePresence initial={false}>
+          {isOpen && (
+            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
+              <CardContent className='grid gap-6 md:grid-cols-2'>
+                {/* WOs */}
+                <div>
+                  <div className='mb-2 text-sm font-semibold text-zinc-300'>Work Orders</div>
                   <div className='space-y-2'>
                     {project.wos.length === 0 && <div className='text-sm text-zinc-500'>None yet</div>}
                     {project.wos.map(wo => (
                       <div key={wo.id} className='flex items-center justify-between rounded-xl border border-zinc-700/40 bg-zinc-950/40 p-3'>
                         <div>
-                          <div className='font-medium text-zinc-100'>{wo.number} <span className='rounded-md border border-zinc-700/60 px-1.5 py-0.5 text-xs text-zinc-300'>{wo.type}</span></div>
+                          <div className='font-medium text-zinc-100'>
+                            {wo.number} <span className='rounded-md border border-zinc-700/60 px-1.5 py-0.5 text-xs text-zinc-300'>{wo.type}</span>
+                          </div>
                           {wo.note && <div className='text-xs text-zinc-400'>{wo.note}</div>}
                         </div>
                         <div className='flex items-center gap-1'>
@@ -90,13 +208,20 @@ export default function App() {
                       </div>
                     </div>
                     <div className='mt-2'>
-                      <Button onClick={() => { const t = woForm.number.trim(); if (!t) return; const num = t.startsWith('WO') ? t : `WO${t}`; addWO(customer.id, project.id, { number: num, type: woForm.type, note: woForm.note?.trim() || undefined }); setWoForm({ number: '', type: 'Build', note: '' }) }}>
+                      <Button onClick={() => {
+                        const t = woForm.number.trim()
+                        if (!t) return
+                        const num = t.startsWith('WO') ? t : `WO${t}`
+                        addWO(customer.id, project.id, { number: num, type: woForm.type, note: woForm.note?.trim() || undefined })
+                        setWoForm({ number: '', type: 'Build', note: '' })
+                      }}>
                         <Plus size={16} /> Add WO
                       </Button>
                     </div>
                   </div>
                 </div>
 
+                {/* POs */}
                 <div>
                   <div className='mb-2 text-sm font-semibold text-zinc-300'>Purchase Orders</div>
                   <div className='space-y-2'>
@@ -116,13 +241,27 @@ export default function App() {
                           </Button>
                         </div>
                       </div>
-@@ -208,172 +212,190 @@ export default function App() {
+                    ))}
+                  </div>
+
+                  <div className='mt-3 rounded-xl border border-zinc-700/40 p-3'>
+                    <div className='mb-2 text-sm font-semibold text-zinc-300'>Add PO</div>
+                    <div className='grid gap-2 md:grid-cols-5'>
+                      <div className='md:col-span-3'>
+                        <Label>PO Number</Label>
+                        <Input value={poForm.number} onChange={(e) => setPoForm({ ...poForm, number: (e.target as HTMLInputElement).value })} placeholder='PO-90001' />
+                      </div>
+                      <div className='md:col-span-2'>
                         <Label>Optional note</Label>
                         <Input value={poForm.note} onChange={(e) => setPoForm({ ...poForm, note: (e.target as HTMLInputElement).value })} placeholder='e.g. deposit' />
                       </div>
                     </div>
                     <div className='mt-2'>
-                      <Button onClick={() => { if (!poForm.number.trim()) return; addPO(customer.id, project.id, { number: poForm.number.trim(), note: poForm.note?.trim() || undefined }); setPoForm({ number: '', note: '' }) }}>
+                      <Button onClick={() => {
+                        if (!poForm.number.trim()) return
+                        addPO(customer.id, project.id, { number: poForm.number.trim(), note: poForm.note?.trim() || undefined })
+                        setPoForm({ number: '', note: '' })
+                      }}>
                         <Plus size={16} /> Add PO
                       </Button>
                     </div>
@@ -187,7 +326,12 @@ export default function App() {
               <div className='mt-2 grid gap-2 md:grid-cols-2'>
                 {searchMatches.length === 0 && (<div className='text-sm text-zinc-500'>No matches yet. Start typing above.</div>)}
                 {searchMatches.map((m, i) => (
-                  <button key={i} onClick={() => setSelectedCustomerId(m.customerId)} className='flex items-center justify-between rounded-xl border border-zinc-700/40 bg-zinc-950/40 p-3 text-left hover:bg-zinc-900' title={m.kind === 'customer' ? 'Open customer' : m.kind === 'project' ? 'Open customer at project' : 'Open customer at WO'}>
+                  <button
+                    key={i}
+                    onClick={() => setSelectedCustomerId(m.customerId)}
+                    className='flex items-center justify-between rounded-xl border border-zinc-700/40 bg-zinc-950/40 p-3 text-left hover:bg-zinc-900'
+                    title={m.kind === 'customer' ? 'Open customer' : m.kind === 'project' ? 'Open customer at project' : 'Open customer at WO'}
+                  >
                     <div>
                       <div className='text-sm font-medium text-zinc-100'>{m.label}</div>
                       <div className='text-xs text-zinc-500'>{m.kind.toUpperCase()}</div>
@@ -237,6 +381,8 @@ export default function App() {
 
         <div className='h-8' />
       </div>
+
+      {/* New Customer Modal */}
       <AnimatePresence>
         {showNewCustomer && (
           <motion.div
@@ -277,7 +423,21 @@ export default function App() {
                 </div>
                 <div className='mt-3 flex justify-end gap-2'>
                   <Button variant='outline' onClick={() => setShowNewCustomer(false)}>Cancel</Button>
-                  <Button size='lg' onClick={() => { if (!newCust.name.trim()) return; createCustomer({ name: newCust.name.trim(), address: newCust.address.trim() || undefined, contactName: newCust.contactName.trim() || undefined, contactPhone: newCust.contactPhone.trim() || undefined, contactEmail: newCust.contactEmail.trim() || undefined }); setNewCust({ name: '', address: '', contactName: '', contactPhone: '', contactEmail: '' }); setShowNewCustomer(false) }}>
+                  <Button
+                    size='lg'
+                    onClick={() => {
+                      if (!newCust.name.trim()) return
+                      createCustomer({
+                        name: newCust.name.trim(),
+                        address: newCust.address.trim() || undefined,
+                        contactName: newCust.contactName.trim() || undefined,
+                        contactPhone: newCust.contactPhone.trim() || undefined,
+                        contactEmail: newCust.contactEmail.trim() || undefined,
+                      })
+                      setNewCust({ name: '', address: '', contactName: '', contactPhone: '', contactEmail: '' })
+                      setShowNewCustomer(false)
+                    }}
+                  >
                     <Plus size={18} /> Create Customer
                   </Button>
                 </div>
