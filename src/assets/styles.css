@@ -3,7 +3,25 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background:
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.12), transparent 55%),
+    radial-gradient(circle at 10% 15%, rgba(199, 210, 254, 0.16), transparent 45%),
+    linear-gradient(180deg, #f9fbff 0%, #edf2ff 36%, #e3ebff 100%);
+  color: #0f172a;
+}
+
+.panel {
+  backdrop-filter: blur(14px);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.96), rgba(244, 247, 255, 0.92)) !important;
+  border: 1px solid rgba(148, 163, 184, 0.4) !important;
+  box-shadow:
+    0 10px 40px -25px rgba(15, 23, 42, 0.6),
+    0 18px 30px -20px rgba(14, 116, 144, 0.25) !important;
 }
 
 * { box-sizing: border-box; }

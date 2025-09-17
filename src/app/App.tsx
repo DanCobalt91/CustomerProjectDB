@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, Copy, Save, Pencil, X, Search, ChevronRight, ChevronDown } from 'lucide-react'
+import { Plus, Trash2, Copy, Save, Pencil, X, Search, ChevronRight, ChevronDown, MapPin, AlertCircle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Customer, Project, WOType } from '../types'
 import { loadDb, saveDb } from '../lib/storage'
@@ -12,6 +12,8 @@ export default function App() {
   const [db, setDb] = useState<Customer[]>([])
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [editingInfo, setEditingInfo] = useState<Record<string, boolean>>({})
+  const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({})
+  const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
 
   // Search
   const [customerQuery, setCustomerQuery] = useState('')
@@ -26,14 +28,17 @@ export default function App() {
   useEffect(() => { saveDb(db) }, [db])
 
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
+  const selectedCustomerAddressForMap = selectedCustomer?.address?.trim() || null
   const customerOptions = useMemo(() => db.map(c => c.name).sort(), [db])
 
   const searchMatches = useMemo(() => {
     const matches: { kind: 'customer' | 'project' | 'wo'; label: string; customerId: string; projectId?: string }[] = []
     const cq = customerQuery.trim().toLowerCase()
-    db.forEach(c => {
-      if (!cq || c.name.toLowerCase().includes(cq)) matches.push({ kind: 'customer', label: `${c.name}`, customerId: c.id })
-    })
+    if (cq) {
+      db.forEach(c => {
+        if (c.name.toLowerCase().includes(cq)) matches.push({ kind: 'customer', label: `${c.name}`, customerId: c.id })
+      })
+    }
     const pq = projectQuery.trim().toLowerCase()
     if (pq) {
       db.forEach(c =>
@@ -57,13 +62,51 @@ export default function App() {
 
   // Helpers
   const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
+  const customerNameExists = (name: string, excludeId?: string) =>
+    db.some(c => c.id !== excludeId && c.name.trim().toLowerCase() === name.trim().toLowerCase())
+  const projectNumberExists = (number: string, excludeProjectId?: string) => {
+    const norm = number.trim().toLowerCase()
+    return db.some(c => c.projects.some(p => p.id !== excludeProjectId && p.number.trim().toLowerCase() === norm))
+  }
+  const woNumberExists = (number: string, excludeWoId?: string) => {
+    const norm = number.trim().toLowerCase()
+    return db.some(c => c.projects.some(p => p.wos.some(w => w.id !== excludeWoId && w.number.trim().toLowerCase() === norm)))
+  }
+  const poNumberExists = (number: string, excludePoId?: string) => {
+    const norm = number.trim().toLowerCase()
+    return db.some(c => c.projects.some(p => p.pos.some(po => po.id !== excludePoId && po.number.trim().toLowerCase() === norm)))
+  }
 
   // Mutators
   function upsertCustomer(updated: Customer) {
     setDb(prev => prev.map(c => (c.id === updated.id ? updated : c)))
   }
+  function deleteCustomer(customerId: string) {
+    const target = db.find(c => c.id === customerId)
+    setDb(prev => prev.filter(c => c.id !== customerId))
+    setOpenProjects(prev => {
+      if (!target) return prev
+      const next = { ...prev }
+      target.projects.forEach(p => { delete next[p.id] })
+      return next
+    })
+    setEditingInfo(prev => {
+      const next = { ...prev }
+      Object.keys(next).forEach(key => {
+        if (key.includes(customerId)) delete next[key]
+      })
+      return next
+    })
+    if (selectedCustomerId === customerId) setSelectedCustomerId(null)
+  }
   function deleteProject(customerId: string, projectId: string) {
     setDb(prev => prev.map(c => (c.id !== customerId ? c : { ...c, projects: c.projects.filter(p => p.id !== projectId) })))
+    setOpenProjects(prev => {
+      if (!prev[projectId]) return prev
+      const next = { ...prev }
+      delete next[projectId]
+      return next
+    })
   }
   function deleteWO(customerId: string, projectId: string, woId: string) {
     setDb(prev => prev.map(c => (c.id !== customerId ? c : {
@@ -75,34 +118,87 @@ export default function App() {
       ...c, projects: c.projects.map(p => p.id !== projectId ? p : { ...p, pos: p.pos.filter(po => po.id !== poId) })
     })))
   }
-  function addWO(customerId: string, projectId: string, data: { number: string; type: WOType; note?: string }) {
+  function updateProjectNote(customerId: string, projectId: string, note: string) {
     setDb(prev => prev.map(c => (c.id !== customerId ? c : {
-      ...c, projects: c.projects.map(p => p.id !== projectId ? p : { ...p, wos: [...p.wos, { id: uid('wo'), ...data }] })
+      ...c,
+      projects: c.projects.map(p => (p.id !== projectId ? p : { ...p, note: note.trim() ? note : undefined })),
     })))
   }
-  function addPO(customerId: string, projectId: string, data: { number: string; note?: string }) {
+  function addWO(customerId: string, projectId: string, data: { number: string; type: WOType; note?: string }): string | null {
+    const trimmed = data.number.trim()
+    if (!trimmed) return 'Enter a work order number.'
+    const normalized = trimmed.toUpperCase()
+    const finalNumber = normalized.startsWith('WO') ? normalized : `WO${normalized}`
+    if (woNumberExists(finalNumber)) return 'A work order with this number already exists.'
+    const note = data.note?.trim()
     setDb(prev => prev.map(c => (c.id !== customerId ? c : {
-      ...c, projects: c.projects.map(p => p.id !== projectId ? p : { ...p, pos: [...p.pos, { id: uid('po'), ...data }] })
+      ...c,
+      projects: c.projects.map(p => (p.id !== projectId ? p : {
+        ...p,
+        wos: [...p.wos, { id: uid('wo'), number: finalNumber, type: data.type, note: note ? note : undefined }],
+      })),
     })))
+    return null
   }
-  function addProject(customerId: string, projectNumber: string) {
+  function addPO(customerId: string, projectId: string, data: { number: string; note?: string }): string | null {
+    const trimmed = data.number.trim()
+    if (!trimmed) return 'Enter a purchase order number.'
+    if (poNumberExists(trimmed)) return 'A purchase order with this number already exists.'
+    const note = data.note?.trim()
     setDb(prev => prev.map(c => (c.id !== customerId ? c : {
-      ...c, projects: [...c.projects, { id: uid('proj'), number: projectNumber, wos: [], pos: [] }]
+      ...c,
+      projects: c.projects.map(p => (p.id !== projectId ? p : {
+        ...p,
+        pos: [...p.pos, { id: uid('po'), number: trimmed, note: note ? note : undefined }],
+      })),
     })))
+    return null
   }
-  function createCustomer(data: Omit<Customer, 'id' | 'projects'>) {
-    const c: Customer = { id: uid('cust'), ...data, projects: [] }
+  function addProject(customerId: string, projectNumber: string): string | null {
+    const trimmed = projectNumber.trim()
+    if (!trimmed) return 'Enter a project number.'
+    const normalized = trimmed.toUpperCase()
+    const finalNumber = normalized.startsWith('P') ? normalized : `P${normalized}`
+    if (projectNumberExists(finalNumber)) return 'A project with this number already exists.'
+    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
+      ...c,
+      projects: [...c.projects, { id: uid('proj'), number: finalNumber, wos: [], pos: [] }],
+    })))
+    return null
+  }
+  function createCustomer(data: Omit<Customer, 'id' | 'projects'>): string | null {
+    const trimmedName = data.name.trim()
+    if (!trimmedName) return 'Customer name is required.'
+    if (customerNameExists(trimmedName)) return 'A customer with this name already exists.'
+    const c: Customer = {
+      id: uid('cust'),
+      name: trimmedName,
+      address: data.address?.trim() || undefined,
+      contactName: data.contactName?.trim() || undefined,
+      contactPhone: data.contactPhone?.trim() || undefined,
+      contactEmail: data.contactEmail?.trim() || undefined,
+      projects: [],
+    }
     setDb(prev => [c, ...prev])
     setSelectedCustomerId(c.id)
+    return null
   }
 
   // Inline editable input
   function EditableField({
-    label, value, onSave, fieldKey, placeholder,
-  }: { label: string; value?: string; onSave: (v: string) => void; fieldKey: string; placeholder?: string }) {
+    label, value, onSave, fieldKey, placeholder, copyable, copyTitle,
+  }: {
+    label: string; value?: string; onSave: (v: string) => void; fieldKey: string; placeholder?: string;
+    copyable?: boolean; copyTitle?: string;
+  }) {
     const [val, setVal] = useState(value || '')
     const isEditing = !!editingInfo[fieldKey]
     useEffect(() => setVal(value || ''), [value])
+    const hasValue = !!(value && value.trim())
+    const saveValue = () => {
+      onSave(val.trim())
+      setEditingInfo(s => ({ ...s, [fieldKey]: false }))
+    }
     return (
       <div className='flex flex-col gap-1'>
         <Label>{label}</Label>
@@ -110,18 +206,34 @@ export default function App() {
           {isEditing ? (
             <>
               <Input value={val} onChange={(e) => setVal((e.target as HTMLInputElement).value)} placeholder={placeholder} />
-              <Button onClick={() => { onSave(val); setEditingInfo(s => ({ ...s, [fieldKey]: false })) }} title='Save'>
+              <Button onClick={saveValue} title='Save'>
                 <Save size={16} /> Save
               </Button>
-              <Button variant='ghost' onClick={() => setEditingInfo(s => ({ ...s, [fieldKey]: false }))} title='Cancel'>
+              <Button
+                variant='ghost'
+                onClick={() => {
+                  setEditingInfo(s => ({ ...s, [fieldKey]: false }))
+                  setVal(value || '')
+                }}
+                title='Cancel'
+              >
                 <X size={16} />
               </Button>
             </>
           ) : (
             <>
-              <div className='min-h-[38px] flex-1 rounded-xl border border-zinc-700/40 bg-zinc-900 px-3 py-2'>
-                {value ? <span className='text-zinc-100'>{value}</span> : <span className='text-zinc-500'>{placeholder || 'Not set'}</span>}
+              <div className='min-h-[38px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm'>
+                {hasValue ? <span className='text-slate-800'>{value}</span> : <span className='text-slate-400'>{placeholder || 'Not set'}</span>}
               </div>
+              {copyable && hasValue ? (
+                <Button
+                  variant='outline'
+                  onClick={() => value && navigator.clipboard.writeText(value)}
+                  title={copyTitle || `Copy ${label.toLowerCase()}`}
+                >
+                  <Copy size={16} /> Copy
+                </Button>
+              ) : null}
               <Button variant='outline' onClick={() => setEditingInfo(s => ({ ...s, [fieldKey]: true }))} title='Edit'>
                 <Pencil size={16} /> Edit
               </Button>
@@ -133,11 +245,26 @@ export default function App() {
   }
 
   // Collapsible project row
-  const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({})
   function ProjectRow({ project, customer }: { project: Project; customer: Customer }) {
     const isOpen = !!openProjects[project.id]
+    const [noteDraft, setNoteDraft] = useState(project.note ?? '')
     const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
     const [poForm, setPoForm] = useState({ number: '', note: '' })
+    const [woError, setWoError] = useState<string | null>(null)
+    const [poError, setPoError] = useState<string | null>(null)
+
+    useEffect(() => {
+      setNoteDraft(project.note ?? '')
+      setWoError(null)
+      setPoError(null)
+    }, [project.id])
+
+    useEffect(() => {
+      setNoteDraft(prev => {
+        const next = project.note ?? ''
+        return prev === next ? prev : next
+      })
+    }, [project.note])
 
     return (
       <Card className='mb-3 panel'>
@@ -152,11 +279,11 @@ export default function App() {
               <ChevronDown size={18} className={isOpen ? '' : 'rotate-90 transition'} />
             </Button>
 
-            <div className='font-medium text-zinc-100 flex items-center gap-3'>
+            <div className='flex items-center gap-3 font-semibold text-slate-800'>
               <span>Project: {project.number}</span>
               {!isOpen && project.note && (
                 <span
-                  className='max-w-[28ch] truncate text-xs font-normal text-zinc-400 italic'
+                  className='max-w-[28ch] truncate text-xs font-medium text-slate-500 italic'
                   title={project.note}
                 >
                   • {project.note}
@@ -170,7 +297,7 @@ export default function App() {
           </div>
 
           <div className='flex items-center gap-2'>
-            <Button variant='ghost' className='text-red-300 hover:text-red-200' onClick={() => deleteProject(customer.id, project.id)} title='Delete project'>
+            <Button variant='ghost' className='text-rose-600 hover:bg-rose-50' onClick={() => deleteProject(customer.id, project.id)} title='Delete project'>
               <Trash2 size={18} />
             </Button>
           </div>
@@ -182,19 +309,17 @@ export default function App() {
               <CardContent className='grid gap-6 md:grid-cols-2'>
                 {/* Project note */}
                 <div className='md:col-span-2'>
-                  <div className='rounded-xl border border-zinc-700/40 p-3 panel'>
-                    <div className='mb-1 text-xs uppercase tracking-wide text-zinc-400'>Project Note</div>
+                  <div className='rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm'>
+                    <div className='mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500'>Project Note</div>
                     <textarea
-                      className='w-full resize-y rounded-lg border border-zinc-700/40 bg-zinc-900 p-2 text-sm text-zinc-100 placeholder-zinc-500'
+                      className='w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100'
                       rows={2}
                       placeholder='Add a note about this project (optional)…'
-                      value={project.note || ''}
+                      value={noteDraft}
                       onChange={(e) => {
                         const v = (e.target as HTMLTextAreaElement).value
-                        setDb(prev => prev.map(c => c.id !== customer.id ? c : {
-                          ...c,
-                          projects: c.projects.map(p => p.id !== project.id ? p : { ...p, note: v })
-                        }))
+                        setNoteDraft(v)
+                        updateProjectNote(customer.id, project.id, v)
                       }}
                     />
                   </div>
@@ -202,22 +327,23 @@ export default function App() {
 
                 {/* Work Orders */}
                 <div>
-                  <div className='mb-2 text-sm font-semibold text-zinc-300'>Work Orders</div>
+                  <div className='mb-2 text-sm font-semibold text-slate-700'>Work Orders</div>
                   <div className='space-y-2'>
-                    {project.wos.length === 0 && <div className='text-sm text-zinc-500'>None yet</div>}
+                    {project.wos.length === 0 && <div className='text-sm text-slate-500'>None yet</div>}
                     {project.wos.map(wo => (
-                      <div key={wo.id} className='flex items-center justify-between rounded-xl border border-zinc-700/40 bg-zinc-950/40 p-3'>
+                      <div key={wo.id} className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
                         <div>
-                          <div className='font-medium text-zinc-100'>
-                            {wo.number} <span className='rounded-md border border-zinc-700/60 px-1.5 py-0.5 text-xs text-zinc-300'>{wo.type}</span>
+                          <div className='font-semibold text-slate-800'>
+                            {wo.number}
+                            <span className='ml-2 rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-xs font-medium text-sky-700'>{wo.type}</span>
                           </div>
-                          {wo.note && <div className='text-xs text-zinc-400'>{wo.note}</div>}
+                          {wo.note && <div className='text-xs text-slate-500'>{wo.note}</div>}
                         </div>
                         <div className='flex items-center gap-1'>
                           <Button variant='outline' onClick={() => navigator.clipboard.writeText(wo.number)} title='Copy WO'>
                             <Copy size={16} />
                           </Button>
-                          <Button variant='ghost' className='text-red-300 hover:text-red-200' onClick={() => deleteWO(customer.id, project.id, wo.id)} title='Delete WO'>
+                          <Button variant='ghost' className='text-rose-600 hover:bg-rose-50' onClick={() => deleteWO(customer.id, project.id, wo.id)} title='Delete WO'>
                             <X size={16} />
                           </Button>
                         </div>
@@ -225,22 +351,33 @@ export default function App() {
                     ))}
                   </div>
 
-                  <div className='mt-3 rounded-xl border border-zinc-700/40 p-3'>
-                    <div className='mb-2 text-sm font-semibold text-zinc-300'>Add WO</div>
+                  <div className='mt-3 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
+                    <div className='mb-2 text-sm font-semibold text-slate-700'>Add WO</div>
                     <div className='grid gap-2 md:grid-cols-5'>
                       <div className='md:col-span-2'>
                         <Label>WO Number</Label>
                         <div className='flex'>
-                          <span className='flex items-center rounded-l-xl border border-r-0 border-zinc-600/40 bg-zinc-800 px-3 py-2 text-sm text-zinc-400'>WO</span>
-                          <Input className='rounded-l-none border-l-0' value={woForm.number} onChange={(e) => setWoForm({ ...woForm, number: (e.target as HTMLInputElement).value })} placeholder='000000' />
+                          <span className='flex items-center rounded-l-2xl border border-r-0 border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm font-semibold text-slate-500'>WO</span>
+                          <Input
+                            className='rounded-l-none border-l-0'
+                            value={woForm.number}
+                            onChange={(e) => {
+                              setWoForm({ ...woForm, number: (e.target as HTMLInputElement).value })
+                              if (woError) setWoError(null)
+                            }}
+                            placeholder='000000'
+                          />
                         </div>
                       </div>
                       <div>
                         <Label>Type</Label>
                         <select
-                          className='w-full rounded-xl border border-zinc-600/40 bg-zinc-900 px-3 py-2 text-zinc-100'
+                          className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100'
                           value={woForm.type}
-                          onChange={(e) => setWoForm({ ...woForm, type: e.target.value as WOType })}
+                          onChange={(e) => {
+                            setWoForm({ ...woForm, type: e.target.value as WOType })
+                            if (woError) setWoError(null)
+                          }}
                         >
                           <option>Build</option>
                           <option>Onsite</option>
@@ -251,35 +388,50 @@ export default function App() {
                         <Input value={woForm.note} onChange={(e) => setWoForm({ ...woForm, note: (e.target as HTMLInputElement).value })} placeholder='e.g. Line 2 SAT' />
                       </div>
                     </div>
-                    <div className='mt-2'>
-                      <Button onClick={() => {
-                        const t = woForm.number.trim(); if (!t) return;
-                        const num = t.startsWith('WO') ? t : `WO${t}`;
-                        addWO(customer.id, project.id, { number: num, type: woForm.type, note: woForm.note?.trim() || undefined });
-                        setWoForm({ number: '', type: 'Build', note: '' });
-                      }}>
+                    <div className='mt-2 space-y-2'>
+                      <Button
+                        onClick={() => {
+                          const raw = woForm.number.trim()
+                          if (!raw) {
+                            setWoError('Enter a work order number.')
+                            return
+                          }
+                          const result = addWO(customer.id, project.id, { number: raw, type: woForm.type, note: woForm.note })
+                          if (result) {
+                            setWoError(result)
+                            return
+                          }
+                          setWoForm({ number: '', type: 'Build', note: '' })
+                          setWoError(null)
+                        }}
+                      >
                         <Plus size={16} /> Add WO
                       </Button>
+                      {woError && (
+                        <p className='flex items-center gap-1 text-sm text-rose-600'>
+                          <AlertCircle size={14} /> {woError}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
 
                 {/* Purchase Orders */}
                 <div>
-                  <div className='mb-2 text-sm font-semibold text-zinc-300'>Purchase Orders</div>
+                  <div className='mb-2 text-sm font-semibold text-slate-700'>Purchase Orders</div>
                   <div className='space-y-2'>
-                    {project.pos.length === 0 && <div className='text-sm text-zinc-500'>None yet</div>}
+                    {project.pos.length === 0 && <div className='text-sm text-slate-500'>None yet</div>}
                     {project.pos.map(po => (
-                      <div key={po.id} className='flex items-center justify-between rounded-xl border border-zinc-700/40 bg-zinc-950/40 p-3'>
+                      <div key={po.id} className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
                         <div>
-                          <div className='font-medium text-zinc-100'>{po.number}</div>
-                          {po.note && <div className='text-xs text-zinc-400'>{po.note}</div>}
+                          <div className='font-semibold text-slate-800'>{po.number}</div>
+                          {po.note && <div className='text-xs text-slate-500'>{po.note}</div>}
                         </div>
                         <div className='flex items-center gap-1'>
                           <Button variant='outline' onClick={() => navigator.clipboard.writeText(po.number)} title='Copy PO'>
                             <Copy size={16} />
                           </Button>
-                          <Button variant='ghost' className='text-red-300 hover:text-red-200' onClick={() => deletePO(customer.id, project.id, po.id)} title='Delete PO'>
+                          <Button variant='ghost' className='text-rose-600 hover:bg-rose-50' onClick={() => deletePO(customer.id, project.id, po.id)} title='Delete PO'>
                             <X size={16} />
                           </Button>
                         </div>
@@ -287,26 +439,49 @@ export default function App() {
                     ))}
                   </div>
 
-                  <div className='mt-3 rounded-xl border border-zinc-700/40 p-3'>
-                    <div className='mb-2 text-sm font-semibold text-zinc-300'>Add PO</div>
+                  <div className='mt-3 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
+                    <div className='mb-2 text-sm font-semibold text-slate-700'>Add PO</div>
                     <div className='grid gap-2 md:grid-cols-5'>
                       <div className='md:col-span-3'>
                         <Label>PO Number</Label>
-                        <Input value={poForm.number} onChange={(e) => setPoForm({ ...poForm, number: (e.target as HTMLInputElement).value })} placeholder='PO-90001' />
+                        <Input
+                          value={poForm.number}
+                          onChange={(e) => {
+                            setPoForm({ ...poForm, number: (e.target as HTMLInputElement).value })
+                            if (poError) setPoError(null)
+                          }}
+                          placeholder='PO-90001'
+                        />
                       </div>
                       <div className='md:col-span-2'>
                         <Label>Optional note</Label>
                         <Input value={poForm.note} onChange={(e) => setPoForm({ ...poForm, note: (e.target as HTMLInputElement).value })} placeholder='e.g. deposit' />
                       </div>
                     </div>
-                    <div className='mt-2'>
-                      <Button onClick={() => {
-                        const t = poForm.number.trim(); if (!t) return;
-                        addPO(customer.id, project.id, { number: t, note: poForm.note?.trim() || undefined });
-                        setPoForm({ number: '', note: '' });
-                      }}>
+                    <div className='mt-2 space-y-2'>
+                      <Button
+                        onClick={() => {
+                          const raw = poForm.number.trim()
+                          if (!raw) {
+                            setPoError('Enter a purchase order number.')
+                            return
+                          }
+                          const result = addPO(customer.id, project.id, { number: raw, note: poForm.note })
+                          if (result) {
+                            setPoError(result)
+                            return
+                          }
+                          setPoForm({ number: '', note: '' })
+                          setPoError(null)
+                        }}
+                      >
                         <Plus size={16} /> Add PO
                       </Button>
+                      {poError && (
+                        <p className='flex items-center gap-1 text-sm text-rose-600'>
+                          <AlertCircle size={14} /> {poError}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -319,12 +494,18 @@ export default function App() {
   }
 
   return (
-    <div className='min-h-screen bg-[#0b0f16] px-4 py-6 text-zinc-100 md:px-8'>
+    <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
       <div className='mx-auto max-w-6xl'>
         <div className='mb-6 flex items-center justify-between'>
           <h1 className='text-2xl font-semibold tracking-tight'>CustomerProjectDB</h1>
           <div className='flex items-center gap-2'>
-            <Button onClick={() => setShowNewCustomer(true)} title='Create new customer'>
+            <Button
+              onClick={() => {
+                setShowNewCustomer(true)
+                setNewCustomerError(null)
+              }}
+              title='Create new customer'
+            >
               <Plus size={16} /> New Customer
             </Button>
           </div>
@@ -364,19 +545,19 @@ export default function App() {
             </div>
 
             <div className='mt-4'>
-              <div className='text-xs uppercase tracking-wide text-zinc-500'>Matches</div>
+              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
               <div className='mt-2 grid gap-2 md:grid-cols-2'>
-                {searchMatches.length === 0 && (<div className='text-sm text-zinc-500'>No matches yet. Start typing above.</div>)}
+                {searchMatches.length === 0 && (<div className='text-sm text-slate-500'>No matches yet. Start typing above.</div>)}
                 {searchMatches.map((m, i) => (
                   <button
                     key={i}
                     onClick={() => setSelectedCustomerId(m.customerId)}
-                    className='flex items-center justify-between rounded-xl border border-zinc-700/40 bg-zinc-950/40 p-3 text-left hover:bg-zinc-900'
+                    className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
                     title={m.kind === 'customer' ? 'Open customer' : m.kind === 'project' ? 'Open customer at project' : 'Open customer at WO'}
                   >
                     <div>
-                      <div className='text-sm font-medium text-zinc-100'>{m.label}</div>
-                      <div className='text-xs text-zinc-500'>{m.kind.toUpperCase()}</div>
+                      <div className='text-sm font-semibold text-slate-800'>{m.label}</div>
+                      <div className='text-xs font-medium text-slate-500'>{m.kind.toUpperCase()}</div>
                     </div>
                     <ChevronRight size={18} />
                   </button>
@@ -391,30 +572,85 @@ export default function App() {
             <CardHeader>
               <div className='flex items-center gap-2'>
                 <div className='text-lg font-semibold'>Customer: {selectedCustomer.name}</div>
-                <Button variant='outline' onClick={() => navigator.clipboard.writeText(selectedCustomer.name)} title='Copy customer name'>
-                  <Copy size={16} /> Copy
-                </Button>
               </div>
               <div className='flex items-center gap-2'>
                 <Button variant='outline' onClick={() => setSelectedCustomerId(null)}>Back to Index</Button>
+                <Button
+                  variant='ghost'
+                  className='text-rose-600 hover:bg-rose-50'
+                  onClick={() => {
+                    if (!selectedCustomer) return
+                    const confirmed = window.confirm('Delete this customer and all associated projects, purchase orders, and work orders?')
+                    if (!confirmed) return
+                    deleteCustomer(selectedCustomer.id)
+                  }}
+                  title='Delete customer'
+                >
+                  <Trash2 size={16} /> Delete Customer
+                </Button>
               </div>
             </CardHeader>
             <CardContent>
               <div className='grid gap-4 md:grid-cols-2'>
-                <EditableField label='Address' value={selectedCustomer.address} fieldKey={`addr_${selectedCustomer.id}`} placeholder='Add address' onSave={(v) => upsertCustomer({ ...selectedCustomer, address: v })} />
-                <EditableField label='Contact Name' value={selectedCustomer.contactName} fieldKey={`cname_${selectedCustomer.id}`} placeholder='Add contact' onSave={(v) => upsertCustomer({ ...selectedCustomer, contactName: v })} />
-                <EditableField label='Contact Phone' value={selectedCustomer.contactPhone} fieldKey={`cphone_${selectedCustomer.id}`} placeholder='Add phone' onSave={(v) => upsertCustomer({ ...selectedCustomer, contactPhone: v })} />
-                <EditableField label='Contact Email' value={selectedCustomer.contactEmail} fieldKey={`cemail_${selectedCustomer.id}`} placeholder='Add email' onSave={(v) => upsertCustomer({ ...selectedCustomer, contactEmail: v })} />
+                <div className='md:col-span-2 space-y-2'>
+                  <EditableField
+                    label='Address'
+                    value={selectedCustomer.address}
+                    fieldKey={`addr_${selectedCustomer.id}`}
+                    placeholder='Add address'
+                    copyable
+                    copyTitle='Copy address'
+                    onSave={(v) => upsertCustomer({ ...selectedCustomer, address: v ? v : undefined })}
+                  />
+                  {selectedCustomerAddressForMap ? (
+                    <a
+                      className='inline-flex items-center gap-1 text-sm font-medium text-sky-600 hover:text-sky-700'
+                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selectedCustomerAddressForMap)}`}
+                      target='_blank'
+                      rel='noreferrer'
+                      title='View address on Google Maps'
+                    >
+                      <MapPin size={14} /> View on Google Maps
+                    </a>
+                  ) : null}
+                </div>
+                <EditableField
+                  label='Contact Name'
+                  value={selectedCustomer.contactName}
+                  fieldKey={`cname_${selectedCustomer.id}`}
+                  placeholder='Add contact'
+                  copyable
+                  copyTitle='Copy contact name'
+                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactName: v ? v : undefined })}
+                />
+                <EditableField
+                  label='Contact Phone'
+                  value={selectedCustomer.contactPhone}
+                  fieldKey={`cphone_${selectedCustomer.id}`}
+                  placeholder='Add phone'
+                  copyable
+                  copyTitle='Copy phone number'
+                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactPhone: v ? v : undefined })}
+                />
+                <EditableField
+                  label='Contact Email'
+                  value={selectedCustomer.contactEmail}
+                  fieldKey={`cemail_${selectedCustomer.id}`}
+                  placeholder='Add email'
+                  copyable
+                  copyTitle='Copy email address'
+                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactEmail: v ? v : undefined })}
+                />
               </div>
 
-              <div className='mt-6 rounded-2xl border border-zinc-700/40 p-4'>
-                <div className='mb-2 text-sm font-semibold text-zinc-300'>Add Project</div>
+              <div className='mt-6 rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm'>
+                <div className='mb-2 text-sm font-semibold text-slate-700'>Add Project</div>
                 <AddProjectForm onAdd={(num) => addProject(selectedCustomer.id, num)} />
               </div>
 
               <div className='mt-6'>
-                <div className='mb-2 text-sm font-semibold text-zinc-300'>Projects</div>
-                {selectedCustomer.projects.length === 0 && <div className='text-sm text-zinc-500'>No projects yet.</div>}
+                <div className='mb-2 text-sm font-semibold text-slate-700'>Projects</div>
+                {selectedCustomer.projects.length === 0 && <div className='text-sm text-slate-500'>No projects yet.</div>}
                 {selectedCustomer.projects.map(p => (<ProjectRow key={p.id} project={p} customer={selectedCustomer} />))}
               </div>
             </CardContent>
@@ -436,7 +672,14 @@ export default function App() {
             <Card className='w-full max-w-2xl panel'>
               <CardHeader>
                 <div className='flex items-center gap-2'><Plus size={18} /> <span className='font-medium'>Create New Customer</span></div>
-                <Button variant='ghost' onClick={() => setShowNewCustomer(false)} title='Close'>
+                <Button
+                  variant='ghost'
+                  onClick={() => {
+                    setShowNewCustomer(false)
+                    setNewCustomerError(null)
+                  }}
+                  title='Close'
+                >
                   <X size={16} />
                 </Button>
               </CardHeader>
@@ -444,7 +687,14 @@ export default function App() {
                 <div className='grid gap-3 md:grid-cols-2'>
                   <div>
                     <Label>Customer Name</Label>
-                    <Input value={newCust.name} onChange={(e) => setNewCust({ ...newCust, name: (e.target as HTMLInputElement).value })} placeholder='e.g. Globex Ltd' />
+                    <Input
+                      value={newCust.name}
+                      onChange={(e) => {
+                        setNewCust({ ...newCust, name: (e.target as HTMLInputElement).value })
+                        if (newCustomerError) setNewCustomerError(null)
+                      }}
+                      placeholder='e.g. Globex Ltd'
+                    />
                   </div>
                   <div>
                     <Label>Contact Name</Label>
@@ -463,21 +713,38 @@ export default function App() {
                     <Input value={newCust.address} onChange={(e) => setNewCust({ ...newCust, address: (e.target as HTMLInputElement).value })} placeholder='e.g. 10 High Street, London' />
                   </div>
                 </div>
+                {newCustomerError && (
+                  <p className='mt-2 flex items-center gap-1 text-sm text-rose-600'>
+                    <AlertCircle size={14} /> {newCustomerError}
+                  </p>
+                )}
                 <div className='mt-3 flex justify-end gap-2'>
-                  <Button variant='outline' onClick={() => setShowNewCustomer(false)}>Cancel</Button>
+                  <Button
+                    variant='outline'
+                    onClick={() => {
+                      setShowNewCustomer(false)
+                      setNewCustomerError(null)
+                    }}
+                  >
+                    Cancel
+                  </Button>
                   <Button
                     size='lg'
                     onClick={() => {
-                      if (!newCust.name.trim()) return
-                      createCustomer({
-                        name: newCust.name.trim(),
-                        address: newCust.address.trim() || undefined,
-                        contactName: newCust.contactName.trim() || undefined,
-                        contactPhone: newCust.contactPhone.trim() || undefined,
-                        contactEmail: newCust.contactEmail.trim() || undefined,
+                      const result = createCustomer({
+                        name: newCust.name,
+                        address: newCust.address,
+                        contactName: newCust.contactName,
+                        contactPhone: newCust.contactPhone,
+                        contactEmail: newCust.contactEmail,
                       })
+                      if (result) {
+                        setNewCustomerError(result)
+                        return
+                      }
                       setNewCust({ name: '', address: '', contactName: '', contactPhone: '', contactEmail: '' })
                       setShowNewCustomer(false)
+                      setNewCustomerError(null)
                     }}
                   >
                     <Plus size={18} /> Create Customer
@@ -492,24 +759,52 @@ export default function App() {
   )
 }
 
-function AddProjectForm({ onAdd }: { onAdd: (num: string) => void }) {
+function AddProjectForm({ onAdd }: { onAdd: (num: string) => string | null }) {
   const [val, setVal] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const handleAdd = () => {
+    const trimmed = val.trim()
+    if (!trimmed) {
+      setError('Enter a project number.')
+      return
+    }
+    const result = onAdd(trimmed)
+    if (result) {
+      setError(result)
+      return
+    }
+    setVal('')
+    setError(null)
+  }
+
   return (
-    <div className='flex items-end gap-2'>
-      <div className='flex-1'>
-        <Label>Project Number</Label>
-        <div className='flex'>
-          <span className='flex items-center rounded-l-xl border border-r-0 border-zinc-600/40 bg-zinc-800 px-3 py-2 text-sm text-zinc-400'>P</span>
-          <Input className='rounded-l-none border-l-0' value={val} onChange={(e) => setVal((e.target as HTMLInputElement).value)} placeholder='e.g. 1403' />
+    <div className='flex flex-col gap-2'>
+      <div className='flex items-end gap-2'>
+        <div className='flex-1'>
+          <Label>Project Number</Label>
+          <div className='flex'>
+            <span className='flex items-center rounded-l-2xl border border-r-0 border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm font-semibold text-slate-500'>P</span>
+            <Input
+              className='rounded-l-none border-l-0'
+              value={val}
+              onChange={(e) => {
+                setVal((e.target as HTMLInputElement).value)
+                if (error) setError(null)
+              }}
+              placeholder='e.g. 1403'
+            />
+          </div>
         </div>
+        <Button onClick={handleAdd}>
+          <Plus size={16} /> Add
+        </Button>
       </div>
-      <Button onClick={() => {
-        const t = val.trim(); if (!t) return;
-        const num = t.startsWith('P') ? t : `P${t}`;
-        onAdd(num); setVal('');
-      }}>
-        <Plus size={16} /> Add
-      </Button>
+      {error && (
+        <p className='flex items-center gap-1 text-sm text-rose-600'>
+          <AlertCircle size={14} /> {error}
+        </p>
+      )}
     </div>
   )
 }
