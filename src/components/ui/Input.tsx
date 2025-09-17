@@ -4,7 +4,7 @@ export default function Input(props: React.InputHTMLAttributes<HTMLInputElement>
   const { className = '', ...rest } = props
   return (
     <input
-      className={`w-full rounded-xl border border-zinc-600/40 bg-zinc-900 px-3 py-2 text-zinc-100 placeholder-zinc-400 outline-none ring-0 focus:border-zinc-400 ${className}`}
+      className={`w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-slate-800 placeholder-slate-400 shadow-sm outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100 ${className}`}
       {...rest}
     />
   )
