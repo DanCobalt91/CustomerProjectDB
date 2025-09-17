@@ -13,7 +13,6 @@ export default function App() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [editingInfo, setEditingInfo] = useState<Record<string, boolean>>({})
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({})
-  const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
 
   // Search
   const [customerQuery, setCustomerQuery] = useState('')
@@ -228,7 +227,6 @@ export default function App() {
           ) : (
             <>
               <div className='min-h-[38px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm'>
-                {hasValue ? <span className='text-slate-800'>{value}</span> : <span className='text-slate-400'>{placeholder || 'Not set'}</span>}
               </div>
               {copyable && hasValue ? (
                 <Button
@@ -366,15 +364,6 @@ export default function App() {
                         <Label>WO Number</Label>
                         <div className='flex'>
                           <span className='flex items-center rounded-l-2xl border border-r-0 border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm font-semibold text-slate-500'>WO</span>
-                          <Input
-                            className='rounded-l-none border-l-0'
-                            value={woForm.number}
-                            onChange={(e) => {
-                              setWoForm({ ...woForm, number: (e.target as HTMLInputElement).value })
-                              if (woError) setWoError(null)
-                            }}
-                            placeholder='000000'
-                          />
                         </div>
                       </div>
                       <div>
@@ -555,32 +544,6 @@ export default function App() {
             <div className='mt-4'>
               <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
               <div className='mt-2 grid gap-2 md:grid-cols-2'>
-                {!hasSearchInput ? (
-                  <div className='text-sm text-slate-500'>Start typing above to find a customer, project, or work order.</div>
-                ) : searchMatches.length === 0 ? (
-                  <div className='text-sm text-slate-500'>No matches found.</div>
-                ) : (
-                  searchMatches.map(m => (
-                    <button
-                      key={`${m.kind}_${m.customerId}_${m.projectId ?? ''}_${m.label}`}
-                      onClick={() => setSelectedCustomerId(m.customerId)}
-                      className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
-                      title={
-                        m.kind === 'customer'
-                          ? 'Open customer'
-                          : m.kind === 'project'
-                          ? 'Open customer at project'
-                          : 'Open customer at work order'
-                      }
-                    >
-                      <div>
-                        <div className='text-sm font-semibold text-slate-800'>{m.label}</div>
-                        <div className='text-xs font-medium text-slate-500'>{m.kind.toUpperCase()}</div>
-                      </div>
-                      <ChevronRight size={18} />
-                    </button>
-                  ))
-                )}
               </div>
             </div>
           </CardContent>
@@ -798,22 +761,6 @@ function AddProjectForm({ onAdd }: { onAdd: (num: string) => string | null }) {
   }
 
   return (
-    <div className='flex flex-col gap-2'>
-      <div className='flex items-end gap-2'>
-        <div className='flex-1'>
-          <Label>Project Number</Label>
-          <div className='flex'>
-            <span className='flex items-center rounded-l-2xl border border-r-0 border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm font-semibold text-slate-500'>P</span>
-            <Input
-              className='rounded-l-none border-l-0'
-              value={val}
-              onChange={(e) => {
-                setVal((e.target as HTMLInputElement).value)
-                if (error) setError(null)
-              }}
-              placeholder='e.g. 1403'
-            />
-          </div>
         </div>
         <Button onClick={handleAdd}>
           <Plus size={16} /> Add
