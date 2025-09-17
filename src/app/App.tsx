@@ -109,6 +109,7 @@ export default function App() {
   )
 
   // Helpers
+  const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
   const customerNameExists = (name: string, excludeId?: string) =>
     db.some(c => c.id !== excludeId && c.name.trim().toLowerCase() === name.trim().toLowerCase())
   const projectNumberExists = (number: string, excludeProjectId?: string) => {
@@ -1002,6 +1003,15 @@ export default function App() {
                   </p>
                 )}
                 <div className='mt-3 flex justify-end gap-2'>
+                  <Button
+                    variant='outline'
+                    onClick={() => {
+                      setShowNewCustomer(false)
+                      setNewCustomerError(null)
+                    }}
+                  >
+                    Cancel
+                  </Button>
                   <Button
                     variant='outline'
                     onClick={() => {
