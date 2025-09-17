@@ -1008,15 +1008,6 @@ export default function App() {
                     onClick={() => {
                       setShowNewCustomer(false)
                       setNewCustomerError(null)
-                    }}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    variant='outline'
-                    onClick={() => {
-                      setShowNewCustomer(false)
-                      setNewCustomerError(null)
                       setIsCreatingCustomer(false)
                     }}
                   >
