@@ -60,6 +60,11 @@ export default function App() {
     return matches.slice(0, 25)
   }, [db, customerQuery, projectQuery, woQuery])
 
+  const hasSearchInput = useMemo(
+    () => !!(customerQuery.trim() || projectQuery.trim() || woQuery.trim()),
+    [customerQuery, projectQuery, woQuery],
+  )
+
   // Helpers
   const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
   const customerNameExists = (name: string, excludeId?: string) =>
@@ -276,7 +281,10 @@ export default function App() {
               className='p-1'
               title={isOpen ? 'Collapse' : 'Expand'}
             >
-              <ChevronDown size={18} className={isOpen ? '' : 'rotate-90 transition'} />
+              <ChevronDown
+                size={18}
+                className={`transition-transform duration-200 ${isOpen ? '' : '-rotate-90'}`}
+              />
             </Button>
 
             <div className='flex items-center gap-3 font-semibold text-slate-800'>
@@ -547,21 +555,32 @@ export default function App() {
             <div className='mt-4'>
               <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
               <div className='mt-2 grid gap-2 md:grid-cols-2'>
-                {searchMatches.length === 0 && (<div className='text-sm text-slate-500'>No matches yet. Start typing above.</div>)}
-                {searchMatches.map((m, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setSelectedCustomerId(m.customerId)}
-                    className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
-                    title={m.kind === 'customer' ? 'Open customer' : m.kind === 'project' ? 'Open customer at project' : 'Open customer at WO'}
-                  >
-                    <div>
-                      <div className='text-sm font-semibold text-slate-800'>{m.label}</div>
-                      <div className='text-xs font-medium text-slate-500'>{m.kind.toUpperCase()}</div>
-                    </div>
-                    <ChevronRight size={18} />
-                  </button>
-                ))}
+                {!hasSearchInput ? (
+                  <div className='text-sm text-slate-500'>Start typing above to find a customer, project, or work order.</div>
+                ) : searchMatches.length === 0 ? (
+                  <div className='text-sm text-slate-500'>No matches found.</div>
+                ) : (
+                  searchMatches.map(m => (
+                    <button
+                      key={`${m.kind}_${m.customerId}_${m.projectId ?? ''}_${m.label}`}
+                      onClick={() => setSelectedCustomerId(m.customerId)}
+                      className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
+                      title={
+                        m.kind === 'customer'
+                          ? 'Open customer'
+                          : m.kind === 'project'
+                          ? 'Open customer at project'
+                          : 'Open customer at work order'
+                      }
+                    >
+                      <div>
+                        <div className='text-sm font-semibold text-slate-800'>{m.label}</div>
+                        <div className='text-xs font-medium text-slate-500'>{m.kind.toUpperCase()}</div>
+                      </div>
+                      <ChevronRight size={18} />
+                    </button>
+                  ))
+                )}
               </div>
             </div>
           </CardContent>
