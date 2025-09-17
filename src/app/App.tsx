@@ -128,6 +128,7 @@ export default function App() {
       ...c,
       projects: c.projects.map(p => (p.id !== projectId ? p : { ...p, note: note.trim() ? note : undefined })),
     })))
+    return null
   }
   function addWO(customerId: string, projectId: string, data: { number: string; type: WOType; note?: string }): string | null {
     const trimmed = data.number.trim()
