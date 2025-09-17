@@ -128,6 +128,7 @@ export default function App() {
       ...c,
       projects: c.projects.map(p => (p.id !== projectId ? p : { ...p, note: note.trim() ? note : undefined })),
     })))
+    return null
   }
   function addWO(customerId: string, projectId: string, data: { number: string; type: WOType; note?: string }): string | null {
     const trimmed = data.number.trim()
@@ -229,6 +230,25 @@ export default function App() {
             <>
               <div className='min-h-[38px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm'>
                 {hasValue ? <span className='text-slate-800'>{value}</span> : <span className='text-slate-400'>{placeholder || 'Not set'}</span>}
+              </div>
+              {copyable && hasValue ? (
+                <Button
+                  variant='outline'
+                  onClick={() => value && navigator.clipboard.writeText(value)}
+                  title={copyTitle || `Copy ${label.toLowerCase()}`}
+                >
+                  <Copy size={16} /> Copy
+                </Button>
+              ) : null}
+              <Button variant='outline' onClick={() => setEditingInfo(s => ({ ...s, [fieldKey]: true }))} title='Edit'>
+                <Pencil size={16} /> Edit
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   // Collapsible project row
   function ProjectRow({ project, customer }: { project: Project; customer: Customer }) {
