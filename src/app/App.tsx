@@ -12,6 +12,7 @@ export default function App() {
   const [db, setDb] = useState<Customer[]>([])
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [editingInfo, setEditingInfo] = useState<Record<string, boolean>>({})
+  const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({})
 
   // Search
   const [customerQuery, setCustomerQuery] = useState('')
@@ -62,8 +63,32 @@ export default function App() {
   function upsertCustomer(updated: Customer) {
     setDb(prev => prev.map(c => (c.id === updated.id ? updated : c)))
   }
+  function deleteCustomer(customerId: string) {
+    const target = db.find(c => c.id === customerId)
+    setDb(prev => prev.filter(c => c.id !== customerId))
+    setOpenProjects(prev => {
+      if (!target) return prev
+      const next = { ...prev }
+      target.projects.forEach(p => { delete next[p.id] })
+      return next
+    })
+    setEditingInfo(prev => {
+      const next = { ...prev }
+      Object.keys(next).forEach(key => {
+        if (key.includes(customerId)) delete next[key]
+      })
+      return next
+    })
+    if (selectedCustomerId === customerId) setSelectedCustomerId(null)
+  }
   function deleteProject(customerId: string, projectId: string) {
     setDb(prev => prev.map(c => (c.id !== customerId ? c : { ...c, projects: c.projects.filter(p => p.id !== projectId) })))
+    setOpenProjects(prev => {
+      if (!prev[projectId]) return prev
+      const next = { ...prev }
+      delete next[projectId]
+      return next
+    })
   }
   function deleteWO(customerId: string, projectId: string, woId: string) {
     setDb(prev => prev.map(c => (c.id !== customerId ? c : {
@@ -119,8 +144,8 @@ export default function App() {
             </>
           ) : (
             <>
-              <div className='min-h-[38px] flex-1 rounded-xl border border-zinc-700/40 bg-zinc-900 px-3 py-2'>
-                {value ? <span className='text-zinc-100'>{value}</span> : <span className='text-zinc-500'>{placeholder || 'Not set'}</span>}
+              <div className='min-h-[38px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm'>
+                {value ? <span className='text-slate-800'>{value}</span> : <span className='text-slate-400'>{placeholder || 'Not set'}</span>}
               </div>
               <Button variant='outline' onClick={() => setEditingInfo(s => ({ ...s, [fieldKey]: true }))} title='Edit'>
                 <Pencil size={16} /> Edit
@@ -133,7 +158,6 @@ export default function App() {
   }
 
   // Collapsible project row
-  const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({})
   function ProjectRow({ project, customer }: { project: Project; customer: Customer }) {
     const isOpen = !!openProjects[project.id]
     const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
@@ -152,11 +176,11 @@ export default function App() {
               <ChevronDown size={18} className={isOpen ? '' : 'rotate-90 transition'} />
             </Button>
 
-            <div className='font-medium text-zinc-100 flex items-center gap-3'>
+            <div className='flex items-center gap-3 font-semibold text-slate-800'>
               <span>Project: {project.number}</span>
               {!isOpen && project.note && (
                 <span
-                  className='max-w-[28ch] truncate text-xs font-normal text-zinc-400 italic'
+                  className='max-w-[28ch] truncate text-xs font-medium text-slate-500 italic'
                   title={project.note}
                 >
                   • {project.note}
@@ -170,7 +194,7 @@ export default function App() {
           </div>
 
           <div className='flex items-center gap-2'>
-            <Button variant='ghost' className='text-red-300 hover:text-red-200' onClick={() => deleteProject(customer.id, project.id)} title='Delete project'>
+            <Button variant='ghost' className='text-rose-600 hover:bg-rose-50' onClick={() => deleteProject(customer.id, project.id)} title='Delete project'>
               <Trash2 size={18} />
             </Button>
           </div>
@@ -182,10 +206,10 @@ export default function App() {
               <CardContent className='grid gap-6 md:grid-cols-2'>
                 {/* Project note */}
                 <div className='md:col-span-2'>
-                  <div className='rounded-xl border border-zinc-700/40 p-3 panel'>
-                    <div className='mb-1 text-xs uppercase tracking-wide text-zinc-400'>Project Note</div>
+                  <div className='rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm'>
+                    <div className='mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500'>Project Note</div>
                     <textarea
-                      className='w-full resize-y rounded-lg border border-zinc-700/40 bg-zinc-900 p-2 text-sm text-zinc-100 placeholder-zinc-500'
+                      className='w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100'
                       rows={2}
                       placeholder='Add a note about this project (optional)…'
                       value={project.note || ''}
@@ -202,22 +226,23 @@ export default function App() {
 
                 {/* Work Orders */}
                 <div>
-                  <div className='mb-2 text-sm font-semibold text-zinc-300'>Work Orders</div>
+                  <div className='mb-2 text-sm font-semibold text-slate-700'>Work Orders</div>
                   <div className='space-y-2'>
-                    {project.wos.length === 0 && <div className='text-sm text-zinc-500'>None yet</div>}
+                    {project.wos.length === 0 && <div className='text-sm text-slate-500'>None yet</div>}
                     {project.wos.map(wo => (
-                      <div key={wo.id} className='flex items-center justify-between rounded-xl border border-zinc-700/40 bg-zinc-950/40 p-3'>
+                      <div key={wo.id} className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
                         <div>
-                          <div className='font-medium text-zinc-100'>
-                            {wo.number} <span className='rounded-md border border-zinc-700/60 px-1.5 py-0.5 text-xs text-zinc-300'>{wo.type}</span>
+                          <div className='font-semibold text-slate-800'>
+                            {wo.number}
+                            <span className='ml-2 rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-xs font-medium text-sky-700'>{wo.type}</span>
                           </div>
-                          {wo.note && <div className='text-xs text-zinc-400'>{wo.note}</div>}
+                          {wo.note && <div className='text-xs text-slate-500'>{wo.note}</div>}
                         </div>
                         <div className='flex items-center gap-1'>
                           <Button variant='outline' onClick={() => navigator.clipboard.writeText(wo.number)} title='Copy WO'>
                             <Copy size={16} />
                           </Button>
-                          <Button variant='ghost' className='text-red-300 hover:text-red-200' onClick={() => deleteWO(customer.id, project.id, wo.id)} title='Delete WO'>
+                          <Button variant='ghost' className='text-rose-600 hover:bg-rose-50' onClick={() => deleteWO(customer.id, project.id, wo.id)} title='Delete WO'>
                             <X size={16} />
                           </Button>
                         </div>
@@ -225,20 +250,20 @@ export default function App() {
                     ))}
                   </div>
 
-                  <div className='mt-3 rounded-xl border border-zinc-700/40 p-3'>
-                    <div className='mb-2 text-sm font-semibold text-zinc-300'>Add WO</div>
+                  <div className='mt-3 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
+                    <div className='mb-2 text-sm font-semibold text-slate-700'>Add WO</div>
                     <div className='grid gap-2 md:grid-cols-5'>
                       <div className='md:col-span-2'>
                         <Label>WO Number</Label>
                         <div className='flex'>
-                          <span className='flex items-center rounded-l-xl border border-r-0 border-zinc-600/40 bg-zinc-800 px-3 py-2 text-sm text-zinc-400'>WO</span>
+                          <span className='flex items-center rounded-l-2xl border border-r-0 border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm font-semibold text-slate-500'>WO</span>
                           <Input className='rounded-l-none border-l-0' value={woForm.number} onChange={(e) => setWoForm({ ...woForm, number: (e.target as HTMLInputElement).value })} placeholder='000000' />
                         </div>
                       </div>
                       <div>
                         <Label>Type</Label>
                         <select
-                          className='w-full rounded-xl border border-zinc-600/40 bg-zinc-900 px-3 py-2 text-zinc-100'
+                          className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100'
                           value={woForm.type}
                           onChange={(e) => setWoForm({ ...woForm, type: e.target.value as WOType })}
                         >
@@ -266,20 +291,20 @@ export default function App() {
 
                 {/* Purchase Orders */}
                 <div>
-                  <div className='mb-2 text-sm font-semibold text-zinc-300'>Purchase Orders</div>
+                  <div className='mb-2 text-sm font-semibold text-slate-700'>Purchase Orders</div>
                   <div className='space-y-2'>
-                    {project.pos.length === 0 && <div className='text-sm text-zinc-500'>None yet</div>}
+                    {project.pos.length === 0 && <div className='text-sm text-slate-500'>None yet</div>}
                     {project.pos.map(po => (
-                      <div key={po.id} className='flex items-center justify-between rounded-xl border border-zinc-700/40 bg-zinc-950/40 p-3'>
+                      <div key={po.id} className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
                         <div>
-                          <div className='font-medium text-zinc-100'>{po.number}</div>
-                          {po.note && <div className='text-xs text-zinc-400'>{po.note}</div>}
+                          <div className='font-semibold text-slate-800'>{po.number}</div>
+                          {po.note && <div className='text-xs text-slate-500'>{po.note}</div>}
                         </div>
                         <div className='flex items-center gap-1'>
                           <Button variant='outline' onClick={() => navigator.clipboard.writeText(po.number)} title='Copy PO'>
                             <Copy size={16} />
                           </Button>
-                          <Button variant='ghost' className='text-red-300 hover:text-red-200' onClick={() => deletePO(customer.id, project.id, po.id)} title='Delete PO'>
+                          <Button variant='ghost' className='text-rose-600 hover:bg-rose-50' onClick={() => deletePO(customer.id, project.id, po.id)} title='Delete PO'>
                             <X size={16} />
                           </Button>
                         </div>
@@ -287,8 +312,8 @@ export default function App() {
                     ))}
                   </div>
 
-                  <div className='mt-3 rounded-xl border border-zinc-700/40 p-3'>
-                    <div className='mb-2 text-sm font-semibold text-zinc-300'>Add PO</div>
+                  <div className='mt-3 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
+                    <div className='mb-2 text-sm font-semibold text-slate-700'>Add PO</div>
                     <div className='grid gap-2 md:grid-cols-5'>
                       <div className='md:col-span-3'>
                         <Label>PO Number</Label>
@@ -319,7 +344,7 @@ export default function App() {
   }
 
   return (
-    <div className='min-h-screen bg-[#0b0f16] px-4 py-6 text-zinc-100 md:px-8'>
+    <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
       <div className='mx-auto max-w-6xl'>
         <div className='mb-6 flex items-center justify-between'>
           <h1 className='text-2xl font-semibold tracking-tight'>CustomerProjectDB</h1>
@@ -364,19 +389,19 @@ export default function App() {
             </div>
 
             <div className='mt-4'>
-              <div className='text-xs uppercase tracking-wide text-zinc-500'>Matches</div>
+              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
               <div className='mt-2 grid gap-2 md:grid-cols-2'>
-                {searchMatches.length === 0 && (<div className='text-sm text-zinc-500'>No matches yet. Start typing above.</div>)}
+                {searchMatches.length === 0 && (<div className='text-sm text-slate-500'>No matches yet. Start typing above.</div>)}
                 {searchMatches.map((m, i) => (
                   <button
                     key={i}
                     onClick={() => setSelectedCustomerId(m.customerId)}
-                    className='flex items-center justify-between rounded-xl border border-zinc-700/40 bg-zinc-950/40 p-3 text-left hover:bg-zinc-900'
+                    className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
                     title={m.kind === 'customer' ? 'Open customer' : m.kind === 'project' ? 'Open customer at project' : 'Open customer at WO'}
                   >
                     <div>
-                      <div className='text-sm font-medium text-zinc-100'>{m.label}</div>
-                      <div className='text-xs text-zinc-500'>{m.kind.toUpperCase()}</div>
+                      <div className='text-sm font-semibold text-slate-800'>{m.label}</div>
+                      <div className='text-xs font-medium text-slate-500'>{m.kind.toUpperCase()}</div>
                     </div>
                     <ChevronRight size={18} />
                   </button>
@@ -397,6 +422,19 @@ export default function App() {
               </div>
               <div className='flex items-center gap-2'>
                 <Button variant='outline' onClick={() => setSelectedCustomerId(null)}>Back to Index</Button>
+                <Button
+                  variant='ghost'
+                  className='text-rose-600 hover:bg-rose-50'
+                  onClick={() => {
+                    if (!selectedCustomer) return
+                    const confirmed = window.confirm('Delete this customer and all associated projects, purchase orders, and work orders?')
+                    if (!confirmed) return
+                    deleteCustomer(selectedCustomer.id)
+                  }}
+                  title='Delete customer'
+                >
+                  <Trash2 size={16} /> Delete Customer
+                </Button>
               </div>
             </CardHeader>
             <CardContent>
@@ -407,14 +445,14 @@ export default function App() {
                 <EditableField label='Contact Email' value={selectedCustomer.contactEmail} fieldKey={`cemail_${selectedCustomer.id}`} placeholder='Add email' onSave={(v) => upsertCustomer({ ...selectedCustomer, contactEmail: v })} />
               </div>
 
-              <div className='mt-6 rounded-2xl border border-zinc-700/40 p-4'>
-                <div className='mb-2 text-sm font-semibold text-zinc-300'>Add Project</div>
+              <div className='mt-6 rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm'>
+                <div className='mb-2 text-sm font-semibold text-slate-700'>Add Project</div>
                 <AddProjectForm onAdd={(num) => addProject(selectedCustomer.id, num)} />
               </div>
 
               <div className='mt-6'>
-                <div className='mb-2 text-sm font-semibold text-zinc-300'>Projects</div>
-                {selectedCustomer.projects.length === 0 && <div className='text-sm text-zinc-500'>No projects yet.</div>}
+                <div className='mb-2 text-sm font-semibold text-slate-700'>Projects</div>
+                {selectedCustomer.projects.length === 0 && <div className='text-sm text-slate-500'>No projects yet.</div>}
                 {selectedCustomer.projects.map(p => (<ProjectRow key={p.id} project={p} customer={selectedCustomer} />))}
               </div>
             </CardContent>
@@ -499,7 +537,7 @@ function AddProjectForm({ onAdd }: { onAdd: (num: string) => void }) {
       <div className='flex-1'>
         <Label>Project Number</Label>
         <div className='flex'>
-          <span className='flex items-center rounded-l-xl border border-r-0 border-zinc-600/40 bg-zinc-800 px-3 py-2 text-sm text-zinc-400'>P</span>
+          <span className='flex items-center rounded-l-2xl border border-r-0 border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm font-semibold text-slate-500'>P</span>
           <Input className='rounded-l-none border-l-0' value={val} onChange={(e) => setVal((e.target as HTMLInputElement).value)} placeholder='e.g. 1403' />
         </div>
       </div>
