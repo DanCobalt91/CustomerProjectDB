@@ -1,121 +1,435 @@
-import type { Customer } from '../types'
+import type { Customer, Project, WO, WOType, PO } from '../types'
+import { supabase } from './supabase'
 
-const LS_KEY = 'cpdb.v1'
+type CustomerRow = {
+  id: string
+  name: string
+  address: string | null
+  contact_name: string | null
+  contact_phone: string | null
+  contact_email: string | null
+}
 
-// Convert your legacy JSON into our Customer[] schema
-function convertLegacyToDb(data: any): Customer[] {
-  const now = Date.now().toString(36).slice(-4)
-  const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${now}`
+type ProjectRow = {
+  id: string
+  customer_id: string
+  number: string
+  note: string | null
+}
 
-  const byCustomer: Record<string, Customer> = {}
+type WORow = {
+  id: string
+  project_id: string
+  number: string
+  type: WOType
+  note: string | null
+}
 
-  for (const p of (data?.projects || [])) {
-    const customerName: string = (p.customer ?? 'Unknown').trim()
-    if (!byCustomer[customerName]) {
-      byCustomer[customerName] = {
-        id: uid('cust'),
-        name: customerName,
-        projects: [],
-      }
+type PORow = {
+  id: string
+  project_id: string
+  number: string
+  note: string | null
+}
+
+type RequestOptions = {
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  query?: Record<string, string>
+  body?: Record<string, unknown> | Record<string, unknown>[]
+  preferReturn?: boolean
+}
+
+async function supabaseRequest<T>(table: string, options: RequestOptions = {}): Promise<T> {
+  const { method = 'GET', query, body, preferReturn = false } = options
+  const url = new URL(`/rest/v1/${table}`, supabase.url)
+
+  if (query) {
+    for (const [key, value] of Object.entries(query)) {
+      url.searchParams.set(key, value)
     }
+  }
 
-    byCustomer[customerName].projects.push({
-      id: uid('proj'),
-      number: String(p.projectCode ?? '').trim(),
-      // No legacy project note field; leave undefined
-      wos: (p.workOrders || []).map((w: any) => ({
-        id: uid('wo'),
-        // Normalise to "WOxxxx" (keeps existing "WO" if already present)
-        number: String(w.number ?? '').startsWith('WO') ? String(w.number) : `WO${w.number}`,
-        type: (w.type === 'Onsite' ? 'Onsite' : 'Build'),
-      })),
-      pos: [],
+  const headers: Record<string, string> = {
+    apikey: supabase.anonKey,
+    Authorization: `Bearer ${supabase.anonKey}`,
+  }
+
+  let payload: string | undefined
+  if (body !== undefined) {
+    headers['Content-Type'] = 'application/json'
+    payload = JSON.stringify(body)
+  }
+
+  if (preferReturn) {
+    headers['Prefer'] = 'return=representation'
+  }
+
+  const response = await fetch(url.toString(), {
+    method,
+    headers,
+    body: payload,
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(errorText || `Supabase request failed: ${response.status}`)
+  }
+
+  if (response.status === 204) {
+    return null as T
+  }
+
+  const text = await response.text()
+  if (!text) {
+    return null as T
+  }
+
+  return JSON.parse(text) as T
+}
+
+function mapCustomer(row: CustomerRow, projects: Project[]): Customer {
+  return {
+    id: row.id,
+    name: row.name,
+    address: row.address ?? undefined,
+    contactName: row.contact_name ?? undefined,
+    contactPhone: row.contact_phone ?? undefined,
+    contactEmail: row.contact_email ?? undefined,
+    projects,
+  }
+}
+
+function mapProject(row: ProjectRow, wos: WO[], pos: PO[]): Project {
+  return {
+    id: row.id,
+    number: row.number,
+    note: row.note ?? undefined,
+    wos,
+    pos,
+  }
+}
+
+function mapWO(row: WORow): WO {
+  return {
+    id: row.id,
+    number: row.number,
+    type: row.type,
+    note: row.note ?? undefined,
+  }
+}
+
+function mapPO(row: PORow): PO {
+  return {
+    id: row.id,
+    number: row.number,
+    note: row.note ?? undefined,
+  }
+}
+
+function buildInFilter(column: string, values: string[]): Record<string, string> {
+  const escaped = values.map(value => `"${value.replace(/"/g, '""')}"`).join(',')
+  return { [column]: `in.(${escaped})` }
+}
+
+function buildEqFilter(column: string, value: string): Record<string, string> {
+  return { [column]: `eq.${value}` }
+}
+
+function sortByText<T>(items: T[], getValue: (item: T) => string): T[] {
+  return [...items].sort((a, b) => getValue(a).localeCompare(getValue(b), undefined, { numeric: true, sensitivity: 'base' }))
+}
+
+export async function listCustomers(): Promise<Customer[]> {
+  const [customerRows, projectRows, woRows, poRows] = await Promise.all([
+    supabaseRequest<CustomerRow[]>('customers', { query: { select: '*' } }),
+    supabaseRequest<ProjectRow[]>('projects', { query: { select: '*' } }),
+    supabaseRequest<WORow[]>('work_orders', { query: { select: '*' } }),
+    supabaseRequest<PORow[]>('purchase_orders', { query: { select: '*' } }),
+  ])
+
+  const wosByProject = new Map<string, WO[]>()
+  for (const row of woRows) {
+    const group = wosByProject.get(row.project_id)
+    if (group) {
+      group.push(mapWO(row))
+    } else {
+      wosByProject.set(row.project_id, [mapWO(row)])
+    }
+  }
+
+  const posByProject = new Map<string, PO[]>()
+  for (const row of poRows) {
+    const group = posByProject.get(row.project_id)
+    if (group) {
+      group.push(mapPO(row))
+    } else {
+      posByProject.set(row.project_id, [mapPO(row)])
+    }
+  }
+
+  const projectsByCustomer = new Map<string, Project[]>()
+  for (const row of projectRows) {
+    const wos = sortByText(wosByProject.get(row.id) ?? [], wo => wo.number)
+    const pos = sortByText(posByProject.get(row.id) ?? [], po => po.number)
+    const project = mapProject(row, wos, pos)
+    const group = projectsByCustomer.get(row.customer_id)
+    if (group) {
+      group.push(project)
+    } else {
+      projectsByCustomer.set(row.customer_id, [project])
+    }
+  }
+
+  const customers = customerRows.map(row => {
+    const projects = sortByText(projectsByCustomer.get(row.id) ?? [], project => project.number)
+    return mapCustomer(row, projects)
+  })
+
+  return sortByText(customers, customer => customer.name)
+}
+
+export async function listProjectsByCustomer(customerId: string): Promise<Project[]> {
+  const projects = await supabaseRequest<ProjectRow[]>('projects', {
+    query: { ...buildEqFilter('customer_id', customerId), select: '*' },
+  })
+
+  if (projects.length === 0) {
+    return []
+  }
+
+  const projectIds = projects.map(project => project.id)
+  const [wos, pos] = await Promise.all([
+    supabaseRequest<WORow[]>('work_orders', { query: { ...buildInFilter('project_id', projectIds), select: '*' } }),
+    supabaseRequest<PORow[]>('purchase_orders', { query: { ...buildInFilter('project_id', projectIds), select: '*' } }),
+  ])
+
+  const wosByProject = new Map<string, WO[]>()
+  for (const row of wos) {
+    const group = wosByProject.get(row.project_id)
+    if (group) {
+      group.push(mapWO(row))
+    } else {
+      wosByProject.set(row.project_id, [mapWO(row)])
+    }
+  }
+
+  const posByProject = new Map<string, PO[]>()
+  for (const row of pos) {
+    const group = posByProject.get(row.project_id)
+    if (group) {
+      group.push(mapPO(row))
+    } else {
+      posByProject.set(row.project_id, [mapPO(row)])
+    }
+  }
+
+  return sortByText(
+    projects.map(project => {
+      const wosForProject = sortByText(wosByProject.get(project.id) ?? [], item => item.number)
+      const posForProject = sortByText(posByProject.get(project.id) ?? [], item => item.number)
+      return mapProject(project, wosForProject, posForProject)
+    }),
+    project => project.number,
+  )
+}
+
+export async function listWOs(projectId: string): Promise<WO[]> {
+  const rows = await supabaseRequest<WORow[]>('work_orders', {
+    query: { ...buildEqFilter('project_id', projectId), select: '*' },
+  })
+  return sortByText(rows.map(mapWO), wo => wo.number)
+}
+
+export async function listPOs(projectId: string): Promise<PO[]> {
+  const rows = await supabaseRequest<PORow[]>('purchase_orders', {
+    query: { ...buildEqFilter('project_id', projectId), select: '*' },
+  })
+  return sortByText(rows.map(mapPO), po => po.number)
+}
+
+export async function createCustomer(data: {
+  name: string
+  address?: string
+  contactName?: string
+  contactPhone?: string
+  contactEmail?: string
+}): Promise<Customer> {
+  const payload = {
+    name: data.name,
+    address: data.address ?? null,
+    contact_name: data.contactName ?? null,
+    contact_phone: data.contactPhone ?? null,
+    contact_email: data.contactEmail ?? null,
+  }
+
+  const rows = await supabaseRequest<CustomerRow[]>('customers', {
+    method: 'POST',
+    body: payload,
+    preferReturn: true,
+  })
+
+  if (!rows.length) {
+    throw new Error('Failed to create customer.')
+  }
+
+  return mapCustomer(rows[0], [])
+}
+
+export async function updateCustomer(customerId: string, data: {
+  name?: string
+  address?: string | null
+  contactName?: string | null
+  contactPhone?: string | null
+  contactEmail?: string | null
+}): Promise<Customer> {
+  const payload: Record<string, unknown> = {}
+  if (data.name !== undefined) payload.name = data.name
+  if (data.address !== undefined) payload.address = data.address
+  if (data.contactName !== undefined) payload.contact_name = data.contactName
+  if (data.contactPhone !== undefined) payload.contact_phone = data.contactPhone
+  if (data.contactEmail !== undefined) payload.contact_email = data.contactEmail
+
+  const rows = await supabaseRequest<CustomerRow[]>('customers', {
+    method: 'PATCH',
+    query: buildEqFilter('id', customerId),
+    body: payload,
+    preferReturn: true,
+  })
+
+  if (!rows.length) {
+    throw new Error('Failed to update customer.')
+  }
+
+  return mapCustomer(rows[0], [])
+}
+
+export async function deleteCustomer(customerId: string): Promise<void> {
+  const projects = await supabaseRequest<ProjectRow[]>('projects', {
+    query: { ...buildEqFilter('customer_id', customerId), select: 'id' },
+  })
+
+  if (projects.length > 0) {
+    const projectIds = projects.map(project => project.id)
+    await Promise.all([
+      supabaseRequest('work_orders', {
+        method: 'DELETE',
+        query: buildInFilter('project_id', projectIds),
+      }),
+      supabaseRequest('purchase_orders', {
+        method: 'DELETE',
+        query: buildInFilter('project_id', projectIds),
+      }),
+    ])
+
+    await supabaseRequest('projects', {
+      method: 'DELETE',
+      query: buildInFilter('id', projectIds),
     })
   }
 
-  return Object.values(byCustomer)
+  await supabaseRequest('customers', {
+    method: 'DELETE',
+    query: buildEqFilter('id', customerId),
+  })
 }
 
-export function loadDb(): Customer[] {
-  // 1) Try current saved data
-  try {
-    const raw = localStorage.getItem(LS_KEY)
-    if (raw) return JSON.parse(raw)
-  } catch (e) {
-    console.warn('Failed to load DB', e)
+export async function createProject(customerId: string, number: string): Promise<Project> {
+  const rows = await supabaseRequest<ProjectRow[]>('projects', {
+    method: 'POST',
+    body: { customer_id: customerId, number, note: null },
+    preferReturn: true,
+  })
+
+  if (!rows.length) {
+    throw new Error('Failed to create project.')
   }
 
-  // 2) Seed (kept minimal)
-  const now = Date.now().toString(36).slice(-4)
-  const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${now}`
-  const seed: Customer[] = [
-    {
-      id: uid('cust'),
-      name: 'Acme Logistics',
-      address: '1 Industrial Way, Manchester',
-      contactName: 'S. Ramos',
-      contactPhone: '+44 161 555 0101',
-      contactEmail: 's.ramos@acmelog.co.uk',
-      projects: [
-        {
-          id: uid('proj'),
-          number: 'P2025-001',
-          note: 'Example seeded project note.',
-          wos: [
-            { id: uid('wo'), number: 'WO11021', type: 'Build', note: 'Line 3 applicator' },
-            { id: uid('wo'), number: 'WO11022', type: 'Onsite', note: 'SAT & training' },
-          ],
-          pos: [
-            { id: uid('po'), number: 'PO77231', note: '50% upfront' },
-            { id: uid('po'), number: 'PO77232', note: 'Balance' },
-          ],
-        },
-      ],
+  return mapProject(rows[0], [], [])
+}
+
+export async function updateProject(projectId: string, data: { note?: string | null }): Promise<Project> {
+  const payload: Record<string, unknown> = {}
+  if (data.note !== undefined) payload.note = data.note
+
+  const rows = await supabaseRequest<ProjectRow[]>('projects', {
+    method: 'PATCH',
+    query: buildEqFilter('id', projectId),
+    body: payload,
+    preferReturn: true,
+  })
+
+  if (!rows.length) {
+    throw new Error('Failed to update project.')
+  }
+
+  return mapProject(rows[0], [], [])
+}
+
+export async function deleteProject(projectId: string): Promise<void> {
+  await Promise.all([
+    supabaseRequest('work_orders', {
+      method: 'DELETE',
+      query: buildEqFilter('project_id', projectId),
+    }),
+    supabaseRequest('purchase_orders', {
+      method: 'DELETE',
+      query: buildEqFilter('project_id', projectId),
+    }),
+  ])
+
+  await supabaseRequest('projects', {
+    method: 'DELETE',
+    query: buildEqFilter('id', projectId),
+  })
+}
+
+export async function createWO(projectId: string, data: { number: string; type: WOType; note?: string }): Promise<WO> {
+  const rows = await supabaseRequest<WORow[]>('work_orders', {
+    method: 'POST',
+    body: {
+      project_id: projectId,
+      number: data.number,
+      type: data.type,
+      note: data.note ?? null,
     },
-  ]
+    preferReturn: true,
+  })
 
-  // 3) Merge your legacy list on first load (when no localStorage exists)
-  try {
-    const legacy = {
-      "projects": [
-        {"projectCode":"P1403","customer":"Cyan Tech","workOrders":[{"number":"804322","type":"Onsite"},{"number":"804323","type":"Build"},{"number":"807606","type":"Build"}]},
-        {"projectCode":"P1545","customer":"Miliken","workOrders":[]},
-        {"projectCode":"P1638","customer":"Leprino Foods","workOrders":[{"number":"805234","type":"Build"},{"number":"806317","type":"Onsite"}]},
-        {"projectCode":"P1882","customer":"Arla Foods","workOrders":[{"number":"806191","type":"Build"},{"number":"806627","type":"Onsite"},{"number":"806628","type":"Onsite"},{"number":"806946","type":"Build"},{"number":"807611","type":"Onsite"}]},
-        {"projectCode":"P1900","customer":"Walkers","workOrders":[{"number":"806274","type":"Onsite"},{"number":"806278","type":"Build"}]},
-        {"projectCode":"P1945","customer":"Independent Pharm","workOrders":[{"number":"806421","type":"Build"},{"number":"807063","type":"Onsite"},{"number":"807064","type":"Onsite"},{"number":"807066","type":"Onsite"}]},
-        {"projectCode":"P1955","customer":"Pakeeza","workOrders":[{"number":"806473-4","type":"Build"},{"number":"806868","type":"Onsite"}]},
-        {"projectCode":"P1968","customer":"Hologic","workOrders":[{"number":"806555","type":"Build"}]},
-        {"projectCode":"P1974","customer":"Walkers Charnwood Bakery","workOrders":[{"number":"806593","type":"Build"},{"number":"806612","type":"Onsite"}]},
-        {"projectCode":"P1982","customer":"Heinz","workOrders":[{"number":"806633","type":"Build"}]},
-        {"projectCode":"P1983","customer":"Eurilait","workOrders":[{"number":"806608","type":"Build"},{"number":"807849","type":"Onsite"}]},
-        {"projectCode":"P1984","customer":"Eurilait","workOrders":[{"number":"806609","type":"Build"},{"number":"807848","type":"Onsite"}]},
-        {"projectCode":"P2007","customer":"Criminisi","workOrders":[{"number":"806718","type":"Onsite"},{"number":"806719","type":"Build"}]},
-        {"projectCode":"P2635","customer":"Pakeeza","workOrders":[{"number":"806858","type":"Build"}]},
-        {"projectCode":"P2637","customer":"Unilever","workOrders":[{"number":"806860","type":"Build"}]},
-        {"projectCode":"P2697","customer":"Central Foods","workOrders":[{"number":"807134","type":"Onsite"},{"number":"807323","type":"Build"}]},
-        {"projectCode":"P2720","customer":"Unilever","workOrders":[{"number":"807248","type":"Build"}]},
-        {"projectCode":"P2736","customer":"Dematic - Aldi","workOrders":[{"number":"807380","type":"Build"},{"number":"808009","type":"Onsite"}]},
-        {"projectCode":"P2743","customer":"Little Moons","workOrders":[{"number":"807381","type":"Build"},{"number":"807663","type":"Onsite"},{"number":"807787","type":"Onsite"}]},
-        {"projectCode":"P2777","customer":"Independent Pharmacy","workOrders":[{"number":"807458","type":"Onsite"},{"number":"807459","type":"Build"},{"number":"807460","type":"Build"},{"number":"807461","type":"Build"}]},
-        {"projectCode":"P2781","customer":"Churchill China","workOrders":[{"number":"807453","type":"Onsite"},{"number":"807454","type":"Build"}]},
-        {"projectCode":"P2791","customer":"Aston Manor","workOrders":[{"number":"807528","type":"Build"}]},
-        {"projectCode":"P2797","customer":"Freidheim - Col Tach","workOrders":[{"number":"807605","type":"Build"}]},
-        {"projectCode":"P2798","customer":"Friedheim - Snuggles","workOrders":[{"number":"807607","type":"Build"},{"number":"807608","type":"Build"},{"number":"807988","type":"Onsite"}]},
-        {"projectCode":"P2818","customer":"Green Custard","workOrders":[{"number":"807658","type":"Onsite"},{"number":"807659","type":"Build"}]}
-      ]
-    }
-    const merged = convertLegacyToDb(legacy)
-    return [...merged, ...seed]
-  } catch {
-    return seed
+  if (!rows.length) {
+    throw new Error('Failed to create work order.')
   }
+
+  return mapWO(rows[0])
 }
 
-export function saveDb(db: Customer[]) {
-  try {
-    localStorage.setItem(LS_KEY, JSON.stringify(db))
-  } catch (e) {
-    console.warn('Failed to save DB', e)
+export async function deleteWO(woId: string): Promise<void> {
+  await supabaseRequest('work_orders', {
+    method: 'DELETE',
+    query: buildEqFilter('id', woId),
+  })
+}
+
+export async function createPO(projectId: string, data: { number: string; note?: string }): Promise<PO> {
+  const rows = await supabaseRequest<PORow[]>('purchase_orders', {
+    method: 'POST',
+    body: {
+      project_id: projectId,
+      number: data.number,
+      note: data.note ?? null,
+    },
+    preferReturn: true,
+  })
+
+  if (!rows.length) {
+    throw new Error('Failed to create purchase order.')
   }
+
+  return mapPO(rows[0])
+}
+
+export async function deletePO(poId: string): Promise<void> {
+  await supabaseRequest('purchase_orders', {
+    method: 'DELETE',
+    query: buildEqFilter('id', poId),
+  })
 }
