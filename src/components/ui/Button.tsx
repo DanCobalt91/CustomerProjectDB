@@ -13,7 +13,8 @@ export default function Button({
   children,
   ...props
 }: Props) {
-  const base = 'inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm font-medium shadow-sm transition active:scale-[.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+  const base =
+    'inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm font-medium shadow-sm transition active:scale-[.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500 disabled:cursor-not-allowed disabled:opacity-60 disabled:shadow-none'
   const v =
     variant === 'outline'
       ? 'border-slate-200/80 bg-white/80 text-slate-700 hover:bg-white hover:border-slate-300'

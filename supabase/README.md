@@ -24,6 +24,27 @@ Follow these steps to prepare a project:
    present the UI will show "Storage: Supabase" and require sign-in before
    loading data from the remote database.
 
+## Roles and user management
+
+The SQL script now provisions a `user_roles` table, a `me_roles` view, and a
+`grant_role_by_email` helper so the front-end can enable role-aware experiences.
+
+To expose the admin APIs, deploy the bundled Supabase Edge Function:
+
+```bash
+supabase functions deploy user-management --project-ref YOUR_PROJECT_REF
+```
+
+The function must run with the `service_role` key (Supabase automatically
+injects this at runtime) and enforces that only users with the `admin` role can
+list accounts or grant/revoke roles. The UI invokes the function via
+`supabase.functions.invoke('user-management', …)`.
+
+Assign roles to users (e.g. `viewer`, `editor`, `admin`) from the "Manage Users"
+screen or by calling `select grant_role_by_email('user@example.com', 'editor',
+true);` in the SQL editor. Viewers get read-only access, editors/admins can
+mutate data, and admin accounts can manage other users.
+
 The script is idempotent so you can re-run it to refresh the policies. To remove
 all data simply truncate the tables in Supabase or use the dashboard to delete
 rows.
