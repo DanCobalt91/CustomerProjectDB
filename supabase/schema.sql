@@ -69,6 +69,12 @@ create unique index if not exists work_orders_project_number_key on public.work_
 create index if not exists purchase_orders_project_id_idx on public.purchase_orders(project_id);
 create unique index if not exists purchase_orders_project_number_key on public.purchase_orders(project_id, number);
 
+grant usage on schema public to authenticated;
+grant select, insert, update, delete on public.customers to authenticated;
+grant select, insert, update, delete on public.projects to authenticated;
+grant select, insert, update, delete on public.work_orders to authenticated;
+grant select, insert, update, delete on public.purchase_orders to authenticated;
+
 alter table public.customers enable row level security;
 alter table public.projects enable row level security;
 alter table public.work_orders enable row level security;
