@@ -1,5 +1,6 @@
 import type { Session } from '@supabase/supabase-js'
 import { getSupabaseClient } from './supabase'
+import { extractSupabaseErrorMessage, isSupabaseEdgeFunctionUnavailable, isSupabaseUnavailableError } from './supabaseErrors'
 import type { AppRole } from '../types'
 
 type RoleRow = { role: string | null }
@@ -46,15 +47,16 @@ export function getFriendlySupabaseError(
   fallbackMessage: string,
   unauthorizedMessage = 'Not authorized to perform this action.',
 ): string {
+  if (isSupabaseUnavailableError(error)) {
+    return 'Unable to reach Supabase right now. Please check your connection and try again.'
+  }
+
   if (isRlsError(error)) {
     return unauthorizedMessage
   }
 
-  if (error instanceof Error && error.message) {
-    return error.message
-  }
-
-  return fallbackMessage
+  const message = extractSupabaseErrorMessage(error)
+  return message || fallbackMessage
 }
 
 export async function fetchCurrentUserRoles(): Promise<AppRole[]> {
@@ -88,7 +90,13 @@ export async function fetchManagedUsers(session: Session): Promise<ManagedUser[]
   })
 
   if (error) {
-    throw new Error(error.message)
+    if (isSupabaseEdgeFunctionUnavailable(error)) {
+      throw new Error(
+        'Unable to reach the Supabase user-management function. Confirm it is deployed and that your network can access it.',
+      )
+    }
+
+    throw new Error(extractSupabaseErrorMessage(error) || 'Unable to load users.')
   }
 
   const rows: unknown = (data as { users?: unknown })?.users ?? data
@@ -138,7 +146,13 @@ export async function updateUserRole(
   })
 
   if (error) {
-    throw new Error(error.message)
+    if (isSupabaseEdgeFunctionUnavailable(error)) {
+      throw new Error(
+        'Unable to reach the Supabase user-management function. Confirm it is deployed and that your network can access it.',
+      )
+    }
+
+    throw new Error(extractSupabaseErrorMessage(error) || 'Unable to update user role.')
   }
 
   const message =
