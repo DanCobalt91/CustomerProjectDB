@@ -34,27 +34,167 @@ type StorageApi = {
   deletePO(poId: string): Promise<void>
 }
 
-export const storageProvider: 'supabase' | 'browser' = isSupabaseConfigured() ? 'supabase' : 'browser'
+export type StorageProvider = 'supabase' | 'browser'
+export type StorageProviderChangeReason = 'supabase-unavailable'
+export type StorageProviderChange = {
+  provider: StorageProvider
+  reason?: StorageProviderChangeReason
+  error?: Error
+}
 
-const storage: StorageApi =
-  storageProvider === 'supabase'
-    ? createSupabaseStorage(getSupabaseClient())
-    : createBrowserStorage()
+const browserStorage = createBrowserStorage()
+const supabaseConfigured = isSupabaseConfigured()
+const supabaseStorage = supabaseConfigured ? createSupabaseStorage(getSupabaseClient()) : null
 
-export const listCustomers = storage.listCustomers
-export const listProjectsByCustomer = storage.listProjectsByCustomer
-export const listWOs = storage.listWOs
-export const listPOs = storage.listPOs
-export const createCustomer = storage.createCustomer
-export const updateCustomer = storage.updateCustomer
-export const deleteCustomer = storage.deleteCustomer
-export const createProject = storage.createProject
-export const updateProject = storage.updateProject
-export const deleteProject = storage.deleteProject
-export const createWO = storage.createWO
-export const deleteWO = storage.deleteWO
-export const createPO = storage.createPO
-export const deletePO = storage.deletePO
+let currentProvider: StorageProvider = supabaseConfigured ? 'supabase' : 'browser'
+let storage: StorageApi = supabaseStorage ?? browserStorage
+
+const storageProviderListeners = new Set<(change: StorageProviderChange) => void>()
+
+function notifyProviderChange(change: StorageProviderChange): void {
+  storageProviderListeners.forEach(listener => {
+    try {
+      listener(change)
+    } catch (error) {
+      console.error('Storage provider listener failed', error)
+    }
+  })
+}
+
+function isSupabaseUnavailableError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+
+  const message = error.message.toLowerCase()
+
+  return (
+    message.includes('fetch failed') ||
+    message.includes('failed to fetch') ||
+    message.includes('network request failed') ||
+    message.includes('getaddrinfo') ||
+    message.includes('etimedout') ||
+    message.includes('ecconnreset') ||
+    message.includes('ssl connect error') ||
+    message.includes('certificate')
+  )
+}
+
+function switchToBrowserStorage(reason?: StorageProviderChangeReason, error?: Error): void {
+  if (currentProvider === 'browser') {
+    return
+  }
+
+  currentProvider = 'browser'
+  storage = browserStorage
+  notifyProviderChange({ provider: currentProvider, reason, error })
+}
+
+async function runWithStorage<T>(operation: (active: StorageApi) => Promise<T>): Promise<T> {
+  try {
+    return await operation(storage)
+  } catch (error) {
+    if (currentProvider === 'supabase' && isSupabaseUnavailableError(error)) {
+      const fallbackError = error instanceof Error ? error : new Error(String(error))
+      console.warn('Supabase request failed. Falling back to browser storage.', fallbackError)
+      switchToBrowserStorage('supabase-unavailable', fallbackError)
+      return operation(storage)
+    }
+
+    if (error instanceof Error) {
+      throw error
+    }
+
+    throw new Error(String(error))
+  }
+}
+
+export function listCustomers(): Promise<Customer[]> {
+  return runWithStorage(active => active.listCustomers())
+}
+
+export function listProjectsByCustomer(customerId: string): Promise<Project[]> {
+  return runWithStorage(active => active.listProjectsByCustomer(customerId))
+}
+
+export function listWOs(projectId: string): Promise<WO[]> {
+  return runWithStorage(active => active.listWOs(projectId))
+}
+
+export function listPOs(projectId: string): Promise<PO[]> {
+  return runWithStorage(active => active.listPOs(projectId))
+}
+
+export function createCustomer(data: {
+  name: string
+  address?: string
+  contactName?: string
+  contactPhone?: string
+  contactEmail?: string
+}): Promise<Customer> {
+  return runWithStorage(active => active.createCustomer(data))
+}
+
+export function updateCustomer(
+  customerId: string,
+  data: {
+    name?: string
+    address?: string | null
+    contactName?: string | null
+    contactPhone?: string | null
+    contactEmail?: string | null
+  },
+): Promise<Customer> {
+  return runWithStorage(active => active.updateCustomer(customerId, data))
+}
+
+export function deleteCustomer(customerId: string): Promise<void> {
+  return runWithStorage(active => active.deleteCustomer(customerId))
+}
+
+export function createProject(customerId: string, number: string): Promise<Project> {
+  return runWithStorage(active => active.createProject(customerId, number))
+}
+
+export function updateProject(projectId: string, data: { note?: string | null }): Promise<Project> {
+  return runWithStorage(active => active.updateProject(projectId, data))
+}
+
+export function deleteProject(projectId: string): Promise<void> {
+  return runWithStorage(active => active.deleteProject(projectId))
+}
+
+export function createWO(
+  projectId: string,
+  data: { number: string; type: WOType; note?: string },
+): Promise<WO> {
+  return runWithStorage(active => active.createWO(projectId, data))
+}
+
+export function deleteWO(woId: string): Promise<void> {
+  return runWithStorage(active => active.deleteWO(woId))
+}
+
+export function createPO(projectId: string, data: { number: string; note?: string }): Promise<PO> {
+  return runWithStorage(active => active.createPO(projectId, data))
+}
+
+export function deletePO(poId: string): Promise<void> {
+  return runWithStorage(active => active.deletePO(poId))
+}
+
+export function getStorageProvider(): StorageProvider {
+  return currentProvider
+}
+
+export function subscribeToStorageProviderChange(
+  listener: (change: StorageProviderChange) => void,
+): () => void {
+  storageProviderListeners.add(listener)
+  return () => {
+    storageProviderListeners.delete(listener)
+  }
+}
 
 function sortByText<T>(items: T[], getValue: (item: T) => string): T[] {
   return [...items].sort((a, b) => getValue(a).localeCompare(getValue(b), undefined, { numeric: true, sensitivity: 'base' }))

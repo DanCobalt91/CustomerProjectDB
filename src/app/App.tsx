@@ -14,7 +14,9 @@ import {
   createPO as createPORecord,
   deletePO as deletePORecord,
   updateProject as updateProjectRecord,
-  storageProvider,
+  getStorageProvider,
+  subscribeToStorageProviderChange,
+  type StorageProvider,
 } from '../lib/storage'
 import { useSupabaseAuth } from '../lib/useSupabaseAuth'
 import Button from '../components/ui/Button'
@@ -38,12 +40,14 @@ export default function App() {
   const [authNotice, setAuthNotice] = useState<string | null>(null)
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
   const [isSigningOut, setIsSigningOut] = useState(false)
+  const [activeStorageProvider, setActiveStorageProvider] = useState<StorageProvider>(() => getStorageProvider())
+  const [storageNotice, setStorageNotice] = useState<string | null>(null)
 
-  const usingSupabase = storageProvider === 'supabase'
+  const usingSupabase = activeStorageProvider === 'supabase'
   const storageLabel = usingSupabase ? 'Supabase' : 'Browser'
   const storageTitle = usingSupabase
     ? 'Data is stored securely in Supabase for your account.'
-    : 'Data is stored in this browser only.'
+    : storageNotice ?? 'Data is stored in this browser only.'
   const storageBadgeClass = usingSupabase
     ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
     : 'border-amber-200 bg-amber-50 text-amber-700'
@@ -58,6 +62,29 @@ export default function App() {
   const [newCust, setNewCust] = useState({ name: '', address: '', contactName: '', contactPhone: '', contactEmail: '' })
   const [showNewCustomer, setShowNewCustomer] = useState(false)
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
+
+  useEffect(() => {
+    const unsubscribe = subscribeToStorageProviderChange(change => {
+      setActiveStorageProvider(change.provider)
+
+      if (change.provider === 'browser') {
+        if (change.reason === 'supabase-unavailable') {
+          if (change.error) {
+            console.warn('Supabase connection lost; continuing with browser storage.', change.error)
+          }
+          setStorageNotice(
+            'Lost connection to Supabase. Data will stay in this browser until the connection is restored and will not sync to Supabase.',
+          )
+        } else {
+          setStorageNotice(null)
+        }
+      } else {
+        setStorageNotice(null)
+      }
+    })
+
+    return unsubscribe
+  }, [])
 
   const refreshCustomers = useCallback(
     async (initial = false) => {
@@ -1026,8 +1053,8 @@ export default function App() {
 
         {!usingSupabase && (
           <div className='mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800'>
-            Supabase is not configured — data stays in this browser only. Set VITE_SUPABASE_URL and
-            VITE_SUPABASE_ANON_KEY to sync with Supabase.
+            {storageNotice ??
+              'Supabase is not configured — data stays in this browser only. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to sync with Supabase.'}
           </div>
         )}
 
