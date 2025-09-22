@@ -5,7 +5,14 @@ type Props = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   size?: 'sm' | 'lg'
 }
 
-export default function Button({ className = '', variant = 'default', size = 'sm', children, ...props }: Props) {
+export default function Button({
+  className = '',
+  variant = 'default',
+  size = 'sm',
+  type = 'button',
+  children,
+  ...props
+}: Props) {
   const base = 'inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-sm font-medium shadow-sm transition active:scale-[.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
   const v =
     variant === 'outline'
@@ -15,7 +22,7 @@ export default function Button({ className = '', variant = 'default', size = 'sm
       : 'border-transparent bg-gradient-to-r from-sky-500 to-blue-500 text-white shadow-[0_10px_25px_-18px_rgba(14,165,233,0.9)] hover:from-sky-500 hover:to-sky-600'
   const s = size === 'lg' ? 'px-4 py-3 text-base' : ''
   return (
-    <button className={`${base} ${v} ${s} ${className}`} {...props}>
+    <button type={type} className={`${base} ${v} ${s} ${className}`} {...props}>
       {children}
     </button>
   )

@@ -1,8 +1,20 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Plus, Trash2, Copy, Save, Pencil, X, Search, ChevronRight, ChevronDown, MapPin, AlertCircle } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Customer, Project, WOType } from '../types'
-import { loadDb, saveDb } from '../lib/storage'
+import {
+  listCustomers,
+  createCustomer as createCustomerRecord,
+  updateCustomer as updateCustomerRecord,
+  deleteCustomer as deleteCustomerRecord,
+  createProject as createProjectRecord,
+  deleteProject as deleteProjectRecord,
+  createWO as createWORecord,
+  deleteWO as deleteWORecord,
+  createPO as createPORecord,
+  deletePO as deletePORecord,
+  updateProject as updateProjectRecord,
+} from '../lib/storage'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
@@ -14,6 +26,9 @@ export default function App() {
   const [editingInfo, setEditingInfo] = useState<Record<string, boolean>>({})
   const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({})
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [isSyncing, setIsSyncing] = useState(false)
 
   // Search
   const [customerQuery, setCustomerQuery] = useState('')
@@ -23,9 +38,37 @@ export default function App() {
   // Create customer (modal)
   const [newCust, setNewCust] = useState({ name: '', address: '', contactName: '', contactPhone: '', contactEmail: '' })
   const [showNewCustomer, setShowNewCustomer] = useState(false)
+  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
 
-  useEffect(() => { setDb(loadDb()) }, [])
-  useEffect(() => { saveDb(db) }, [db])
+  const refreshCustomers = useCallback(
+    async (initial = false) => {
+      if (initial) {
+        setIsLoading(true)
+      } else {
+        setIsSyncing(true)
+      }
+
+      try {
+        const customers = await listCustomers()
+        setDb(customers)
+        setLoadError(null)
+      } catch (error) {
+        console.error('Failed to load customers', error)
+        setLoadError('Unable to load customers right now. Please try again.')
+      } finally {
+        if (initial) {
+          setIsLoading(false)
+        } else {
+          setIsSyncing(false)
+        }
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    void refreshCustomers(true)
+  }, [refreshCustomers])
 
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
   const selectedCustomerAddressForMap = selectedCustomer?.address?.trim() || null
@@ -83,126 +126,280 @@ export default function App() {
   }
 
   // Mutators
-  function upsertCustomer(updated: Customer) {
-    setDb(prev => prev.map(c => (c.id === updated.id ? updated : c)))
-  }
-  function deleteCustomer(customerId: string) {
-    const target = db.find(c => c.id === customerId)
-    setDb(prev => prev.filter(c => c.id !== customerId))
-    setOpenProjects(prev => {
-      if (!target) return prev
-      const next = { ...prev }
-      target.projects.forEach(p => { delete next[p.id] })
-      return next
-    })
-    setEditingInfo(prev => {
-      const next = { ...prev }
-      Object.keys(next).forEach(key => {
-        if (key.endsWith(customerId)) delete next[key]
+  async function upsertCustomer(updated: Customer) {
+    try {
+      const saved = await updateCustomerRecord(updated.id, {
+        name: updated.name,
+        address: updated.address ?? null,
+        contactName: updated.contactName ?? null,
+        contactPhone: updated.contactPhone ?? null,
+        contactEmail: updated.contactEmail ?? null,
       })
-      return next
-    })
-    if (selectedCustomerId === customerId) setSelectedCustomerId(null)
+      setDb(prev =>
+        prev.map(c =>
+          c.id === saved.id
+            ? {
+                ...c,
+                name: saved.name,
+                address: saved.address,
+                contactName: saved.contactName,
+                contactPhone: saved.contactPhone,
+                contactEmail: saved.contactEmail,
+              }
+            : c,
+        ),
+      )
+    } catch (error) {
+      console.error('Failed to update customer', error)
+      throw error instanceof Error ? error : new Error('Failed to update customer.')
+    }
   }
-  function deleteProject(customerId: string, projectId: string) {
-    setDb(prev => prev.map(c => (c.id !== customerId ? c : { ...c, projects: c.projects.filter(p => p.id !== projectId) })))
-    setOpenProjects(prev => {
-      if (!prev[projectId]) return prev
-      const next = { ...prev }
-      delete next[projectId]
-      return next
-    })
+
+  async function deleteCustomer(customerId: string) {
+    const target = db.find(c => c.id === customerId)
+    try {
+      await deleteCustomerRecord(customerId)
+      setDb(prev => prev.filter(c => c.id !== customerId))
+      setOpenProjects(prev => {
+        if (!target) return prev
+        const next = { ...prev }
+        target.projects.forEach(p => {
+          delete next[p.id]
+        })
+        return next
+      })
+      setEditingInfo(prev => {
+        const next = { ...prev }
+        Object.keys(next).forEach(key => {
+          if (key.endsWith(customerId)) delete next[key]
+        })
+        return next
+      })
+      if (selectedCustomerId === customerId) setSelectedCustomerId(null)
+    } catch (error) {
+      console.error('Failed to delete customer', error)
+    }
   }
-  function deleteWO(customerId: string, projectId: string, woId: string) {
-    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
-      ...c, projects: c.projects.map(p => p.id !== projectId ? p : { ...p, wos: p.wos.filter(w => w.id !== woId) })
-    })))
+
+  async function deleteProject(customerId: string, projectId: string) {
+    try {
+      await deleteProjectRecord(projectId)
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId ? c : { ...c, projects: c.projects.filter(p => p.id !== projectId) },
+        ),
+      )
+      setOpenProjects(prev => {
+        if (!prev[projectId]) return prev
+        const next = { ...prev }
+        delete next[projectId]
+        return next
+      })
+    } catch (error) {
+      console.error('Failed to delete project', error)
+    }
   }
-  function deletePO(customerId: string, projectId: string, poId: string) {
-    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
-      ...c, projects: c.projects.map(p => p.id !== projectId ? p : { ...p, pos: p.pos.filter(po => po.id !== poId) })
-    })))
+
+  async function deleteWO(customerId: string, projectId: string, woId: string) {
+    try {
+      await deleteWORecord(woId)
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, wos: p.wos.filter(w => w.id !== woId) },
+                ),
+              },
+        ),
+      )
+    } catch (error) {
+      console.error('Failed to delete work order', error)
+    }
   }
+
+  async function deletePO(customerId: string, projectId: string, poId: string) {
+    try {
+      await deletePORecord(poId)
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, pos: p.pos.filter(po => po.id !== poId) },
+                ),
+              },
+        ),
+      )
+    } catch (error) {
+      console.error('Failed to delete purchase order', error)
+    }
+  }
+
   function updateProjectNote(customerId: string, projectId: string, note: string) {
-    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
-      ...c,
-      projects: c.projects.map(p => (p.id !== projectId ? p : { ...p, note: note.trim() ? note : undefined })),
-    })))
+    const trimmed = note.trim()
+    setDb(prev =>
+      prev.map(c =>
+        c.id !== customerId
+          ? c
+          : {
+              ...c,
+              projects: c.projects.map(p =>
+                p.id !== projectId ? p : { ...p, note: trimmed ? note : undefined },
+              ),
+            },
+      ),
+    )
+    void (async () => {
+      try {
+        await updateProjectRecord(projectId, { note: trimmed ? note : null })
+      } catch (error) {
+        console.error('Failed to update project note', error)
+      }
+    })()
   }
-  function addWO(customerId: string, projectId: string, data: { number: string; type: WOType; note?: string }): string | null {
+
+  async function addWO(
+    customerId: string,
+    projectId: string,
+    data: { number: string; type: WOType; note?: string },
+  ): Promise<string | null> {
     const trimmed = data.number.trim()
     if (!trimmed) return 'Enter a work order number.'
     const normalized = trimmed.toUpperCase()
     const finalNumber = normalized.startsWith('WO') ? normalized : `WO${normalized}`
     if (woNumberExists(finalNumber)) return 'A work order with this number already exists.'
     const note = data.note?.trim()
-    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
-      ...c,
-      projects: c.projects.map(p => (p.id !== projectId ? p : {
-        ...p,
-        wos: [...p.wos, { id: uid('wo'), number: finalNumber, type: data.type, note: note ? note : undefined }],
-      })),
-    })))
-    return null
+    try {
+      const newWO = await createWORecord(projectId, { number: finalNumber, type: data.type, note })
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, wos: [...p.wos, newWO] },
+                ),
+              },
+        ),
+      )
+      return null
+    } catch (error) {
+      console.error('Failed to create work order', error)
+      return 'Failed to create work order.'
+    }
   }
-  function addPO(customerId: string, projectId: string, data: { number: string; note?: string }): string | null {
+
+  async function addPO(
+    customerId: string,
+    projectId: string,
+    data: { number: string; note?: string },
+  ): Promise<string | null> {
     const trimmed = data.number.trim()
     if (!trimmed) return 'Enter a purchase order number.'
     if (poNumberExists(trimmed)) return 'A purchase order with this number already exists.'
     const note = data.note?.trim()
-    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
-      ...c,
-      projects: c.projects.map(p => (p.id !== projectId ? p : {
-        ...p,
-        pos: [...p.pos, { id: uid('po'), number: trimmed, note: note ? note : undefined }],
-      })),
-    })))
-    return null
+    try {
+      const newPO = await createPORecord(projectId, { number: trimmed, note })
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, pos: [...p.pos, newPO] },
+                ),
+              },
+        ),
+      )
+      return null
+    } catch (error) {
+      console.error('Failed to create purchase order', error)
+      return 'Failed to create purchase order.'
+    }
   }
-  function addProject(customerId: string, projectNumber: string): string | null {
+
+  async function addProject(customerId: string, projectNumber: string): Promise<string | null> {
     const trimmed = projectNumber.trim()
     if (!trimmed) return 'Enter a project number.'
     const normalized = trimmed.toUpperCase()
     const finalNumber = normalized.startsWith('P') ? normalized : `P${normalized}`
     if (projectNumberExists(finalNumber)) return 'A project with this number already exists.'
-    setDb(prev => prev.map(c => (c.id !== customerId ? c : {
-      ...c,
-      projects: [...c.projects, { id: uid('proj'), number: finalNumber, wos: [], pos: [] }],
-    })))
-    return null
+    try {
+      const project = await createProjectRecord(customerId, finalNumber)
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId ? c : { ...c, projects: [...c.projects, project] },
+        ),
+      )
+      return null
+    } catch (error) {
+      console.error('Failed to create project', error)
+      return 'Failed to create project.'
+    }
   }
-  function createCustomer(data: Omit<Customer, 'id' | 'projects'>): string | null {
+
+  async function createCustomer(data: Omit<Customer, 'id' | 'projects'>): Promise<string | null> {
     const trimmedName = data.name.trim()
     if (!trimmedName) return 'Customer name is required.'
     if (customerNameExists(trimmedName)) return 'A customer with this name already exists.'
-    const c: Customer = {
-      id: uid('cust'),
+    const payload = {
       name: trimmedName,
       address: data.address?.trim() || undefined,
       contactName: data.contactName?.trim() || undefined,
       contactPhone: data.contactPhone?.trim() || undefined,
       contactEmail: data.contactEmail?.trim() || undefined,
-      projects: [],
     }
-    setDb(prev => [c, ...prev])
-    setSelectedCustomerId(c.id)
-    return null
+    try {
+      const customer = await createCustomerRecord(payload)
+      setDb(prev => [customer, ...prev])
+      setSelectedCustomerId(customer.id)
+      return null
+    } catch (error) {
+      console.error('Failed to create customer', error)
+      return 'Failed to create customer.'
+    }
   }
 
   // Inline editable input
   function EditableField({
     label, value, onSave, fieldKey, placeholder, copyable, copyTitle,
   }: {
-    label: string; value?: string; onSave: (v: string) => void; fieldKey: string; placeholder?: string;
-    copyable?: boolean; copyTitle?: string;
+    label: string
+    value?: string
+    onSave: (v: string) => Promise<void> | void
+    fieldKey: string
+    placeholder?: string
+    copyable?: boolean
+    copyTitle?: string
   }) {
     const [val, setVal] = useState(value || '')
     const isEditing = !!editingInfo[fieldKey]
+    const [isSaving, setIsSaving] = useState(false)
+    const [fieldError, setFieldError] = useState<string | null>(null)
+
     useEffect(() => setVal(value || ''), [value])
     const hasValue = !!(value && value.trim())
-    const saveValue = () => {
-      onSave(val.trim())
-      setEditingInfo(s => ({ ...s, [fieldKey]: false }))
+
+    const saveValue = async () => {
+      const trimmed = val.trim()
+      setIsSaving(true)
+      setFieldError(null)
+      try {
+        await onSave(trimmed)
+        setEditingInfo(s => ({ ...s, [fieldKey]: false }))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to save field.'
+        setFieldError(message)
+      } finally {
+        setIsSaving(false)
+      }
     }
     return (
       <div className='flex flex-col gap-1'>
@@ -210,8 +407,15 @@ export default function App() {
         <div className='flex items-center gap-2'>
           {isEditing ? (
             <>
-              <Input value={val} onChange={(e) => setVal((e.target as HTMLInputElement).value)} placeholder={placeholder} />
-              <Button onClick={saveValue} title='Save'>
+              <Input
+                value={val}
+                onChange={(e) => {
+                  setVal((e.target as HTMLInputElement).value)
+                  if (fieldError) setFieldError(null)
+                }}
+                placeholder={placeholder}
+              />
+              <Button onClick={saveValue} title='Save' disabled={isSaving}>
                 <Save size={16} /> Save
               </Button>
               <Button
@@ -219,6 +423,7 @@ export default function App() {
                 onClick={() => {
                   setEditingInfo(s => ({ ...s, [fieldKey]: false }))
                   setVal(value || '')
+                  setFieldError(null)
                 }}
                 title='Cancel'
               >
@@ -229,6 +434,30 @@ export default function App() {
             <>
               <div className='min-h-[38px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm'>
                 {hasValue ? <span className='text-slate-800'>{value}</span> : <span className='text-slate-400'>{placeholder || 'Not set'}</span>}
+              </div>
+              {copyable && hasValue ? (
+                <Button
+                  variant='outline'
+                  onClick={() => value && navigator.clipboard.writeText(value)}
+                  title={copyTitle || `Copy ${label.toLowerCase()}`}
+                >
+                  <Copy size={16} /> Copy
+                </Button>
+              ) : null}
+              <Button variant='outline' onClick={() => setEditingInfo(s => ({ ...s, [fieldKey]: true }))} title='Edit'>
+                <Pencil size={16} /> Edit
+              </Button>
+            </>
+          )}
+        </div>
+        {fieldError && (
+          <p className='flex items-center gap-1 text-xs text-rose-600'>
+            <AlertCircle size={14} /> {fieldError}
+          </p>
+        )}
+      </div>
+    )
+  }
 
   // Collapsible project row
   function ProjectRow({ project, customer }: { project: Project; customer: Customer }) {
@@ -238,6 +467,8 @@ export default function App() {
     const [poForm, setPoForm] = useState({ number: '', note: '' })
     const [woError, setWoError] = useState<string | null>(null)
     const [poError, setPoError] = useState<string | null>(null)
+    const [isAddingWo, setIsAddingWo] = useState(false)
+    const [isAddingPo, setIsAddingPo] = useState(false)
 
     useEffect(() => {
       setNoteDraft(project.note ?? '')
@@ -286,7 +517,12 @@ export default function App() {
           </div>
 
           <div className='flex items-center gap-2'>
-            <Button variant='ghost' className='text-rose-600 hover:bg-rose-50' onClick={() => deleteProject(customer.id, project.id)} title='Delete project'>
+            <Button
+              variant='ghost'
+              className='text-rose-600 hover:bg-rose-50'
+              onClick={() => void deleteProject(customer.id, project.id)}
+              title='Delete project'
+            >
               <Trash2 size={18} />
             </Button>
           </div>
@@ -332,7 +568,12 @@ export default function App() {
                           <Button variant='outline' onClick={() => navigator.clipboard.writeText(wo.number)} title='Copy WO'>
                             <Copy size={16} />
                           </Button>
-                          <Button variant='ghost' className='text-rose-600 hover:bg-rose-50' onClick={() => deleteWO(customer.id, project.id, wo.id)} title='Delete WO'>
+                          <Button
+                            variant='ghost'
+                            className='text-rose-600 hover:bg-rose-50'
+                            onClick={() => void deleteWO(customer.id, project.id, wo.id)}
+                            title='Delete WO'
+                          >
                             <X size={16} />
                           </Button>
                         </div>
@@ -379,19 +620,25 @@ export default function App() {
                     </div>
                     <div className='mt-2 space-y-2'>
                       <Button
-                        onClick={() => {
+                        disabled={isAddingWo}
+                        onClick={async () => {
                           const raw = woForm.number.trim()
                           if (!raw) {
                             setWoError('Enter a work order number.')
                             return
                           }
-                          const result = addWO(customer.id, project.id, { number: raw, type: woForm.type, note: woForm.note })
-                          if (result) {
-                            setWoError(result)
-                            return
+                          setIsAddingWo(true)
+                          try {
+                            const result = await addWO(customer.id, project.id, { number: raw, type: woForm.type, note: woForm.note })
+                            if (result) {
+                              setWoError(result)
+                              return
+                            }
+                            setWoForm({ number: '', type: 'Build', note: '' })
+                            setWoError(null)
+                          } finally {
+                            setIsAddingWo(false)
                           }
-                          setWoForm({ number: '', type: 'Build', note: '' })
-                          setWoError(null)
                         }}
                       >
                         <Plus size={16} /> Add WO
@@ -420,7 +667,12 @@ export default function App() {
                           <Button variant='outline' onClick={() => navigator.clipboard.writeText(po.number)} title='Copy PO'>
                             <Copy size={16} />
                           </Button>
-                          <Button variant='ghost' className='text-rose-600 hover:bg-rose-50' onClick={() => deletePO(customer.id, project.id, po.id)} title='Delete PO'>
+                          <Button
+                            variant='ghost'
+                            className='text-rose-600 hover:bg-rose-50'
+                            onClick={() => void deletePO(customer.id, project.id, po.id)}
+                            title='Delete PO'
+                          >
                             <X size={16} />
                           </Button>
                         </div>
@@ -449,19 +701,25 @@ export default function App() {
                     </div>
                     <div className='mt-2 space-y-2'>
                       <Button
-                        onClick={() => {
+                        disabled={isAddingPo}
+                        onClick={async () => {
                           const raw = poForm.number.trim()
                           if (!raw) {
                             setPoError('Enter a purchase order number.')
                             return
                           }
-                          const result = addPO(customer.id, project.id, { number: raw, note: poForm.note })
-                          if (result) {
-                            setPoError(result)
-                            return
+                          setIsAddingPo(true)
+                          try {
+                            const result = await addPO(customer.id, project.id, { number: raw, note: poForm.note })
+                            if (result) {
+                              setPoError(result)
+                              return
+                            }
+                            setPoForm({ number: '', note: '' })
+                            setPoError(null)
+                          } finally {
+                            setIsAddingPo(false)
                           }
-                          setPoForm({ number: '', note: '' })
-                          setPoError(null)
                         }}
                       >
                         <Plus size={16} /> Add PO
@@ -482,12 +740,37 @@ export default function App() {
     )
   }
 
+  if (isLoading) {
+    return (
+      <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
+        <div className='mx-auto flex min-h-[60vh] max-w-6xl flex-col items-center justify-center gap-4 text-center text-slate-600'>
+          <span className='h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-sky-500' aria-hidden />
+          <p className='text-sm font-medium text-slate-500'>Loading customers…</p>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
       <div className='mx-auto max-w-6xl'>
+        {loadError && (
+          <div className='mb-6 flex items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
+            <span>{loadError}</span>
+            <Button variant='outline' onClick={() => void refreshCustomers()} disabled={isSyncing}>
+              Retry
+            </Button>
+          </div>
+        )}
         <div className='mb-6 flex items-center justify-between'>
           <h1 className='text-2xl font-semibold tracking-tight'>CustomerProjectDB</h1>
-          <div className='flex items-center gap-2'>
+          <div className='flex items-center gap-3'>
+            {isSyncing && (
+              <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
+                <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
+                Syncing…
+              </span>
+            )}
             <Button
               onClick={() => {
                 setShowNewCustomer(true)
@@ -582,7 +865,7 @@ export default function App() {
                     if (!selectedCustomer) return
                     const confirmed = window.confirm('Delete this customer and all associated projects, purchase orders, and work orders?')
                     if (!confirmed) return
-                    deleteCustomer(selectedCustomer.id)
+                    void deleteCustomer(selectedCustomer.id)
                   }}
                   title='Delete customer'
                 >
@@ -677,6 +960,7 @@ export default function App() {
                   onClick={() => {
                     setShowNewCustomer(false)
                     setNewCustomerError(null)
+                    setIsCreatingCustomer(false)
                   }}
                   title='Close'
                 >
@@ -724,27 +1008,34 @@ export default function App() {
                     onClick={() => {
                       setShowNewCustomer(false)
                       setNewCustomerError(null)
+                      setIsCreatingCustomer(false)
                     }}
                   >
                     Cancel
                   </Button>
                   <Button
                     size='lg'
-                    onClick={() => {
-                      const result = createCustomer({
-                        name: newCust.name,
-                        address: newCust.address,
-                        contactName: newCust.contactName,
-                        contactPhone: newCust.contactPhone,
-                        contactEmail: newCust.contactEmail,
-                      })
-                      if (result) {
-                        setNewCustomerError(result)
-                        return
+                    disabled={isCreatingCustomer}
+                    onClick={async () => {
+                      setIsCreatingCustomer(true)
+                      try {
+                        const result = await createCustomer({
+                          name: newCust.name,
+                          address: newCust.address,
+                          contactName: newCust.contactName,
+                          contactPhone: newCust.contactPhone,
+                          contactEmail: newCust.contactEmail,
+                        })
+                        if (result) {
+                          setNewCustomerError(result)
+                          return
+                        }
+                        setNewCust({ name: '', address: '', contactName: '', contactPhone: '', contactEmail: '' })
+                        setShowNewCustomer(false)
+                        setNewCustomerError(null)
+                      } finally {
+                        setIsCreatingCustomer(false)
                       }
-                      setNewCust({ name: '', address: '', contactName: '', contactPhone: '', contactEmail: '' })
-                      setShowNewCustomer(false)
-                      setNewCustomerError(null)
                     }}
                   >
                     <Plus size={18} /> Create Customer
@@ -759,23 +1050,29 @@ export default function App() {
   )
 }
 
-function AddProjectForm({ onAdd }: { onAdd: (num: string) => string | null }) {
+function AddProjectForm({ onAdd }: { onAdd: (num: string) => Promise<string | null> }) {
   const [val, setVal] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
 
-  const handleAdd = () => {
+  const handleAdd = async () => {
     const trimmed = val.trim()
     if (!trimmed) {
       setError('Enter a project number.')
       return
     }
-    const result = onAdd(trimmed)
-    if (result) {
-      setError(result)
-      return
+    setIsSaving(true)
+    try {
+      const result = await onAdd(trimmed)
+      if (result) {
+        setError(result)
+        return
+      }
+      setVal('')
+      setError(null)
+    } finally {
+      setIsSaving(false)
     }
-    setVal('')
-    setError(null)
   }
 
   return (
@@ -796,7 +1093,7 @@ function AddProjectForm({ onAdd }: { onAdd: (num: string) => string | null }) {
             />
           </div>
         </div>
-        <Button onClick={handleAdd}>
+        <Button onClick={handleAdd} disabled={isSaving}>
           <Plus size={16} /> Add
         </Button>
       </div>
