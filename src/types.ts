@@ -30,3 +30,5 @@ export type Customer = {
   contactEmail?: string;
   projects: Project[];
 };
+
+export type AppRole = 'viewer' | 'editor' | 'admin';

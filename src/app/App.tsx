@@ -1,7 +1,21 @@
 import React, { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, Copy, Save, Pencil, X, Search, ChevronRight, ChevronDown, MapPin, AlertCircle, LogOut } from 'lucide-react'
+import {
+  Plus,
+  Trash2,
+  Copy,
+  Save,
+  Pencil,
+  X,
+  Search,
+  ChevronRight,
+  ChevronDown,
+  MapPin,
+  AlertCircle,
+  LogOut,
+  Users,
+} from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import type { Customer, Project, WOType } from '../types'
+import type { AppRole, Customer, Project, WOType } from '../types'
 import {
   listCustomers,
   createCustomer as createCustomerRecord,
@@ -19,6 +33,13 @@ import {
   type StorageProvider,
 } from '../lib/storage'
 import { useSupabaseAuth } from '../lib/useSupabaseAuth'
+import {
+  fetchCurrentUserRoles,
+  fetchManagedUsers,
+  updateUserRole,
+  type ManagedUser,
+  getFriendlySupabaseError,
+} from '../lib/roles'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
@@ -42,6 +63,16 @@ export default function App() {
   const [isSigningOut, setIsSigningOut] = useState(false)
   const [activeStorageProvider, setActiveStorageProvider] = useState<StorageProvider>(() => getStorageProvider())
   const [storageNotice, setStorageNotice] = useState<string | null>(null)
+  const [roles, setRoles] = useState<AppRole[]>([])
+  const [rolesStatus, setRolesStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle')
+  const [rolesError, setRolesError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [showAdminPanel, setShowAdminPanel] = useState(false)
+  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([])
+  const [isLoadingUsers, setIsLoadingUsers] = useState(false)
+  const [adminError, setAdminError] = useState<string | null>(null)
+  const [adminNotice, setAdminNotice] = useState<string | null>(null)
+  const [roleActionTarget, setRoleActionTarget] = useState<string | null>(null)
 
   const usingSupabase = activeStorageProvider === 'supabase'
   const storageLabel = usingSupabase ? 'Supabase' : 'Browser'
@@ -51,7 +82,15 @@ export default function App() {
   const storageBadgeClass = usingSupabase
     ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
     : 'border-amber-200 bg-amber-50 text-amber-700'
-  const { status: authStatus, user: authUser, error: authErrorMessage, signIn, signUp, signOut } = useSupabaseAuth(usingSupabase)
+  const {
+    status: authStatus,
+    user: authUser,
+    session: authSession,
+    error: authErrorMessage,
+    signIn,
+    signUp,
+    signOut,
+  } = useSupabaseAuth(usingSupabase)
 
   // Search
   const [customerQuery, setCustomerQuery] = useState('')
@@ -146,6 +185,49 @@ export default function App() {
     }
   }, [authStatus])
 
+  useEffect(() => {
+    if (!usingSupabase) {
+      setRoles(['admin', 'editor', 'viewer'])
+      setRolesStatus('loaded')
+      setRolesError(null)
+      return
+    }
+
+    if (authStatus !== 'signed-in') {
+      setRoles([])
+      setRolesStatus('idle')
+      setRolesError(null)
+      setManagedUsers([])
+      setShowAdminPanel(false)
+      return
+    }
+
+    let cancelled = false
+    setRolesStatus('loading')
+    setRolesError(null)
+
+    fetchCurrentUserRoles()
+      .then(fetched => {
+        if (cancelled) return
+        const next: AppRole[] = fetched.length > 0 ? fetched : ['viewer']
+        setRoles(next)
+        setRolesStatus('loaded')
+        setRolesError(null)
+      })
+      .catch(error => {
+        if (cancelled) return
+        console.error('Failed to fetch roles', error)
+        setRoles(['viewer'])
+        setRolesStatus('error')
+        setRolesError(error instanceof Error ? error.message : 'Unable to load roles.')
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [usingSupabase, authStatus])
+
+
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
   const selectedCustomerAddressForMap = selectedCustomer?.address?.trim() || null
   const customerOptions = useMemo(() => db.map(c => c.name).sort(), [db])
@@ -155,6 +237,103 @@ export default function App() {
     return `User ${authUser.id.slice(0, 8)}`
   }, [authUser])
   const resolvedAuthError = authErrorMessage ?? (authStatus === 'error' ? 'Unable to verify your session. Please sign in again.' : null)
+  const isRolesLoading = usingSupabase && rolesStatus === 'loading'
+  const rolesReady = !usingSupabase || rolesStatus === 'loaded' || rolesStatus === 'error'
+  const resolvedRoles: AppRole[] = !usingSupabase ? ['admin', 'editor', 'viewer'] : roles
+  const hasEditorRole = resolvedRoles.includes('editor') || resolvedRoles.includes('admin')
+  const canEdit = !usingSupabase ? true : rolesReady && hasEditorRole
+  const canManageUsers = !usingSupabase ? true : rolesReady && resolvedRoles.includes('admin')
+  const isViewerOnly = usingSupabase && rolesReady && !hasEditorRole
+  const formatDateTime = useCallback((value: string | null) => {
+    if (!value) return '—'
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) {
+      return value
+    }
+    return date.toLocaleString()
+  }, [])
+
+  const loadManagedUsers = useCallback(async () => {
+    if (!showAdminPanel) {
+      return
+    }
+
+    if (!canManageUsers || !usingSupabase || authStatus !== 'signed-in' || !authSession) {
+      setManagedUsers([])
+      return
+    }
+
+    setIsLoadingUsers(true)
+    setAdminError(null)
+    setAdminNotice(null)
+
+    try {
+      const users = await fetchManagedUsers(authSession)
+      setManagedUsers(users)
+    } catch (error) {
+      console.error('Failed to load users', error)
+      setAdminError(error instanceof Error ? error.message : 'Unable to load users.')
+    } finally {
+      setIsLoadingUsers(false)
+    }
+  }, [showAdminPanel, canManageUsers, usingSupabase, authStatus, authSession])
+
+  const handleRoleUpdate = useCallback(
+    async (email: string, role: AppRole, action: 'grant' | 'revoke') => {
+      if (!authSession) {
+        setAdminError('No active session found.')
+        return
+      }
+
+      const targetEmail = email.trim()
+      if (!targetEmail) {
+        setAdminError('The selected user does not have an email address.')
+        return
+      }
+
+      const key = `${action}:${targetEmail.toLowerCase()}:${role}`
+      setRoleActionTarget(key)
+      setAdminError(null)
+      setAdminNotice(null)
+
+      try {
+        const { message } = await updateUserRole(authSession, { email: targetEmail, role, action })
+        setAdminNotice(message)
+        await loadManagedUsers()
+      } catch (error) {
+        console.error('Failed to update user role', error)
+        setAdminError(error instanceof Error ? error.message : 'Unable to update role.')
+      } finally {
+        setRoleActionTarget(null)
+      }
+    },
+    [authSession, loadManagedUsers],
+  )
+
+  useEffect(() => {
+    if (!canManageUsers) {
+      setShowAdminPanel(false)
+    }
+  }, [canManageUsers])
+
+  useEffect(() => {
+    if (!canEdit) {
+      setShowNewCustomer(false)
+    } else {
+      setActionError(null)
+    }
+  }, [canEdit])
+
+  useEffect(() => {
+    if (!showAdminPanel) {
+      setRoleActionTarget(null)
+      setAdminNotice(null)
+      return
+    }
+
+    setAdminNotice(null)
+    void loadManagedUsers()
+  }, [showAdminPanel, loadManagedUsers])
 
   const searchMatches = useMemo(() => {
     const matches: { kind: 'customer' | 'project' | 'wo'; label: string; customerId: string; projectId?: string }[] = []
@@ -296,13 +475,24 @@ export default function App() {
             : c,
         ),
       )
+      setActionError(null)
     } catch (error) {
       console.error('Failed to update customer', error)
-      throw error instanceof Error ? error : new Error('Failed to update customer.')
+      const message = getFriendlySupabaseError(
+        error,
+        'Failed to update customer.',
+        'Not authorized to update customers.',
+      )
+      setActionError(message)
+      throw new Error(message)
     }
   }
 
   async function deleteCustomer(customerId: string) {
+    if (!canEdit) {
+      setActionError('Not authorized to delete customers.')
+      return
+    }
     const target = db.find(c => c.id === customerId)
     try {
       await deleteCustomerRecord(customerId)
@@ -323,12 +513,23 @@ export default function App() {
         return next
       })
       if (selectedCustomerId === customerId) setSelectedCustomerId(null)
+      setActionError(null)
     } catch (error) {
       console.error('Failed to delete customer', error)
+      const message = getFriendlySupabaseError(
+        error,
+        'Failed to delete customer.',
+        'Not authorized to delete customers.',
+      )
+      setActionError(message)
     }
   }
 
   async function deleteProject(customerId: string, projectId: string) {
+    if (!canEdit) {
+      setActionError('Not authorized to delete projects.')
+      return
+    }
     try {
       await deleteProjectRecord(projectId)
       setDb(prev =>
@@ -342,12 +543,23 @@ export default function App() {
         delete next[projectId]
         return next
       })
+      setActionError(null)
     } catch (error) {
       console.error('Failed to delete project', error)
+      const message = getFriendlySupabaseError(
+        error,
+        'Failed to delete project.',
+        'Not authorized to delete projects.',
+      )
+      setActionError(message)
     }
   }
 
   async function deleteWO(customerId: string, projectId: string, woId: string) {
+    if (!canEdit) {
+      setActionError('Not authorized to delete work orders.')
+      return
+    }
     try {
       await deleteWORecord(woId)
       setDb(prev =>
@@ -362,12 +574,23 @@ export default function App() {
               },
         ),
       )
+      setActionError(null)
     } catch (error) {
       console.error('Failed to delete work order', error)
+      const message = getFriendlySupabaseError(
+        error,
+        'Failed to delete work order.',
+        'Not authorized to delete work orders.',
+      )
+      setActionError(message)
     }
   }
 
   async function deletePO(customerId: string, projectId: string, poId: string) {
+    if (!canEdit) {
+      setActionError('Not authorized to delete purchase orders.')
+      return
+    }
     try {
       await deletePORecord(poId)
       setDb(prev =>
@@ -382,12 +605,23 @@ export default function App() {
               },
         ),
       )
+      setActionError(null)
     } catch (error) {
       console.error('Failed to delete purchase order', error)
+      const message = getFriendlySupabaseError(
+        error,
+        'Failed to delete purchase order.',
+        'Not authorized to delete purchase orders.',
+      )
+      setActionError(message)
     }
   }
 
   function updateProjectNote(customerId: string, projectId: string, note: string) {
+    if (!canEdit) {
+      setActionError('Not authorized to update project notes.')
+      return
+    }
     const trimmed = note.trim()
     setDb(prev =>
       prev.map(c =>
@@ -404,8 +638,15 @@ export default function App() {
     void (async () => {
       try {
         await updateProjectRecord(projectId, { note: trimmed ? note : null })
+        setActionError(null)
       } catch (error) {
         console.error('Failed to update project note', error)
+        const message = getFriendlySupabaseError(
+          error,
+          'Failed to update project note.',
+          'Not authorized to update project notes.',
+        )
+        setActionError(message)
       }
     })()
   }
@@ -415,6 +656,11 @@ export default function App() {
     projectId: string,
     data: { number: string; type: WOType; note?: string },
   ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to create work orders.'
+      setActionError(message)
+      return message
+    }
     const trimmed = data.number.trim()
     if (!trimmed) return 'Enter a work order number.'
     const normalized = trimmed.toUpperCase()
@@ -435,10 +681,17 @@ export default function App() {
               },
         ),
       )
+      setActionError(null)
       return null
     } catch (error) {
       console.error('Failed to create work order', error)
-      return 'Failed to create work order.'
+      const message = getFriendlySupabaseError(
+        error,
+        'Failed to create work order.',
+        'Not authorized to create work orders.',
+      )
+      setActionError(message)
+      return message
     }
   }
 
@@ -447,6 +700,11 @@ export default function App() {
     projectId: string,
     data: { number: string; note?: string },
   ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to create purchase orders.'
+      setActionError(message)
+      return message
+    }
     const trimmed = data.number.trim()
     if (!trimmed) return 'Enter a purchase order number.'
     if (poNumberExists(trimmed)) return 'A purchase order with this number already exists.'
@@ -465,14 +723,26 @@ export default function App() {
               },
         ),
       )
+      setActionError(null)
       return null
     } catch (error) {
       console.error('Failed to create purchase order', error)
-      return 'Failed to create purchase order.'
+      const message = getFriendlySupabaseError(
+        error,
+        'Failed to create purchase order.',
+        'Not authorized to create purchase orders.',
+      )
+      setActionError(message)
+      return message
     }
   }
 
   async function addProject(customerId: string, projectNumber: string): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to create projects.'
+      setActionError(message)
+      return message
+    }
     const trimmed = projectNumber.trim()
     if (!trimmed) return 'Enter a project number.'
     const normalized = trimmed.toUpperCase()
@@ -485,14 +755,26 @@ export default function App() {
           c.id !== customerId ? c : { ...c, projects: [...c.projects, project] },
         ),
       )
+      setActionError(null)
       return null
     } catch (error) {
       console.error('Failed to create project', error)
-      return 'Failed to create project.'
+      const message = getFriendlySupabaseError(
+        error,
+        'Failed to create project.',
+        'Not authorized to create projects.',
+      )
+      setActionError(message)
+      return message
     }
   }
 
   async function createCustomer(data: Omit<Customer, 'id' | 'projects'>): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to create customers.'
+      setActionError(message)
+      return message
+    }
     const trimmedName = data.name.trim()
     if (!trimmedName) return 'Customer name is required.'
     if (customerNameExists(trimmedName)) return 'A customer with this name already exists.'
@@ -507,10 +789,17 @@ export default function App() {
       const customer = await createCustomerRecord(payload)
       setDb(prev => [customer, ...prev])
       setSelectedCustomerId(customer.id)
+      setActionError(null)
       return null
     } catch (error) {
       console.error('Failed to create customer', error)
-      return 'Failed to create customer.'
+      const message = getFriendlySupabaseError(
+        error,
+        'Failed to create customer.',
+        'Not authorized to create customers.',
+      )
+      setActionError(message)
+      return message
     }
   }
 
@@ -532,6 +821,13 @@ export default function App() {
     const [fieldError, setFieldError] = useState<string | null>(null)
 
     useEffect(() => setVal(value || ''), [value])
+    useEffect(() => {
+      if (!canEdit && isEditing) {
+        setEditingInfo(s => ({ ...s, [fieldKey]: false }))
+        setFieldError(null)
+        setVal(value || '')
+      }
+    }, [canEdit, isEditing, fieldKey, value])
     const hasValue = !!(value && value.trim())
 
     const saveValue = async () => {
@@ -561,6 +857,7 @@ export default function App() {
                   if (fieldError) setFieldError(null)
                 }}
                 placeholder={placeholder}
+                disabled={!canEdit}
               />
               <Button onClick={saveValue} title='Save' disabled={isSaving}>
                 <Save size={16} /> Save
@@ -591,7 +888,12 @@ export default function App() {
                   <Copy size={16} /> Copy
                 </Button>
               ) : null}
-              <Button variant='outline' onClick={() => setEditingInfo(s => ({ ...s, [fieldKey]: true }))} title='Edit'>
+              <Button
+                variant='outline'
+                onClick={() => setEditingInfo(s => ({ ...s, [fieldKey]: true }))}
+                title={canEdit ? 'Edit' : 'Read-only access'}
+                disabled={!canEdit}
+              >
                 <Pencil size={16} /> Edit
               </Button>
             </>
@@ -668,7 +970,8 @@ export default function App() {
               variant='ghost'
               className='text-rose-600 hover:bg-rose-50'
               onClick={() => void deleteProject(customer.id, project.id)}
-              title='Delete project'
+              title={canEdit ? 'Delete project' : 'Read-only access'}
+              disabled={!canEdit}
             >
               <Trash2 size={18} />
             </Button>
@@ -684,7 +987,7 @@ export default function App() {
                   <div className='rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm'>
                     <div className='mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500'>Project Note</div>
                     <textarea
-                      className='w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100'
+                      className='w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
                       rows={2}
                       placeholder='Add a note about this project (optional)…'
                       value={noteDraft}
@@ -693,6 +996,7 @@ export default function App() {
                         setNoteDraft(v)
                         updateProjectNote(customer.id, project.id, v)
                       }}
+                      disabled={!canEdit}
                     />
                   </div>
                 </div>
@@ -719,7 +1023,8 @@ export default function App() {
                             variant='ghost'
                             className='text-rose-600 hover:bg-rose-50'
                             onClick={() => void deleteWO(customer.id, project.id, wo.id)}
-                            title='Delete WO'
+                            title={canEdit ? 'Delete WO' : 'Read-only access'}
+                            disabled={!canEdit}
                           >
                             <X size={16} />
                           </Button>
@@ -743,6 +1048,7 @@ export default function App() {
                               if (woError) setWoError(null)
                             }}
                             placeholder='000000'
+                            disabled={!canEdit}
                           />
                         </div>
                       </div>
@@ -755,6 +1061,7 @@ export default function App() {
                             setWoForm({ ...woForm, type: e.target.value as WOType })
                             if (woError) setWoError(null)
                           }}
+                          disabled={!canEdit}
                         >
                           <option>Build</option>
                           <option>Onsite</option>
@@ -762,12 +1069,17 @@ export default function App() {
                       </div>
                       <div className='md:col-span-2'>
                         <Label>Optional note</Label>
-                        <Input value={woForm.note} onChange={(e) => setWoForm({ ...woForm, note: (e.target as HTMLInputElement).value })} placeholder='e.g. Line 2 SAT' />
+                        <Input
+                          value={woForm.note}
+                          onChange={(e) => setWoForm({ ...woForm, note: (e.target as HTMLInputElement).value })}
+                          placeholder='e.g. Line 2 SAT'
+                          disabled={!canEdit}
+                        />
                       </div>
                     </div>
                     <div className='mt-2 space-y-2'>
                       <Button
-                        disabled={isAddingWo}
+                        disabled={isAddingWo || !canEdit}
                         onClick={async () => {
                           const raw = woForm.number.trim()
                           if (!raw) {
@@ -787,6 +1099,7 @@ export default function App() {
                             setIsAddingWo(false)
                           }
                         }}
+                        title={canEdit ? 'Add work order' : 'Read-only access'}
                       >
                         <Plus size={16} /> Add WO
                       </Button>
@@ -818,7 +1131,8 @@ export default function App() {
                             variant='ghost'
                             className='text-rose-600 hover:bg-rose-50'
                             onClick={() => void deletePO(customer.id, project.id, po.id)}
-                            title='Delete PO'
+                            title={canEdit ? 'Delete PO' : 'Read-only access'}
+                            disabled={!canEdit}
                           >
                             <X size={16} />
                           </Button>
@@ -839,16 +1153,22 @@ export default function App() {
                             if (poError) setPoError(null)
                           }}
                           placeholder='PO-90001'
+                          disabled={!canEdit}
                         />
                       </div>
                       <div className='md:col-span-2'>
                         <Label>Optional note</Label>
-                        <Input value={poForm.note} onChange={(e) => setPoForm({ ...poForm, note: (e.target as HTMLInputElement).value })} placeholder='e.g. deposit' />
+                        <Input
+                          value={poForm.note}
+                          onChange={(e) => setPoForm({ ...poForm, note: (e.target as HTMLInputElement).value })}
+                          placeholder='e.g. deposit'
+                          disabled={!canEdit}
+                        />
                       </div>
                     </div>
                     <div className='mt-2 space-y-2'>
                       <Button
-                        disabled={isAddingPo}
+                        disabled={isAddingPo || !canEdit}
                         onClick={async () => {
                           const raw = poForm.number.trim()
                           if (!raw) {
@@ -859,15 +1179,16 @@ export default function App() {
                           try {
                             const result = await addPO(customer.id, project.id, { number: raw, note: poForm.note })
                             if (result) {
-                              setPoError(result)
-                              return
-                            }
-                            setPoForm({ number: '', note: '' })
-                            setPoError(null)
-                          } finally {
-                            setIsAddingPo(false)
+                            setPoError(result)
+                            return
                           }
-                        }}
+                          setPoForm({ number: '', note: '' })
+                          setPoError(null)
+                        } finally {
+                          setIsAddingPo(false)
+                        }
+                      }}
+                        title={canEdit ? 'Add purchase order' : 'Read-only access'}
                       >
                         <Plus size={16} /> Add PO
                       </Button>
@@ -1023,11 +1344,32 @@ export default function App() {
                 Signed in as {authUserLabel}
               </span>
             )}
+            {usingSupabase && isRolesLoading && (
+              <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
+                <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
+                Loading roles…
+              </span>
+            )}
+            {usingSupabase && rolesReady && !isRolesLoading && (
+              <span className='text-xs font-medium text-slate-500' title={`Roles: ${resolvedRoles.join(', ') || 'viewer'}`}>
+                Roles: {resolvedRoles.length > 0 ? resolvedRoles.join(', ') : 'viewer'}
+              </span>
+            )}
             {isSyncing && (
               <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
                 <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
                 Syncing…
               </span>
+            )}
+            {usingSupabase && canManageUsers && (
+              <Button
+                variant='outline'
+                onClick={() => setShowAdminPanel(prev => !prev)}
+                disabled={isRolesLoading}
+                title={showAdminPanel ? 'Hide user management' : 'Manage user roles'}
+              >
+                {showAdminPanel ? 'Close Admin' : 'Manage Users'}
+              </Button>
             )}
             {usingSupabase && (
               <Button
@@ -1044,7 +1386,8 @@ export default function App() {
                 setShowNewCustomer(true)
                 setNewCustomerError(null)
               }}
-              title='Create new customer'
+              title={canEdit ? 'Create new customer' : 'Read-only access'}
+              disabled={!canEdit}
             >
               <Plus size={16} /> New Customer
             </Button>
@@ -1056,6 +1399,120 @@ export default function App() {
             {storageNotice ??
               'Supabase is not configured — data stays in this browser only. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to sync with Supabase.'}
           </div>
+        )}
+
+        {usingSupabase && rolesError && (
+          <div className='mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800'>
+            Unable to load roles. {rolesError}
+          </div>
+        )}
+        {isViewerOnly && (
+          <div className='mb-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800'>
+            You have read-only access. Contact an administrator to request edit permissions.
+          </div>
+        )}
+        {actionError && (
+          <div className='mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
+            {actionError}
+          </div>
+        )}
+
+        {canManageUsers && showAdminPanel && (
+          <Card className='mb-6 panel'>
+            <CardHeader>
+              <div className='flex items-center justify-between gap-3'>
+                <div className='flex items-center gap-2'>
+                  <Users size={18} />
+                  <span className='font-medium'>User Management</span>
+                </div>
+                <Button variant='outline' onClick={() => void loadManagedUsers()} disabled={isLoadingUsers}>
+                  Refresh
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className='space-y-3'>
+                {adminError && (
+                  <div className='rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700'>{adminError}</div>
+                )}
+                {adminNotice && (
+                  <div className='rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>
+                    {adminNotice}
+                  </div>
+                )}
+                {isLoadingUsers ? (
+                  <div className='flex items-center gap-2 text-sm text-slate-500'>
+                    <span className='h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
+                    Loading users…
+                  </div>
+                ) : managedUsers.length === 0 ? (
+                  <div className='text-sm text-slate-500'>No users found.</div>
+                ) : (
+                  <div className='overflow-x-auto rounded-2xl border border-slate-200 bg-white/75'>
+                    <table className='min-w-full divide-y divide-slate-200 text-sm'>
+                      <thead className='bg-slate-50/70 text-left text-xs font-semibold uppercase tracking-wide text-slate-500'>
+                        <tr>
+                          <th className='px-3 py-2'>Email</th>
+                          <th className='px-3 py-2'>Roles</th>
+                          <th className='px-3 py-2'>Last sign-in</th>
+                          <th className='px-3 py-2 text-right'>Manage</th>
+                        </tr>
+                      </thead>
+                      <tbody className='divide-y divide-slate-200'>
+                        {managedUsers.map(user => {
+                          const email = user.email ?? '—'
+                          const rolesLabel = user.roles.length > 0 ? user.roles.join(', ') : 'None'
+                          return (
+                            <tr key={user.id} className='bg-white/80'>
+                              <td className='px-3 py-2 align-top text-slate-700'>{email}</td>
+                              <td className='px-3 py-2 align-top text-slate-600 capitalize'>{rolesLabel}</td>
+                              <td className='px-3 py-2 align-top text-slate-500'>{formatDateTime(user.lastSignInAt)}</td>
+                              <td className='px-3 py-2 align-top'>
+                                <div className='flex flex-wrap justify-end gap-2'>
+                                  {(['viewer', 'editor', 'admin'] as AppRole[]).map(role => {
+                                    const hasRole = user.roles.includes(role)
+                                    const prettyRole = role.charAt(0).toUpperCase() + role.slice(1)
+                                    const action = hasRole ? 'revoke' : 'grant'
+                                    const key = `${action}:${(user.email ?? '').toLowerCase()}:${role}`
+                                    const isPending = roleActionTarget === key
+                                    const disableForSelf = hasRole && role === 'admin' && authUser?.id === user.id
+                                    return (
+                                      <Button
+                                        key={role}
+                                        variant='outline'
+                                        className={`text-xs capitalize ${
+                                          hasRole ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : ''
+                                        }`}
+                                        onClick={() =>
+                                          void handleRoleUpdate(user.email ?? '', role, hasRole ? 'revoke' : 'grant')
+                                        }
+                                        disabled={!user.email || isLoadingUsers || isPending || disableForSelf}
+                                        title={
+                                          !user.email
+                                            ? 'Cannot modify roles without an email.'
+                                            : disableForSelf
+                                              ? 'You cannot remove your own admin role.'
+                                              : hasRole
+                                                ? `Revoke ${prettyRole}`
+                                                : `Grant ${prettyRole}`
+                                        }
+                                      >
+                                        {hasRole ? `Revoke ${prettyRole}` : `Grant ${prettyRole}`}
+                                      </Button>
+                                    )
+                                  })}
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         <Card className='mb-6 panel'>
@@ -1142,7 +1599,8 @@ export default function App() {
                     if (!confirmed) return
                     void deleteCustomer(selectedCustomer.id)
                   }}
-                  title='Delete customer'
+                  title={canEdit ? 'Delete customer' : 'Read-only access'}
+                  disabled={!canEdit}
                 >
                   <Trash2 size={16} /> Delete Customer
                 </Button>
@@ -1203,7 +1661,7 @@ export default function App() {
 
               <div className='mt-6 rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm'>
                 <div className='mb-2 text-sm font-semibold text-slate-700'>Add Project</div>
-                <AddProjectForm onAdd={(num) => addProject(selectedCustomer.id, num)} />
+                <AddProjectForm onAdd={(num) => addProject(selectedCustomer.id, num)} disabled={!canEdit} />
               </div>
 
               <div className='mt-6'>
@@ -1253,23 +1711,44 @@ export default function App() {
                         if (newCustomerError) setNewCustomerError(null)
                       }}
                       placeholder='e.g. Globex Ltd'
+                      disabled={!canEdit}
                     />
                   </div>
                   <div>
                     <Label>Contact Name</Label>
-                    <Input value={newCust.contactName} onChange={(e) => setNewCust({ ...newCust, contactName: (e.target as HTMLInputElement).value })} placeholder='e.g. Alex Doe' />
+                    <Input
+                      value={newCust.contactName}
+                      onChange={(e) => setNewCust({ ...newCust, contactName: (e.target as HTMLInputElement).value })}
+                      placeholder='e.g. Alex Doe'
+                      disabled={!canEdit}
+                    />
                   </div>
                   <div>
                     <Label>Contact Phone</Label>
-                    <Input value={newCust.contactPhone} onChange={(e) => setNewCust({ ...newCust, contactPhone: (e.target as HTMLInputElement).value })} placeholder='e.g. +44 20 7946 0000' />
+                    <Input
+                      value={newCust.contactPhone}
+                      onChange={(e) => setNewCust({ ...newCust, contactPhone: (e.target as HTMLInputElement).value })}
+                      placeholder='e.g. +44 20 7946 0000'
+                      disabled={!canEdit}
+                    />
                   </div>
                   <div>
                     <Label>Contact Email</Label>
-                    <Input value={newCust.contactEmail} onChange={(e) => setNewCust({ ...newCust, contactEmail: (e.target as HTMLInputElement).value })} placeholder='e.g. alex@globex.co.uk' />
+                    <Input
+                      value={newCust.contactEmail}
+                      onChange={(e) => setNewCust({ ...newCust, contactEmail: (e.target as HTMLInputElement).value })}
+                      placeholder='e.g. alex@globex.co.uk'
+                      disabled={!canEdit}
+                    />
                   </div>
                   <div className='md:col-span-2'>
                     <Label>Address</Label>
-                    <Input value={newCust.address} onChange={(e) => setNewCust({ ...newCust, address: (e.target as HTMLInputElement).value })} placeholder='e.g. 10 High Street, London' />
+                    <Input
+                      value={newCust.address}
+                      onChange={(e) => setNewCust({ ...newCust, address: (e.target as HTMLInputElement).value })}
+                      placeholder='e.g. 10 High Street, London'
+                      disabled={!canEdit}
+                    />
                   </div>
                 </div>
                 {newCustomerError && (
@@ -1290,7 +1769,7 @@ export default function App() {
                   </Button>
                   <Button
                     size='lg'
-                    disabled={isCreatingCustomer}
+                    disabled={isCreatingCustomer || !canEdit}
                     onClick={async () => {
                       setIsCreatingCustomer(true)
                       try {
@@ -1312,6 +1791,7 @@ export default function App() {
                         setIsCreatingCustomer(false)
                       }
                     }}
+                    title={canEdit ? 'Create customer' : 'Read-only access'}
                   >
                     <Plus size={18} /> Create Customer
                   </Button>
@@ -1325,12 +1805,17 @@ export default function App() {
   )
 }
 
-function AddProjectForm({ onAdd }: { onAdd: (num: string) => Promise<string | null> }) {
+function AddProjectForm({ onAdd, disabled = false }: { onAdd: (num: string) => Promise<string | null>; disabled?: boolean }) {
   const [val, setVal] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const isDisabled = disabled
 
   const handleAdd = async () => {
+    if (isDisabled) {
+      setError('You have read-only access.')
+      return
+    }
     const trimmed = val.trim()
     if (!trimmed) {
       setError('Enter a project number.')
@@ -1365,10 +1850,11 @@ function AddProjectForm({ onAdd }: { onAdd: (num: string) => Promise<string | nu
                 if (error) setError(null)
               }}
               placeholder='e.g. 1403'
+              disabled={isDisabled}
             />
           </div>
         </div>
-        <Button onClick={handleAdd} disabled={isSaving}>
+        <Button onClick={handleAdd} disabled={isSaving || isDisabled} title={isDisabled ? 'Read-only access' : 'Add project'}>
           <Plus size={16} /> Add
         </Button>
       </div>
