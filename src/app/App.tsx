@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Plus, Trash2, Copy, Save, Pencil, X, Search, ChevronRight, ChevronDown, MapPin, AlertCircle } from 'lucide-react'
+import React, { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { Plus, Trash2, Copy, Save, Pencil, X, Search, ChevronRight, ChevronDown, MapPin, AlertCircle, LogOut } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Customer, Project, WOType } from '../types'
 import {
@@ -16,6 +16,7 @@ import {
   updateProject as updateProjectRecord,
   storageProvider,
 } from '../lib/storage'
+import { useSupabaseAuth } from '../lib/useSupabaseAuth'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
@@ -30,15 +31,23 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authMode, setAuthMode] = useState<'sign-in' | 'sign-up'>('sign-in')
+  const [authFormError, setAuthFormError] = useState<string | null>(null)
+  const [authNotice, setAuthNotice] = useState<string | null>(null)
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
+  const [isSigningOut, setIsSigningOut] = useState(false)
 
   const usingSupabase = storageProvider === 'supabase'
   const storageLabel = usingSupabase ? 'Supabase' : 'Browser'
   const storageTitle = usingSupabase
-    ? 'Data is stored in Supabase and shared across sessions.'
+    ? 'Data is stored securely in Supabase for your account.'
     : 'Data is stored in this browser only.'
   const storageBadgeClass = usingSupabase
     ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
     : 'border-amber-200 bg-amber-50 text-amber-700'
+  const { status: authStatus, user: authUser, error: authErrorMessage, signIn, signUp, signOut } = useSupabaseAuth(usingSupabase)
 
   // Search
   const [customerQuery, setCustomerQuery] = useState('')
@@ -64,7 +73,13 @@ export default function App() {
         setLoadError(null)
       } catch (error) {
         console.error('Failed to load customers', error)
-        setLoadError('Unable to load customers right now. Please try again.')
+        const message = error instanceof Error ? error.message : ''
+        if (message === 'You must be signed in to access the database.') {
+          setDb([])
+          setLoadError(null)
+        } else {
+          setLoadError('Unable to load customers right now. Please try again.')
+        }
       } finally {
         if (initial) {
           setIsLoading(false)
@@ -77,12 +92,42 @@ export default function App() {
   )
 
   useEffect(() => {
-    void refreshCustomers(true)
-  }, [refreshCustomers])
+    if (!usingSupabase) {
+      void refreshCustomers(true)
+      return
+    }
+
+    if (authStatus === 'signed-in') {
+      void refreshCustomers(true)
+    } else if (authStatus === 'signed-out' || authStatus === 'error') {
+      setDb([])
+      setSelectedCustomerId(null)
+      setIsLoading(false)
+      setIsSyncing(false)
+      setLoadError(null)
+    }
+  }, [usingSupabase, authStatus, refreshCustomers])
+
+  useEffect(() => {
+    if (authStatus === 'signed-in') {
+      setAuthFormError(null)
+      setAuthNotice(null)
+      setAuthPassword('')
+    }
+    if (authStatus === 'signed-out') {
+      setAuthMode('sign-in')
+    }
+  }, [authStatus])
 
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
   const selectedCustomerAddressForMap = selectedCustomer?.address?.trim() || null
   const customerOptions = useMemo(() => db.map(c => c.name).sort(), [db])
+  const authUserLabel = useMemo(() => {
+    if (!authUser) return null
+    if (authUser.email) return authUser.email
+    return `User ${authUser.id.slice(0, 8)}`
+  }, [authUser])
+  const resolvedAuthError = authErrorMessage ?? (authStatus === 'error' ? 'Unable to verify your session. Please sign in again.' : null)
 
   const searchMatches = useMemo(() => {
     const matches: { kind: 'customer' | 'project' | 'wo'; label: string; customerId: string; projectId?: string }[] = []
@@ -117,6 +162,71 @@ export default function App() {
     () => !!(customerQuery.trim() || projectQuery.trim() || woQuery.trim()),
     [customerQuery, projectQuery, woQuery],
   )
+
+  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setAuthFormError(null)
+    setAuthNotice(null)
+
+    const email = authEmail.trim().toLowerCase()
+    const password = authPassword
+
+    if (!email || !password) {
+      setAuthFormError('Email and password are required.')
+      return
+    }
+
+    setAuthEmail(email)
+    setIsAuthSubmitting(true)
+
+    try {
+      if (authMode === 'sign-in') {
+        const result = await signIn(email, password)
+        if (result.error) {
+          setAuthFormError(result.error)
+        }
+      } else {
+        const result = await signUp(email, password)
+        if (result.error) {
+          setAuthFormError(result.error)
+        } else {
+          setAuthMode('sign-in')
+          setAuthNotice(
+            result.confirmationRequired
+              ? 'Check your email to confirm your account, then sign in.'
+              : 'Account created. Sign in to continue.',
+          )
+          if (!result.confirmationRequired) {
+            setAuthEmail('')
+            setAuthPassword('')
+          }
+        }
+      }
+    } catch (error) {
+      setAuthFormError(error instanceof Error ? error.message : 'Authentication failed. Please try again.')
+    } finally {
+      setIsAuthSubmitting(false)
+    }
+  }
+
+  const handleAuthModeToggle = useCallback(() => {
+    setAuthMode(prev => (prev === 'sign-in' ? 'sign-up' : 'sign-in'))
+    setAuthFormError(null)
+    setAuthNotice(null)
+  }, [])
+
+  const handleSignOut = useCallback(async () => {
+    setIsSigningOut(true)
+    try {
+      const { error } = await signOut()
+      if (error) {
+        console.error('Failed to sign out', error)
+        setLoadError('Unable to sign out right now. Please try again.')
+      }
+    } finally {
+      setIsSigningOut(false)
+    }
+  }, [signOut])
 
   // Helpers
   const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
@@ -750,6 +860,106 @@ export default function App() {
     )
   }
 
+  if (usingSupabase && authStatus === 'loading') {
+    return (
+      <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
+        <div className='mx-auto flex min-h-[60vh] max-w-6xl flex-col items-center justify-center gap-4 text-center text-slate-600'>
+          <span className='h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-sky-500' aria-hidden />
+          <p className='text-sm font-medium text-slate-500'>Checking your session…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (usingSupabase && authStatus !== 'signed-in') {
+    return (
+      <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
+        <div className='mx-auto flex min-h-[60vh] max-w-md flex-col justify-center'>
+          <Card className='panel'>
+            <CardHeader>
+              <div className='flex flex-col gap-1'>
+                <h1 className='text-xl font-semibold text-slate-800'>Sign in to continue</h1>
+                <p className='text-sm text-slate-500'>Use your Supabase credentials to access CustomerProjectDB.</p>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className='mb-4 flex justify-between'>
+                <span className={`rounded-full border px-3 py-1 text-xs font-medium ${storageBadgeClass}`} title={storageTitle}>
+                  Storage: {storageLabel}
+                </span>
+              </div>
+              {resolvedAuthError && (
+                <div className='mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700'>
+                  {resolvedAuthError}
+                </div>
+              )}
+              {authFormError && (
+                <div className='mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700'>
+                  {authFormError}
+                </div>
+              )}
+              {authNotice && (
+                <div className='mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>
+                  {authNotice}
+                </div>
+              )}
+              <form onSubmit={handleAuthSubmit} className='grid gap-4'>
+                <div>
+                  <Label htmlFor='auth-email'>Email</Label>
+                  <Input
+                    id='auth-email'
+                    type='email'
+                    autoComplete='email'
+                    value={authEmail}
+                    onChange={event => setAuthEmail((event.target as HTMLInputElement).value)}
+                    disabled={isAuthSubmitting}
+                    required
+                  />
+                </div>
+                <div>
+                  <Label htmlFor='auth-password'>Password</Label>
+                  <Input
+                    id='auth-password'
+                    type='password'
+                    autoComplete={authMode === 'sign-in' ? 'current-password' : 'new-password'}
+                    value={authPassword}
+                    onChange={event => setAuthPassword((event.target as HTMLInputElement).value)}
+                    disabled={isAuthSubmitting}
+                    required
+                  />
+                </div>
+                <Button type='submit' size='lg' disabled={isAuthSubmitting}>
+                  {isAuthSubmitting ? 'Working…' : authMode === 'sign-in' ? 'Sign In' : 'Create Account'}
+                </Button>
+              </form>
+              <div className='mt-4 text-center text-sm text-slate-500'>
+                {authMode === 'sign-in' ? (
+                  <button
+                    type='button'
+                    className='font-semibold text-sky-600 hover:underline'
+                    onClick={handleAuthModeToggle}
+                    disabled={isAuthSubmitting}
+                  >
+                    Need an account? Create one
+                  </button>
+                ) : (
+                  <button
+                    type='button'
+                    className='font-semibold text-sky-600 hover:underline'
+                    onClick={handleAuthModeToggle}
+                    disabled={isAuthSubmitting}
+                  >
+                    Already have an account? Sign in
+                  </button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    )
+  }
+
   if (isLoading) {
     return (
       <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
@@ -772,20 +982,35 @@ export default function App() {
             </Button>
           </div>
         )}
-        <div className='mb-6 flex items-center justify-between'>
+        <div className='mb-6 flex flex-wrap items-center justify-between gap-3'>
           <h1 className='text-2xl font-semibold tracking-tight'>CustomerProjectDB</h1>
-          <div className='flex items-center gap-3'>
+          <div className='flex flex-wrap items-center justify-end gap-3'>
             <span
               className={`rounded-full border px-3 py-1 text-xs font-medium ${storageBadgeClass}`}
               title={storageTitle}
             >
               Storage: {storageLabel}
             </span>
+            {usingSupabase && authUserLabel && (
+              <span className='max-w-[220px] truncate text-xs font-medium text-slate-500' title={authUserLabel}>
+                Signed in as {authUserLabel}
+              </span>
+            )}
             {isSyncing && (
               <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
                 <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
                 Syncing…
               </span>
+            )}
+            {usingSupabase && (
+              <Button
+                variant='ghost'
+                onClick={() => void handleSignOut()}
+                disabled={isSigningOut}
+                title='Sign out of Supabase'
+              >
+                <LogOut size={16} /> {isSigningOut ? 'Signing Out…' : 'Sign Out'}
+              </Button>
             )}
             <Button
               onClick={() => {

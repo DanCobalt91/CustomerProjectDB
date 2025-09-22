@@ -63,6 +63,7 @@ function sortByText<T>(items: T[], getValue: (item: T) => string): T[] {
 function createSupabaseStorage(client: SupabaseClient): StorageApi {
   type CustomerRow = {
     id: string
+    owner_id?: string | null
     name: string
     address: string | null
     contact_name: string | null
@@ -73,6 +74,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
 
   type ProjectRow = {
     id: string
+    owner_id?: string | null
     customer_id: string
     number: string
     note: string | null
@@ -82,6 +84,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
 
   type WORow = {
     id: string
+    owner_id?: string | null
     project_id: string
     number: string
     type: WOType
@@ -90,6 +93,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
 
   type PORow = {
     id: string
+    owner_id?: string | null
     project_id: string
     number: string
     note: string | null
@@ -155,8 +159,21 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
     }
   }
 
+  async function requireUserId(): Promise<string> {
+    const { data, error } = await client.auth.getSession()
+    if (error) {
+      throw new Error(error.message)
+    }
+    const userId = data.session?.user?.id
+    if (!userId) {
+      throw new Error('You must be signed in to access the database.')
+    }
+    return userId
+  }
+
   return {
     async listCustomers(): Promise<Customer[]> {
+      const userId = await requireUserId()
       const { data, error } = await client
         .from('customers')
         .select(
@@ -188,6 +205,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
         )
       `,
         )
+        .eq('owner_id', userId)
 
       if (error) {
         throw new Error(error.message)
@@ -201,6 +219,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
     },
 
     async listProjectsByCustomer(customerId: string): Promise<Project[]> {
+      const userId = await requireUserId()
       const { data, error } = await client
         .from('projects')
         .select(
@@ -225,6 +244,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
       `,
         )
         .eq('customer_id', customerId)
+        .eq('owner_id', userId)
 
       if (error) {
         throw new Error(error.message)
@@ -238,10 +258,12 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
     },
 
     async listWOs(projectId: string): Promise<WO[]> {
+      const userId = await requireUserId()
       const { data, error } = await client
         .from('work_orders')
         .select('id, project_id, number, type, note')
         .eq('project_id', projectId)
+        .eq('owner_id', userId)
 
       if (error) {
         throw new Error(error.message)
@@ -255,10 +277,12 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
     },
 
     async listPOs(projectId: string): Promise<PO[]> {
+      const userId = await requireUserId()
       const { data, error } = await client
         .from('purchase_orders')
         .select('id, project_id, number, note')
         .eq('project_id', projectId)
+        .eq('owner_id', userId)
 
       if (error) {
         throw new Error(error.message)
@@ -278,12 +302,14 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
       contactPhone?: string
       contactEmail?: string
     }): Promise<Customer> {
+      const userId = await requireUserId()
       const payload = {
         name: data.name,
         address: data.address ?? null,
         contact_name: data.contactName ?? null,
         contact_phone: data.contactPhone ?? null,
         contact_email: data.contactEmail ?? null,
+        owner_id: userId,
       }
 
       const { data: row, error } = await client
@@ -306,6 +332,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
         contactEmail?: string | null
       },
     ): Promise<Customer> {
+      const userId = await requireUserId()
       const payload: Record<string, unknown> = {}
       if (data.name !== undefined) payload.name = data.name
       if (data.address !== undefined) payload.address = data.address
@@ -317,6 +344,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
         .from('customers')
         .update(payload)
         .eq('id', customerId)
+        .eq('owner_id', userId)
         .select('id, name, address, contact_name, contact_phone, contact_email')
         .single()
 
@@ -325,10 +353,12 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
     },
 
     async deleteCustomer(customerId: string): Promise<void> {
+      const userId = await requireUserId()
       const { data: projects, error: projectError } = await client
         .from('projects')
         .select('id')
         .eq('customer_id', customerId)
+        .eq('owner_id', userId)
 
       requireNoError(projectError)
 
@@ -336,9 +366,9 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
 
       if (projectIds.length > 0) {
         const [{ error: woError }, { error: poError }, { error: deleteProjectsError }] = await Promise.all([
-          client.from('work_orders').delete().in('project_id', projectIds),
-          client.from('purchase_orders').delete().in('project_id', projectIds),
-          client.from('projects').delete().in('id', projectIds),
+          client.from('work_orders').delete().in('project_id', projectIds).eq('owner_id', userId),
+          client.from('purchase_orders').delete().in('project_id', projectIds).eq('owner_id', userId),
+          client.from('projects').delete().in('id', projectIds).eq('owner_id', userId),
         ])
 
         requireNoError(woError)
@@ -346,14 +376,15 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
         requireNoError(deleteProjectsError)
       }
 
-      const { error } = await client.from('customers').delete().eq('id', customerId)
+      const { error } = await client.from('customers').delete().eq('id', customerId).eq('owner_id', userId)
       requireNoError(error)
     },
 
     async createProject(customerId: string, number: string): Promise<Project> {
+      const userId = await requireUserId()
       const { data, error } = await client
         .from('projects')
-        .insert({ customer_id: customerId, number, note: null })
+        .insert({ customer_id: customerId, number, note: null, owner_id: userId })
         .select('id, customer_id, number, note')
         .single()
 
@@ -362,6 +393,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
     },
 
     async updateProject(projectId: string, data: { note?: string | null }): Promise<Project> {
+      const userId = await requireUserId()
       const payload: Record<string, unknown> = {}
       if (data.note !== undefined) payload.note = data.note
 
@@ -369,6 +401,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
         .from('projects')
         .update(payload)
         .eq('id', projectId)
+        .eq('owner_id', userId)
         .select('id, customer_id, number, note')
         .single()
 
@@ -377,10 +410,11 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
     },
 
     async deleteProject(projectId: string): Promise<void> {
+      const userId = await requireUserId()
       const [{ error: woError }, { error: poError }, { error: projectError }] = await Promise.all([
-        client.from('work_orders').delete().eq('project_id', projectId),
-        client.from('purchase_orders').delete().eq('project_id', projectId),
-        client.from('projects').delete().eq('id', projectId),
+        client.from('work_orders').delete().eq('project_id', projectId).eq('owner_id', userId),
+        client.from('purchase_orders').delete().eq('project_id', projectId).eq('owner_id', userId),
+        client.from('projects').delete().eq('id', projectId).eq('owner_id', userId),
       ])
 
       requireNoError(woError)
@@ -389,6 +423,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
     },
 
     async createWO(projectId: string, data: { number: string; type: WOType; note?: string }): Promise<WO> {
+      const userId = await requireUserId()
       const { data: row, error } = await client
         .from('work_orders')
         .insert({
@@ -396,6 +431,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
           number: data.number,
           type: data.type,
           note: data.note ?? null,
+          owner_id: userId,
         })
         .select('id, project_id, number, type, note')
         .single()
@@ -405,17 +441,20 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
     },
 
     async deleteWO(woId: string): Promise<void> {
-      const { error } = await client.from('work_orders').delete().eq('id', woId)
+      const userId = await requireUserId()
+      const { error } = await client.from('work_orders').delete().eq('id', woId).eq('owner_id', userId)
       requireNoError(error)
     },
 
     async createPO(projectId: string, data: { number: string; note?: string }): Promise<PO> {
+      const userId = await requireUserId()
       const { data: row, error } = await client
         .from('purchase_orders')
         .insert({
           project_id: projectId,
           number: data.number,
           note: data.note ?? null,
+          owner_id: userId,
         })
         .select('id, project_id, number, note')
         .single()
@@ -425,7 +464,8 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
     },
 
     async deletePO(poId: string): Promise<void> {
-      const { error } = await client.from('purchase_orders').delete().eq('id', poId)
+      const userId = await requireUserId()
+      const { error } = await client.from('purchase_orders').delete().eq('id', poId).eq('owner_id', userId)
       requireNoError(error)
     },
   }
