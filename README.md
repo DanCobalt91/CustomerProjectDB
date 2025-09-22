@@ -32,7 +32,18 @@ npm run preview
 ```
 
 ## Data
-All data is stored in the browser `localStorage` under key `cpdb.v1`.
+By default data is stored in the browser `localStorage` under key `cpdb.v1`.
+
+To use a shared Supabase database instead:
+
+1. Create a Supabase project and run [`supabase/schema.sql`](supabase/schema.sql)
+   to create tables and policies.
+2. Copy `.env.example` to `.env.local` (or set the variables another way) and
+   provide values for `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+
+Once configured the UI will display **Storage: Supabase** and all reads/writes
+go through Supabase. See [supabase/README.md](supabase/README.md) for more
+details.
 
 
 ## GitHub Setup

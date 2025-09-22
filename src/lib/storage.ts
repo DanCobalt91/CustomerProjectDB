@@ -34,9 +34,12 @@ type StorageApi = {
   deletePO(poId: string): Promise<void>
 }
 
-const storage: StorageApi = isSupabaseConfigured()
-  ? createSupabaseStorage(getSupabaseClient())
-  : createBrowserStorage()
+export const storageProvider: 'supabase' | 'browser' = isSupabaseConfigured() ? 'supabase' : 'browser'
+
+const storage: StorageApi =
+  storageProvider === 'supabase'
+    ? createSupabaseStorage(getSupabaseClient())
+    : createBrowserStorage()
 
 export const listCustomers = storage.listCustomers
 export const listProjectsByCustomer = storage.listProjectsByCustomer
