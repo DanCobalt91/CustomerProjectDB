@@ -14,6 +14,7 @@ import {
   createPO as createPORecord,
   deletePO as deletePORecord,
   updateProject as updateProjectRecord,
+  storageProvider,
 } from '../lib/storage'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
@@ -29,6 +30,15 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
+
+  const usingSupabase = storageProvider === 'supabase'
+  const storageLabel = usingSupabase ? 'Supabase' : 'Browser'
+  const storageTitle = usingSupabase
+    ? 'Data is stored in Supabase and shared across sessions.'
+    : 'Data is stored in this browser only.'
+  const storageBadgeClass = usingSupabase
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+    : 'border-amber-200 bg-amber-50 text-amber-700'
 
   // Search
   const [customerQuery, setCustomerQuery] = useState('')
@@ -765,6 +775,12 @@ export default function App() {
         <div className='mb-6 flex items-center justify-between'>
           <h1 className='text-2xl font-semibold tracking-tight'>CustomerProjectDB</h1>
           <div className='flex items-center gap-3'>
+            <span
+              className={`rounded-full border px-3 py-1 text-xs font-medium ${storageBadgeClass}`}
+              title={storageTitle}
+            >
+              Storage: {storageLabel}
+            </span>
             {isSyncing && (
               <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
                 <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
@@ -782,6 +798,13 @@ export default function App() {
             </Button>
           </div>
         </div>
+
+        {!usingSupabase && (
+          <div className='mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800'>
+            Supabase is not configured — data stays in this browser only. Set VITE_SUPABASE_URL and
+            VITE_SUPABASE_ANON_KEY to sync with Supabase.
+          </div>
+        )}
 
         <Card className='mb-6 panel'>
           <CardHeader>
