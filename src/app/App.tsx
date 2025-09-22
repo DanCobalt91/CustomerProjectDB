@@ -28,10 +28,8 @@ import {
   createPO as createPORecord,
   deletePO as deletePORecord,
   updateProject as updateProjectRecord,
-  getStorageProvider,
-  subscribeToStorageProviderChange,
-  type StorageProvider,
 } from '../lib/storage'
+import { isSupabaseConfigured } from '../lib/supabase'
 import { useSupabaseAuth } from '../lib/useSupabaseAuth'
 import {
   fetchCurrentUserRoles,
@@ -61,8 +59,6 @@ export default function App() {
   const [authNotice, setAuthNotice] = useState<string | null>(null)
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
   const [isSigningOut, setIsSigningOut] = useState(false)
-  const [activeStorageProvider, setActiveStorageProvider] = useState<StorageProvider>(() => getStorageProvider())
-  const [storageNotice, setStorageNotice] = useState<string | null>(null)
   const [roles, setRoles] = useState<AppRole[]>([])
   const [rolesStatus, setRolesStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle')
   const [rolesError, setRolesError] = useState<string | null>(null)
@@ -74,14 +70,18 @@ export default function App() {
   const [adminNotice, setAdminNotice] = useState<string | null>(null)
   const [roleActionTarget, setRoleActionTarget] = useState<string | null>(null)
 
-  const usingSupabase = activeStorageProvider === 'supabase'
-  const storageLabel = usingSupabase ? 'Supabase' : 'Browser'
-  const storageTitle = usingSupabase
+  const supabaseEnabled = isSupabaseConfigured()
+  const usingSupabase = supabaseEnabled
+  const storageLabel = 'Supabase'
+  const storageTitle = supabaseEnabled
     ? 'Data is stored securely in Supabase for your account.'
-    : storageNotice ?? 'Data is stored in this browser only.'
-  const storageBadgeClass = usingSupabase
+    : 'Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable storage.'
+  const storageBadgeClass = supabaseEnabled
     ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
     : 'border-amber-200 bg-amber-50 text-amber-700'
+  const storageNotice = supabaseEnabled
+    ? null
+    : 'Supabase is not configured. Data cannot be loaded or saved until the environment variables are set.'
   const {
     status: authStatus,
     user: authUser,
@@ -90,7 +90,7 @@ export default function App() {
     signIn,
     signUp,
     signOut,
-  } = useSupabaseAuth(usingSupabase)
+  } = useSupabaseAuth(supabaseEnabled)
 
   // Search
   const [customerQuery, setCustomerQuery] = useState('')
@@ -102,31 +102,19 @@ export default function App() {
   const [showNewCustomer, setShowNewCustomer] = useState(false)
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
 
-  useEffect(() => {
-    const unsubscribe = subscribeToStorageProviderChange(change => {
-      setActiveStorageProvider(change.provider)
-
-      if (change.provider === 'browser') {
-        if (change.reason === 'supabase-unavailable') {
-          if (change.error) {
-            console.warn('Supabase connection lost; continuing with browser storage.', change.error)
-          }
-          setStorageNotice(
-            'Lost connection to Supabase. Data will stay in this browser until the connection is restored and will not sync to Supabase.',
-          )
-        } else {
-          setStorageNotice(null)
-        }
-      } else {
-        setStorageNotice(null)
-      }
-    })
-
-    return unsubscribe
-  }, [])
-
   const refreshCustomers = useCallback(
     async (initial = false) => {
+      if (!supabaseEnabled) {
+        setDb([])
+        setLoadError('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable storage.')
+        if (initial) {
+          setIsLoading(false)
+        } else {
+          setIsSyncing(false)
+        }
+        return
+      }
+
       if (initial) {
         setIsLoading(true)
       } else {
@@ -144,7 +132,7 @@ export default function App() {
           setDb([])
           setLoadError(null)
         } else {
-          setLoadError('Unable to load customers right now. Please try again.')
+          setLoadError(message || 'Unable to load customers right now. Please try again.')
         }
       } finally {
         if (initial) {
@@ -154,11 +142,11 @@ export default function App() {
         }
       }
     },
-    [],
+    [supabaseEnabled],
   )
 
   useEffect(() => {
-    if (!usingSupabase) {
+    if (!supabaseEnabled) {
       void refreshCustomers(true)
       return
     }
@@ -172,7 +160,7 @@ export default function App() {
       setIsSyncing(false)
       setLoadError(null)
     }
-  }, [usingSupabase, authStatus, refreshCustomers])
+  }, [supabaseEnabled, authStatus, refreshCustomers])
 
   useEffect(() => {
     if (authStatus === 'signed-in') {
@@ -186,7 +174,7 @@ export default function App() {
   }, [authStatus])
 
   useEffect(() => {
-    if (!usingSupabase) {
+    if (!supabaseEnabled) {
       setRoles(['admin', 'editor', 'viewer'])
       setRolesStatus('loaded')
       setRolesError(null)
@@ -209,7 +197,7 @@ export default function App() {
     fetchCurrentUserRoles()
       .then(fetched => {
         if (cancelled) return
-        const next: AppRole[] = fetched.length > 0 ? fetched : ['viewer']
+        const next: AppRole[] = fetched.length > 0 ? fetched : ['admin', 'editor', 'viewer']
         setRoles(next)
         setRolesStatus('loaded')
         setRolesError(null)
@@ -217,15 +205,19 @@ export default function App() {
       .catch(error => {
         if (cancelled) return
         console.error('Failed to fetch roles', error)
-        setRoles(['viewer'])
+        setRoles(['admin', 'editor', 'viewer'])
         setRolesStatus('error')
-        setRolesError(error instanceof Error ? error.message : 'Unable to load roles.')
+        setRolesError(
+          error instanceof Error
+            ? getFriendlySupabaseError(error, 'Unable to load roles.', 'Not authorized to view roles.')
+            : 'Unable to load roles.',
+        )
       })
 
     return () => {
       cancelled = true
     }
-  }, [usingSupabase, authStatus])
+  }, [supabaseEnabled, authStatus])
 
 
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
@@ -236,14 +228,16 @@ export default function App() {
     if (authUser.email) return authUser.email
     return `User ${authUser.id.slice(0, 8)}`
   }, [authUser])
-  const resolvedAuthError = authErrorMessage ?? (authStatus === 'error' ? 'Unable to verify your session. Please sign in again.' : null)
-  const isRolesLoading = usingSupabase && rolesStatus === 'loading'
-  const rolesReady = !usingSupabase || rolesStatus === 'loaded' || rolesStatus === 'error'
-  const resolvedRoles: AppRole[] = !usingSupabase ? ['admin', 'editor', 'viewer'] : roles
+  const resolvedAuthError =
+    authErrorMessage ?? (authStatus === 'error' ? 'Unable to verify your session. Please sign in again.' : null)
+  const isRolesLoading = supabaseEnabled && rolesStatus === 'loading'
+  const rolesReady = !supabaseEnabled || rolesStatus === 'loaded' || rolesStatus === 'error'
+  const fallbackRoles: AppRole[] = ['admin', 'editor', 'viewer']
+  const resolvedRoles: AppRole[] = roles.length > 0 ? roles : fallbackRoles
   const hasEditorRole = resolvedRoles.includes('editor') || resolvedRoles.includes('admin')
-  const canEdit = !usingSupabase ? true : rolesReady && hasEditorRole
-  const canManageUsers = !usingSupabase ? true : rolesReady && resolvedRoles.includes('admin')
-  const isViewerOnly = usingSupabase && rolesReady && !hasEditorRole
+  const canEdit = authStatus === 'signed-in' && hasEditorRole
+  const canManageUsers = authStatus === 'signed-in' && resolvedRoles.includes('admin')
+  const isViewerOnly = authStatus === 'signed-in' && !hasEditorRole && !isRolesLoading
   const formatDateTime = useCallback((value: string | null) => {
     if (!value) return '—'
     const date = new Date(value)
@@ -258,7 +252,7 @@ export default function App() {
       return
     }
 
-    if (!canManageUsers || !usingSupabase || authStatus !== 'signed-in' || !authSession) {
+    if (!canManageUsers || authStatus !== 'signed-in' || !authSession) {
       setManagedUsers([])
       return
     }
@@ -276,7 +270,7 @@ export default function App() {
     } finally {
       setIsLoadingUsers(false)
     }
-  }, [showAdminPanel, canManageUsers, usingSupabase, authStatus, authSession])
+  }, [showAdminPanel, canManageUsers, authStatus, authSession])
 
   const handleRoleUpdate = useCallback(
     async (email: string, role: AppRole, action: 'grant' | 'revoke') => {
@@ -1397,7 +1391,7 @@ export default function App() {
         {!usingSupabase && (
           <div className='mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800'>
             {storageNotice ??
-              'Supabase is not configured — data stays in this browser only. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to sync with Supabase.'}
+              'Supabase is not configured — data cannot be loaded or saved until VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.'}
           </div>
         )}
 
