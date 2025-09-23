@@ -12,7 +12,7 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import type { Customer, CustomerContact, ProjectFile, ProjectFileCategory, WOType } from '../types'
+import type { Customer, CustomerContact, Project, ProjectFile, ProjectFileCategory, WOType } from '../types'
 import { PROJECT_FILE_CATEGORIES } from '../types'
 import {
   listCustomers,
@@ -79,10 +79,54 @@ function stripPrefix(value: string, pattern: RegExp): string {
   return match ? match[1].trim() : trimmed
 }
 
+type ProjectSubStatus = 'noWorkOrders' | 'buildOnly' | 'onsiteOnly' | 'mixed'
+
+const PROJECT_SUB_STATUS_META: Record<
+  ProjectSubStatus,
+  { label: string; description: string; colorClass: string }
+> = {
+  noWorkOrders: {
+    label: 'No Work Orders',
+    description: 'Projects that have been created but do not contain any work orders yet.',
+    colorClass: 'bg-slate-400',
+  },
+  buildOnly: {
+    label: 'Build Only',
+    description: 'Projects with build work orders recorded but no onsite work orders.',
+    colorClass: 'bg-emerald-500',
+  },
+  onsiteOnly: {
+    label: 'Onsite Only',
+    description: 'Projects that only include onsite work orders.',
+    colorClass: 'bg-sky-500',
+  },
+  mixed: {
+    label: 'Build & Onsite',
+    description: 'Projects containing a mix of build and onsite work orders.',
+    colorClass: 'bg-violet-500',
+  },
+}
+
+function resolveProjectSubStatus(project: Project): ProjectSubStatus {
+  const hasBuild = project.wos.some(wo => wo.type === 'Build')
+  const hasOnsite = project.wos.some(wo => wo.type === 'Onsite')
+  if (hasBuild && hasOnsite) {
+    return 'mixed'
+  }
+  if (hasBuild) {
+    return 'buildOnly'
+  }
+  if (hasOnsite) {
+    return 'onsiteOnly'
+  }
+  return 'noWorkOrders'
+}
+
 function AppContent() {
   const [db, setDb] = useState<Customer[]>([])
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+  const [activePage, setActivePage] = useState<'home' | 'customers'>('home')
   const [editingInfo, setEditingInfo] = useState<Record<string, boolean>>({})
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -198,12 +242,55 @@ function AppContent() {
     return matches.slice(0, 25)
   }, [db, customerQuery, projectQuery, woQuery])
 
+  const customerCount = db.length
+
+  const projectSubStatusCounts = useMemo(() => {
+    const counts: Record<ProjectSubStatus, number> = {
+      noWorkOrders: 0,
+      buildOnly: 0,
+      onsiteOnly: 0,
+      mixed: 0,
+    }
+    db.forEach(customer => {
+      customer.projects.forEach(project => {
+        const status = resolveProjectSubStatus(project)
+        counts[status] += 1
+      })
+    })
+    return counts
+  }, [db])
+
+  const projectSubStatusData = useMemo(
+    () =>
+      (Object.keys(PROJECT_SUB_STATUS_META) as ProjectSubStatus[]).map(status => ({
+        key: status,
+        count: projectSubStatusCounts[status],
+        ...PROJECT_SUB_STATUS_META[status],
+      })),
+    [projectSubStatusCounts],
+  )
+
+  const totalProjects = useMemo(
+    () => projectSubStatusData.reduce((sum, item) => sum + item.count, 0),
+    [projectSubStatusData],
+  )
+
+  const totalWorkOrders = useMemo(
+    () =>
+      db.reduce(
+        (count, customer) =>
+          count + customer.projects.reduce((projectCount, project) => projectCount + project.wos.length, 0),
+        0,
+      ),
+    [db],
+  )
+
   const hasSearchInput = useMemo(
     () => !!(customerQuery.trim() || projectQuery.trim() || woQuery.trim()),
     [customerQuery, projectQuery, woQuery],
   )
 
-  const HomeView = () => {
+  const CustomersPage = () => {
     return (
       <>
         <Card className='mb-6 panel'>
@@ -586,6 +673,82 @@ function AppContent() {
 
         <div className='h-8' />
       </>
+    )
+  }
+
+  const DashboardView = () => {
+    const averageWorkOrders = totalProjects > 0 ? totalWorkOrders / totalProjects : 0
+    const maxStatusCount = projectSubStatusData.reduce((max, item) => (item.count > max ? item.count : max), 0)
+    const barDenominator = maxStatusCount > 0 ? maxStatusCount : 1
+
+    return (
+      <div className='space-y-6'>
+        <Card className='panel'>
+          <CardHeader className='flex-col items-start gap-3 sm:flex-row sm:items-center'>
+            <div>
+              <div className='text-lg font-semibold text-slate-900'>Overview</div>
+              <p className='text-sm text-slate-500'>High-level metrics for the projects stored in this workspace.</p>
+            </div>
+            <Button
+              className='w-full sm:ml-auto sm:w-auto'
+              variant='outline'
+              onClick={() => setActivePage('customers')}
+            >
+              View customers
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <div className='grid gap-4 sm:grid-cols-3'>
+              <div className='rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm'>
+                <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Active Projects</div>
+                <div className='mt-1 text-3xl font-semibold text-slate-900'>{totalProjects}</div>
+                <p className='mt-2 text-sm text-slate-500'>Across {customerCount} {customerCount === 1 ? 'customer' : 'customers'}.</p>
+              </div>
+              <div className='rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm'>
+                <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Work Orders</div>
+                <div className='mt-1 text-3xl font-semibold text-slate-900'>{totalWorkOrders}</div>
+                <p className='mt-2 text-sm text-slate-500'>Average of {averageWorkOrders.toFixed(1)} per project.</p>
+              </div>
+              <div className='rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm'>
+                <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Customers</div>
+                <div className='mt-1 text-3xl font-semibold text-slate-900'>{customerCount}</div>
+                <p className='mt-2 text-sm text-slate-500'>Customer records currently in the database.</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className='panel'>
+          <CardHeader className='flex-col items-start gap-2'>
+            <div className='text-lg font-semibold text-slate-900'>Active projects sub-status</div>
+            <p className='text-sm text-slate-500'>Breakdown by the mix of work order types attached to each active project.</p>
+          </CardHeader>
+          <CardContent>
+            {totalProjects === 0 ? (
+              <p className='text-sm text-slate-500'>Add a project to see sub-status details.</p>
+            ) : (
+              <div className='space-y-4'>
+                {projectSubStatusData.map(status => (
+                  <div key={status.key}>
+                    <div className='flex items-center gap-3'>
+                      <div className={`h-2.5 w-2.5 rounded-full ${status.colorClass}`} aria-hidden />
+                      <div className='flex-1 text-sm font-medium text-slate-700'>{status.label}</div>
+                      <div className='text-sm font-semibold text-slate-900'>{status.count}</div>
+                    </div>
+                    <div className='mt-2 h-2 rounded-full bg-slate-200/80'>
+                      <div
+                        className={`h-full rounded-full ${status.colorClass}`}
+                        style={{ width: `${(status.count / barDenominator) * 100}%` }}
+                      />
+                    </div>
+                    <p className='mt-2 text-xs text-slate-500'>{status.description}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     )
   }
 
@@ -1189,7 +1352,10 @@ function AppContent() {
           </div>
         )}
         <div className='mb-6 flex flex-wrap items-center justify-between gap-3'>
-          <h1 className='text-2xl font-semibold tracking-tight'>CustomerProjectDB</h1>
+          <div>
+            <h1 className='text-3xl font-semibold tracking-tight text-slate-900'>CustomerProjectDB</h1>
+            <p className='text-sm text-slate-500'>Keep track of customers, projects, and their work orders.</p>
+          </div>
           <div className='flex flex-wrap items-center justify-end gap-3'>
             <span
               className={`rounded-full border px-3 py-1 text-xs font-medium ${storageBadgeClass}`}
@@ -1203,18 +1369,43 @@ function AppContent() {
                 Syncing…
               </span>
             )}
-            <Button
-              onClick={() => {
-                setShowNewCustomer(true)
-                setNewCustomerError(null)
-              }}
-              title='Create new customer'
-              disabled={!canEdit}
-            >
-              <Plus size={16} /> New Customer
-            </Button>
+            {!selectedProjectId && activePage === 'customers' && (
+              <Button
+                onClick={() => {
+                  setShowNewCustomer(true)
+                  setNewCustomerError(null)
+                }}
+                title='Create new customer'
+                disabled={!canEdit}
+              >
+                <Plus size={16} /> New Customer
+              </Button>
+            )}
           </div>
         </div>
+
+        {!selectedProjectId && (
+          <div className='mb-6 flex flex-wrap items-center justify-between gap-3'>
+            <div className='flex overflow-hidden rounded-2xl border border-slate-200 bg-white/70 p-1 shadow-sm'>
+              {(['home', 'customers'] as const).map(page => {
+                const isActive = activePage === page
+                const label = page === 'home' ? 'Home' : 'Customers'
+                return (
+                  <button
+                    key={page}
+                    type='button'
+                    onClick={() => setActivePage(page)}
+                    className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
+                      isActive ? 'bg-slate-900 text-white shadow' : 'text-slate-600 hover:bg-white'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {storageNotice && (
           <div className='mb-6 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700'>
@@ -1261,8 +1452,10 @@ function AppContent() {
               </CardContent>
             </Card>
           )
+        ) : activePage === 'home' ? (
+          <DashboardView />
         ) : (
-          <HomeView />
+          <CustomersPage />
         )}
       </div>
 
