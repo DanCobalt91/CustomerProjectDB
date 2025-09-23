@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom'
 import {
   Plus,
   Trash2,
@@ -8,7 +9,6 @@ import {
   X,
   Search,
   ChevronRight,
-  ChevronDown,
   MapPin,
   AlertCircle,
 } from 'lucide-react'
@@ -26,17 +26,23 @@ import {
   createPO as createPORecord,
   deletePO as deletePORecord,
   updateProject as updateProjectRecord,
+  createFdsFile as createFdsFileRecord,
+  deleteFdsFile as deleteFdsFileRecord,
+  createTechnicalDrawing as createTechnicalDrawingRecord,
+  deleteTechnicalDrawing as deleteTechnicalDrawingRecord,
+  createSignOff as createSignOffRecord,
+  deleteSignOff as deleteSignOffRecord,
 } from '../lib/storage'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
+import ProjectPage from './ProjectPage'
 
-export default function App() {
+function AppContent() {
   const [db, setDb] = useState<Customer[]>([])
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [editingInfo, setEditingInfo] = useState<Record<string, boolean>>({})
-  const [openProjects, setOpenProjects] = useState<Record<string, boolean>>({})
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -138,6 +144,308 @@ export default function App() {
     [customerQuery, projectQuery, woQuery],
   )
 
+  const HomeView = () => {
+    const navigate = useNavigate()
+
+    return (
+      <>
+        <Card className='mb-6 panel'>
+          <CardHeader>
+            <div className='flex items-center gap-2'>
+              <Search size={18} />
+              <div className='font-medium'>Index Search</div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className='grid gap-3 md:grid-cols-3'>
+              <div>
+                <Label>Customer</Label>
+                <Input
+                  list='customer-list'
+                  value={customerQuery}
+                  onChange={(e) => setCustomerQuery((e.target as HTMLInputElement).value)}
+                  placeholder='Start typing a name…'
+                />
+                <datalist id='customer-list'>
+                  {customerOptions.map(name => (
+                    <option key={name} value={name} />
+                  ))}
+                </datalist>
+              </div>
+              <div>
+                <Label>Project Number</Label>
+                <Input value={projectQuery} onChange={(e) => setProjectQuery((e.target as HTMLInputElement).value)} placeholder='e.g. P1403' />
+              </div>
+              <div>
+                <Label>Work Order Number</Label>
+                <Input value={woQuery} onChange={(e) => setWoQuery((e.target as HTMLInputElement).value)} placeholder='e.g. WO804322' />
+              </div>
+            </div>
+
+            <div className='mt-4'>
+              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
+              <div className='mt-2 grid gap-2 md:grid-cols-2'>
+                {!hasSearchInput ? (
+                  <div className='text-sm text-slate-500'>Start typing above to find a customer, project, or work order.</div>
+                ) : searchMatches.length === 0 ? (
+                  <div className='text-sm text-slate-500'>No matches found.</div>
+                ) : (
+                  searchMatches.map(m => (
+                    <button
+                      key={`${m.kind}_${m.customerId}_${m.projectId ?? ''}_${m.label}`}
+                      onClick={() => {
+                        setSelectedCustomerId(m.customerId)
+                        if (m.projectId) {
+                          navigate(`/project/${m.projectId}`)
+                        }
+                      }}
+                      className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
+                      title={
+                        m.kind === 'customer'
+                          ? 'Open customer'
+                          : m.kind === 'project'
+                          ? 'Open project details'
+                          : 'Open work order in project'
+                      }
+                    >
+                      <div>
+                        <div className='text-sm font-semibold text-slate-800'>{m.label}</div>
+                        <div className='text-xs font-medium text-slate-500'>{m.kind.toUpperCase()}</div>
+                      </div>
+                      <ChevronRight size={18} />
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {selectedCustomer ? (
+          <Card className='mb-6 panel'>
+            <CardHeader>
+              <div className='flex items-center gap-2'>
+                <div className='text-lg font-semibold'>Customer: {selectedCustomer.name}</div>
+              </div>
+              <div className='flex flex-wrap items-center gap-2'>
+                <Button variant='outline' onClick={() => setSelectedCustomerId(null)}>Back to Index</Button>
+                <Button
+                  variant='ghost'
+                  className='text-rose-600 hover:bg-rose-50'
+                  onClick={() => {
+                    if (!selectedCustomer) return
+                    const confirmed = window.confirm('Delete this customer and all associated projects, purchase orders, and work orders?')
+                    if (!confirmed) return
+                    void deleteCustomer(selectedCustomer.id)
+                  }}
+                  title={canEdit ? 'Delete customer' : 'Read-only access'}
+                  disabled={!canEdit}
+                >
+                  <Trash2 size={16} /> Delete Customer
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className='grid gap-4 md:grid-cols-2'>
+                <div className='md:col-span-2 space-y-2'>
+                  <EditableField
+                    label='Address'
+                    value={selectedCustomer.address}
+                    fieldKey={`addr_${selectedCustomer.id}`}
+                    placeholder='Add address'
+                    copyable
+                    copyTitle='Copy address'
+                    onSave={(v) => upsertCustomer({ ...selectedCustomer, address: v ? v : undefined })}
+                  />
+                  {selectedCustomerAddressForMap ? (
+                    <a
+                      href={`https://www.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}`}
+                      target='_blank'
+                      rel='noreferrer'
+                      className='inline-flex items-center gap-2 text-sm font-medium text-sky-600 hover:text-sky-500'
+                    >
+                      <MapPin size={16} /> Open in Google Maps
+                    </a>
+                  ) : null}
+                </div>
+                <EditableField
+                  label='Contact Name'
+                  value={selectedCustomer.contactName}
+                  fieldKey={`cname_${selectedCustomer.id}`}
+                  placeholder='Add contact'
+                  copyable
+                  copyTitle='Copy contact name'
+                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactName: v ? v : undefined })}
+                />
+                <EditableField
+                  label='Contact Phone'
+                  value={selectedCustomer.contactPhone}
+                  fieldKey={`cphone_${selectedCustomer.id}`}
+                  placeholder='Add phone'
+                  copyable
+                  copyTitle='Copy phone number'
+                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactPhone: v ? v : undefined })}
+                />
+                <EditableField
+                  label='Contact Email'
+                  value={selectedCustomer.contactEmail}
+                  fieldKey={`cemail_${selectedCustomer.id}`}
+                  placeholder='Add email'
+                  copyable
+                  copyTitle='Copy email address'
+                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactEmail: v ? v : undefined })}
+                />
+              </div>
+
+              <div className='mt-6 rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm'>
+                <div className='mb-2 text-sm font-semibold text-slate-700'>Add Project</div>
+                <AddProjectForm onAdd={(num) => addProject(selectedCustomer.id, num)} disabled={!canEdit} />
+              </div>
+
+              <div className='mt-6'>
+                <div className='mb-2 text-sm font-semibold text-slate-700'>Projects</div>
+                {selectedCustomer.projects.length === 0 && <div className='text-sm text-slate-500'>No projects yet.</div>}
+                {selectedCustomer.projects.map(project => (
+                  <Card key={project.id} className='mb-3 panel'>
+                    <CardHeader>
+                      <div className='flex flex-wrap items-center gap-2'>
+                        <div className='text-lg font-semibold text-slate-800'>Project: {project.number}</div>
+                        {project.note && (
+                          <span className='rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700'>Note</span>
+                        )}
+                      </div>
+                      <div className='flex flex-wrap items-center gap-2'>
+                        <Button
+                          variant='outline'
+                          onClick={() => navigator.clipboard.writeText(project.number)}
+                          title='Copy project number'
+                        >
+                          <Copy size={16} />
+                        </Button>
+                        <Button
+                          onClick={() => {
+                            setSelectedCustomerId(selectedCustomer.id)
+                            navigate(`/project/${project.id}`)
+                          }}
+                        >
+                          <ChevronRight size={16} /> View project
+                        </Button>
+                        <Button
+                          variant='ghost'
+                          className='text-rose-600 hover:bg-rose-50'
+                          onClick={() => {
+                            const confirmed = window.confirm('Delete this project and all associated records?')
+                            if (!confirmed) return
+                            void deleteProject(selectedCustomer.id, project.id)
+                          }}
+                          title={canEdit ? 'Delete project' : 'Read-only access'}
+                          disabled={!canEdit}
+                        >
+                          <Trash2 size={16} />
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent>
+                      <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
+                        {[
+                          { label: 'Work Orders', value: project.wos.length },
+                          { label: 'Purchase Orders', value: project.pos.length },
+                          { label: 'FDS Files', value: project.fdsFiles.length },
+                          { label: 'Technical Drawings', value: project.technicalDrawings.length },
+                          { label: 'Sign Offs', value: project.signOffs.length },
+                        ].map(item => (
+                          <div key={item.label} className='rounded-xl border border-slate-200 bg-white/80 p-3'>
+                            <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{item.label}</div>
+                            <div className='text-lg font-semibold text-slate-800'>{item.value}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {project.note && (
+                        <div className='mt-3 rounded-xl border border-slate-200 bg-white/80 p-3 text-sm text-slate-700'>
+                          <span className='font-semibold text-slate-900'>Note:</span> {project.note}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        <div className='h-8' />
+      </>
+    )
+  }
+
+  const ProjectRoute = () => {
+    const { projectId } = useParams<{ projectId: string }>()
+    const navigate = useNavigate()
+
+    const projectData = useMemo(() => {
+      if (!projectId) return null
+      for (const customer of db) {
+        const project = customer.projects.find(p => p.id === projectId)
+        if (project) {
+          return { customer, project }
+        }
+      }
+      return null
+    }, [db, projectId])
+
+    useEffect(() => {
+      if (projectData?.customer.id) {
+        setSelectedCustomerId(projectData.customer.id)
+      }
+    }, [projectData?.customer.id])
+
+    if (!projectId) {
+      return <Navigate to='/' replace />
+    }
+
+    if (!projectData) {
+      return (
+        <Card className='panel'>
+          <CardHeader>
+            <div className='text-lg font-semibold'>Project not found</div>
+          </CardHeader>
+          <CardContent>
+            <p className='text-sm text-slate-600'>We couldn't find that project. It may have been deleted.</p>
+            <div className='mt-4'>
+              <Button onClick={() => navigate('/')}>Back to index</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )
+    }
+
+    const { customer, project } = projectData
+
+    return (
+      <ProjectPage
+        customer={customer}
+        project={project}
+        canEdit={canEdit}
+        onUpdateProjectNote={(note) => updateProjectNote(customer.id, project.id, note)}
+        onAddWO={(data) => addWO(customer.id, project.id, data)}
+        onDeleteWO={(woId) => deleteWO(customer.id, project.id, woId)}
+        onAddPO={(data) => addPO(customer.id, project.id, data)}
+        onDeletePO={(poId) => deletePO(customer.id, project.id, poId)}
+        onAddFdsFile={(data) => addFdsFile(customer.id, project.id, data)}
+        onDeleteFdsFile={(fileId) => deleteFdsFile(customer.id, project.id, fileId)}
+        onAddTechnicalDrawing={(data) => addTechnicalDrawing(customer.id, project.id, data)}
+        onDeleteTechnicalDrawing={(fileId) => deleteTechnicalDrawing(customer.id, project.id, fileId)}
+        onAddSignOff={(data) => addSignOff(customer.id, project.id, data)}
+        onDeleteSignOff={(signOffId) => deleteSignOff(customer.id, project.id, signOffId)}
+        onDeleteProject={() => deleteProject(customer.id, project.id)}
+        onNavigateBack={() => {
+          setSelectedCustomerId(customer.id)
+          navigate('/')
+        }}
+      />
+    )
+  }
+
   // Helpers
   const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
   const customerNameExists = (name: string, excludeId?: string) =>
@@ -193,18 +501,9 @@ export default function App() {
       setActionError('Not authorized to delete customers.')
       return
     }
-    const target = db.find(c => c.id === customerId)
     try {
       await deleteCustomerRecord(customerId)
       setDb(prev => prev.filter(c => c.id !== customerId))
-      setOpenProjects(prev => {
-        if (!target) return prev
-        const next = { ...prev }
-        target.projects.forEach(p => {
-          delete next[p.id]
-        })
-        return next
-      })
       setEditingInfo(prev => {
         const next = { ...prev }
         Object.keys(next).forEach(key => {
@@ -233,12 +532,6 @@ export default function App() {
           c.id !== customerId ? c : { ...c, projects: c.projects.filter(p => p.id !== projectId) },
         ),
       )
-      setOpenProjects(prev => {
-        if (!prev[projectId]) return prev
-        const next = { ...prev }
-        delete next[projectId]
-        return next
-      })
       setActionError(null)
     } catch (error) {
       console.error('Failed to delete project', error)
@@ -297,6 +590,93 @@ export default function App() {
     } catch (error) {
       console.error('Failed to delete purchase order', error)
       const message = toErrorMessage(error, 'Failed to delete purchase order.')
+      setActionError(message)
+    }
+  }
+
+  async function deleteFdsFile(customerId: string, projectId: string, fileId: string) {
+    if (!canEdit) {
+      setActionError('Not authorized to delete FDS files.')
+      return
+    }
+    try {
+      await deleteFdsFileRecord(fileId)
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId
+                    ? p
+                    : { ...p, fdsFiles: p.fdsFiles.filter(file => file.id !== fileId) },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+    } catch (error) {
+      console.error('Failed to delete FDS file', error)
+      const message = toErrorMessage(error, 'Failed to delete FDS file.')
+      setActionError(message)
+    }
+  }
+
+  async function deleteTechnicalDrawing(customerId: string, projectId: string, fileId: string) {
+    if (!canEdit) {
+      setActionError('Not authorized to delete technical drawings.')
+      return
+    }
+    try {
+      await deleteTechnicalDrawingRecord(fileId)
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId
+                    ? p
+                    : { ...p, technicalDrawings: p.technicalDrawings.filter(file => file.id !== fileId) },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+    } catch (error) {
+      console.error('Failed to delete technical drawing', error)
+      const message = toErrorMessage(error, 'Failed to delete technical drawing.')
+      setActionError(message)
+    }
+  }
+
+  async function deleteSignOff(customerId: string, projectId: string, signOffId: string) {
+    if (!canEdit) {
+      setActionError('Not authorized to delete sign-offs.')
+      return
+    }
+    try {
+      await deleteSignOffRecord(signOffId)
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId
+                    ? p
+                    : { ...p, signOffs: p.signOffs.filter(item => item.id !== signOffId) },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+    } catch (error) {
+      console.error('Failed to delete sign-off', error)
+      const message = toErrorMessage(error, 'Failed to delete sign-off.')
       setActionError(message)
     }
   }
@@ -404,6 +784,134 @@ export default function App() {
     } catch (error) {
       console.error('Failed to create purchase order', error)
       const message = toErrorMessage(error, 'Failed to create purchase order.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function addFdsFile(
+    customerId: string,
+    projectId: string,
+    data: { name: string; url?: string; note?: string },
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to add FDS files.'
+      setActionError(message)
+      return message
+    }
+    const trimmedName = data.name.trim()
+    if (!trimmedName) return 'Enter a file name.'
+    const url = data.url?.trim()
+    const note = data.note?.trim()
+    try {
+      const file = await createFdsFileRecord(projectId, {
+        name: trimmedName,
+        url: url || undefined,
+        note: note || undefined,
+      })
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, fdsFiles: [...p.fdsFiles, file] },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to add FDS file', error)
+      const message = toErrorMessage(error, 'Failed to add FDS file.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function addTechnicalDrawing(
+    customerId: string,
+    projectId: string,
+    data: { name: string; url?: string; note?: string },
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to add technical drawings.'
+      setActionError(message)
+      return message
+    }
+    const trimmedName = data.name.trim()
+    if (!trimmedName) return 'Enter a file name.'
+    const url = data.url?.trim()
+    const note = data.note?.trim()
+    try {
+      const file = await createTechnicalDrawingRecord(projectId, {
+        name: trimmedName,
+        url: url || undefined,
+        note: note || undefined,
+      })
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, technicalDrawings: [...p.technicalDrawings, file] },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to add technical drawing', error)
+      const message = toErrorMessage(error, 'Failed to add technical drawing.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function addSignOff(
+    customerId: string,
+    projectId: string,
+    data: { title: string; signedBy?: string; date?: string; note?: string },
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to add sign-offs.'
+      setActionError(message)
+      return message
+    }
+    const trimmedTitle = data.title.trim()
+    if (!trimmedTitle) return 'Enter a sign-off title.'
+    const signedBy = data.signedBy?.trim()
+    const date = data.date?.trim()
+    const note = data.note?.trim()
+    try {
+      const signOff = await createSignOffRecord(projectId, {
+        title: trimmedTitle,
+        signedBy: signedBy || undefined,
+        date: date || undefined,
+        note: note || undefined,
+      })
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, signOffs: [...p.signOffs, signOff] },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to add sign-off', error)
+      const message = toErrorMessage(error, 'Failed to add sign-off.')
       setActionError(message)
       return message
     }
@@ -572,306 +1080,6 @@ export default function App() {
     )
   }
 
-  // Collapsible project row
-  function ProjectRow({ project, customer }: { project: Project; customer: Customer }) {
-    const isOpen = !!openProjects[project.id]
-    const [noteDraft, setNoteDraft] = useState(project.note ?? '')
-    const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
-    const [poForm, setPoForm] = useState({ number: '', note: '' })
-    const [woError, setWoError] = useState<string | null>(null)
-    const [poError, setPoError] = useState<string | null>(null)
-    const [isAddingWo, setIsAddingWo] = useState(false)
-    const [isAddingPo, setIsAddingPo] = useState(false)
-
-    useEffect(() => {
-      setNoteDraft(project.note ?? '')
-      setWoError(null)
-      setPoError(null)
-    }, [project.id])
-
-    useEffect(() => {
-      setNoteDraft(prev => {
-        const next = project.note ?? ''
-        return prev === next ? prev : next
-      })
-    }, [project.note])
-
-    return (
-      <Card className='mb-3 panel'>
-        <CardHeader>
-          <div className='flex items-center gap-3'>
-            <Button
-              variant='ghost'
-              onClick={() => setOpenProjects(s => ({ ...s, [project.id]: !isOpen }))}
-              className='p-1'
-              title={isOpen ? 'Collapse' : 'Expand'}
-            >
-              <ChevronDown
-                size={18}
-                className={`transition-transform duration-200 ${isOpen ? '' : '-rotate-90'}`}
-              />
-            </Button>
-
-            <div className='flex items-center gap-3 font-semibold text-slate-800'>
-              <span>Project: {project.number}</span>
-              {!isOpen && project.note && (
-                <span
-                  className='max-w-[28ch] truncate text-xs font-medium text-slate-500 italic'
-                  title={project.note}
-                >
-                  • {project.note}
-                </span>
-              )}
-            </div>
-
-            <Button variant='outline' onClick={() => navigator.clipboard.writeText(project.number)} title='Copy project number'>
-              <Copy size={16} /> Copy
-            </Button>
-          </div>
-
-          <div className='flex items-center gap-2'>
-            <Button
-              variant='ghost'
-              className='text-rose-600 hover:bg-rose-50'
-              onClick={() => void deleteProject(customer.id, project.id)}
-              title={canEdit ? 'Delete project' : 'Read-only access'}
-              disabled={!canEdit}
-            >
-              <Trash2 size={18} />
-            </Button>
-          </div>
-        </CardHeader>
-
-        <AnimatePresence initial={false}>
-          {isOpen && (
-            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
-              <CardContent className='grid gap-6 md:grid-cols-2'>
-                {/* Project note */}
-                <div className='md:col-span-2'>
-                  <div className='rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm'>
-                    <div className='mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500'>Project Note</div>
-                    <textarea
-                      className='w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                      rows={2}
-                      placeholder='Add a note about this project (optional)…'
-                      value={noteDraft}
-                      onChange={(e) => {
-                        const v = (e.target as HTMLTextAreaElement).value
-                        setNoteDraft(v)
-                        updateProjectNote(customer.id, project.id, v)
-                      }}
-                      disabled={!canEdit}
-                    />
-                  </div>
-                </div>
-
-                {/* Work Orders */}
-                <div>
-                  <div className='mb-2 text-sm font-semibold text-slate-700'>Work Orders</div>
-                  <div className='space-y-2'>
-                    {project.wos.length === 0 && <div className='text-sm text-slate-500'>None yet</div>}
-                    {project.wos.map(wo => (
-                      <div key={wo.id} className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
-                        <div>
-                          <div className='font-semibold text-slate-800'>
-                            {wo.number}
-                            <span className='ml-2 rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-xs font-medium text-sky-700'>{wo.type}</span>
-                          </div>
-                          {wo.note && <div className='text-xs text-slate-500'>{wo.note}</div>}
-                        </div>
-                        <div className='flex items-center gap-1'>
-                          <Button variant='outline' onClick={() => navigator.clipboard.writeText(wo.number)} title='Copy WO'>
-                            <Copy size={16} />
-                          </Button>
-                          <Button
-                            variant='ghost'
-                            className='text-rose-600 hover:bg-rose-50'
-                            onClick={() => void deleteWO(customer.id, project.id, wo.id)}
-                            title={canEdit ? 'Delete WO' : 'Read-only access'}
-                            disabled={!canEdit}
-                          >
-                            <X size={16} />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className='mt-3 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
-                    <div className='mb-2 text-sm font-semibold text-slate-700'>Add WO</div>
-                    <div className='grid gap-2 md:grid-cols-5'>
-                      <div className='md:col-span-2'>
-                        <Label>WO Number</Label>
-                        <div className='flex'>
-                          <span className='flex items-center rounded-l-2xl border border-r-0 border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm font-semibold text-slate-500'>WO</span>
-                          <Input
-                            className='rounded-l-none border-l-0'
-                            value={woForm.number}
-                            onChange={(e) => {
-                              setWoForm({ ...woForm, number: (e.target as HTMLInputElement).value })
-                              if (woError) setWoError(null)
-                            }}
-                            placeholder='000000'
-                            disabled={!canEdit}
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <Label>Type</Label>
-                        <select
-                          className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100'
-                          value={woForm.type}
-                          onChange={(e) => {
-                            setWoForm({ ...woForm, type: e.target.value as WOType })
-                            if (woError) setWoError(null)
-                          }}
-                          disabled={!canEdit}
-                        >
-                          <option>Build</option>
-                          <option>Onsite</option>
-                        </select>
-                      </div>
-                      <div className='md:col-span-2'>
-                        <Label>Optional note</Label>
-                        <Input
-                          value={woForm.note}
-                          onChange={(e) => setWoForm({ ...woForm, note: (e.target as HTMLInputElement).value })}
-                          placeholder='e.g. Line 2 SAT'
-                          disabled={!canEdit}
-                        />
-                      </div>
-                    </div>
-                    <div className='mt-2 space-y-2'>
-                      <Button
-                        disabled={isAddingWo || !canEdit}
-                        onClick={async () => {
-                          const raw = woForm.number.trim()
-                          if (!raw) {
-                            setWoError('Enter a work order number.')
-                            return
-                          }
-                          setIsAddingWo(true)
-                          try {
-                            const result = await addWO(customer.id, project.id, { number: raw, type: woForm.type, note: woForm.note })
-                            if (result) {
-                              setWoError(result)
-                              return
-                            }
-                            setWoForm({ number: '', type: 'Build', note: '' })
-                            setWoError(null)
-                          } finally {
-                            setIsAddingWo(false)
-                          }
-                        }}
-                        title={canEdit ? 'Add work order' : 'Read-only access'}
-                      >
-                        <Plus size={16} /> Add WO
-                      </Button>
-                      {woError && (
-                        <p className='flex items-center gap-1 text-sm text-rose-600'>
-                          <AlertCircle size={14} /> {woError}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Purchase Orders */}
-                <div>
-                  <div className='mb-2 text-sm font-semibold text-slate-700'>Purchase Orders</div>
-                  <div className='space-y-2'>
-                    {project.pos.length === 0 && <div className='text-sm text-slate-500'>None yet</div>}
-                    {project.pos.map(po => (
-                      <div key={po.id} className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
-                        <div>
-                          <div className='font-semibold text-slate-800'>{po.number}</div>
-                          {po.note && <div className='text-xs text-slate-500'>{po.note}</div>}
-                        </div>
-                        <div className='flex items-center gap-1'>
-                          <Button variant='outline' onClick={() => navigator.clipboard.writeText(po.number)} title='Copy PO'>
-                            <Copy size={16} />
-                          </Button>
-                          <Button
-                            variant='ghost'
-                            className='text-rose-600 hover:bg-rose-50'
-                            onClick={() => void deletePO(customer.id, project.id, po.id)}
-                            title={canEdit ? 'Delete PO' : 'Read-only access'}
-                            disabled={!canEdit}
-                          >
-                            <X size={16} />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className='mt-3 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
-                    <div className='mb-2 text-sm font-semibold text-slate-700'>Add PO</div>
-                    <div className='grid gap-2 md:grid-cols-5'>
-                      <div className='md:col-span-3'>
-                        <Label>PO Number</Label>
-                        <Input
-                          value={poForm.number}
-                          onChange={(e) => {
-                            setPoForm({ ...poForm, number: (e.target as HTMLInputElement).value })
-                            if (poError) setPoError(null)
-                          }}
-                          placeholder='PO-90001'
-                          disabled={!canEdit}
-                        />
-                      </div>
-                      <div className='md:col-span-2'>
-                        <Label>Optional note</Label>
-                        <Input
-                          value={poForm.note}
-                          onChange={(e) => setPoForm({ ...poForm, note: (e.target as HTMLInputElement).value })}
-                          placeholder='e.g. deposit'
-                          disabled={!canEdit}
-                        />
-                      </div>
-                    </div>
-                    <div className='mt-2 space-y-2'>
-                      <Button
-                        disabled={isAddingPo || !canEdit}
-                        onClick={async () => {
-                          const raw = poForm.number.trim()
-                          if (!raw) {
-                            setPoError('Enter a purchase order number.')
-                            return
-                          }
-                          setIsAddingPo(true)
-                          try {
-                            const result = await addPO(customer.id, project.id, { number: raw, note: poForm.note })
-                            if (result) {
-                            setPoError(result)
-                            return
-                          }
-                          setPoForm({ number: '', note: '' })
-                          setPoError(null)
-                        } finally {
-                          setIsAddingPo(false)
-                        }
-                      }}
-                        title={canEdit ? 'Add purchase order' : 'Read-only access'}
-                      >
-                        <Plus size={16} /> Add PO
-                      </Button>
-                      {poError && (
-                        <p className='flex items-center gap-1 text-sm text-rose-600'>
-                          <AlertCircle size={14} /> {poError}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </Card>
-    )
-  }
-
   if (isLoading) {
     return (
       <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
@@ -934,165 +1142,11 @@ export default function App() {
           </div>
         )}
 
-        <Card className='mb-6 panel'>
-          <CardHeader>
-            <div className='flex items-center gap-2'>
-              <Search size={18} />
-              <div className='font-medium'>Index Search</div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className='grid gap-3 md:grid-cols-3'>
-              <div>
-                <Label>Customer</Label>
-                <Input
-                  list='customer-list'
-                  value={customerQuery}
-                  onChange={(e) => setCustomerQuery((e.target as HTMLInputElement).value)}
-                  placeholder='Start typing a name…'
-                />
-                <datalist id='customer-list'>
-                  {customerOptions.map(name => (
-                    <option key={name} value={name} />
-                  ))}
-                </datalist>
-              </div>
-              <div>
-                <Label>Project Number</Label>
-                <Input value={projectQuery} onChange={(e) => setProjectQuery((e.target as HTMLInputElement).value)} placeholder='e.g. P1403' />
-              </div>
-              <div>
-                <Label>Work Order Number</Label>
-                <Input value={woQuery} onChange={(e) => setWoQuery((e.target as HTMLInputElement).value)} placeholder='e.g. WO804322' />
-              </div>
-            </div>
-
-            <div className='mt-4'>
-              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
-              <div className='mt-2 grid gap-2 md:grid-cols-2'>
-                {!hasSearchInput ? (
-                  <div className='text-sm text-slate-500'>Start typing above to find a customer, project, or work order.</div>
-                ) : searchMatches.length === 0 ? (
-                  <div className='text-sm text-slate-500'>No matches found.</div>
-                ) : (
-                  searchMatches.map(m => (
-                    <button
-                      key={`${m.kind}_${m.customerId}_${m.projectId ?? ''}_${m.label}`}
-                      onClick={() => setSelectedCustomerId(m.customerId)}
-                      className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
-                      title={
-                        m.kind === 'customer'
-                          ? 'Open customer'
-                          : m.kind === 'project'
-                          ? 'Open customer at project'
-                          : 'Open customer at work order'
-                      }
-                    >
-                      <div>
-                        <div className='text-sm font-semibold text-slate-800'>{m.label}</div>
-                        <div className='text-xs font-medium text-slate-500'>{m.kind.toUpperCase()}</div>
-                      </div>
-                      <ChevronRight size={18} />
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {selectedCustomer ? (
-          <Card className='mb-6 panel'>
-            <CardHeader>
-              <div className='flex items-center gap-2'>
-                <div className='text-lg font-semibold'>Customer: {selectedCustomer.name}</div>
-              </div>
-              <div className='flex items-center gap-2'>
-                <Button variant='outline' onClick={() => setSelectedCustomerId(null)}>Back to Index</Button>
-                <Button
-                  variant='ghost'
-                  className='text-rose-600 hover:bg-rose-50'
-                  onClick={() => {
-                    if (!selectedCustomer) return
-                    const confirmed = window.confirm('Delete this customer and all associated projects, purchase orders, and work orders?')
-                    if (!confirmed) return
-                    void deleteCustomer(selectedCustomer.id)
-                  }}
-                  title={canEdit ? 'Delete customer' : 'Read-only access'}
-                  disabled={!canEdit}
-                >
-                  <Trash2 size={16} /> Delete Customer
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className='grid gap-4 md:grid-cols-2'>
-                <div className='md:col-span-2 space-y-2'>
-                  <EditableField
-                    label='Address'
-                    value={selectedCustomer.address}
-                    fieldKey={`addr_${selectedCustomer.id}`}
-                    placeholder='Add address'
-                    copyable
-                    copyTitle='Copy address'
-                    onSave={(v) => upsertCustomer({ ...selectedCustomer, address: v ? v : undefined })}
-                  />
-                  {selectedCustomerAddressForMap ? (
-                    <a
-                      className='inline-flex items-center gap-1 text-sm font-medium text-sky-600 hover:text-sky-700'
-                      href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(selectedCustomerAddressForMap)}`}
-                      target='_blank'
-                      rel='noreferrer'
-                      title='View address on Google Maps'
-                    >
-                      <MapPin size={14} /> View on Google Maps
-                    </a>
-                  ) : null}
-                </div>
-                <EditableField
-                  label='Contact Name'
-                  value={selectedCustomer.contactName}
-                  fieldKey={`cname_${selectedCustomer.id}`}
-                  placeholder='Add contact'
-                  copyable
-                  copyTitle='Copy contact name'
-                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactName: v ? v : undefined })}
-                />
-                <EditableField
-                  label='Contact Phone'
-                  value={selectedCustomer.contactPhone}
-                  fieldKey={`cphone_${selectedCustomer.id}`}
-                  placeholder='Add phone'
-                  copyable
-                  copyTitle='Copy phone number'
-                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactPhone: v ? v : undefined })}
-                />
-                <EditableField
-                  label='Contact Email'
-                  value={selectedCustomer.contactEmail}
-                  fieldKey={`cemail_${selectedCustomer.id}`}
-                  placeholder='Add email'
-                  copyable
-                  copyTitle='Copy email address'
-                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactEmail: v ? v : undefined })}
-                />
-              </div>
-
-              <div className='mt-6 rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm'>
-                <div className='mb-2 text-sm font-semibold text-slate-700'>Add Project</div>
-                <AddProjectForm onAdd={(num) => addProject(selectedCustomer.id, num)} disabled={!canEdit} />
-              </div>
-
-              <div className='mt-6'>
-                <div className='mb-2 text-sm font-semibold text-slate-700'>Projects</div>
-                {selectedCustomer.projects.length === 0 && <div className='text-sm text-slate-500'>No projects yet.</div>}
-                {selectedCustomer.projects.map(p => (<ProjectRow key={p.id} project={p} customer={selectedCustomer} />))}
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
-
-        <div className='h-8' />
+        <Routes>
+          <Route path='/' element={<HomeView />} />
+          <Route path='/project/:projectId' element={<ProjectRoute />} />
+          <Route path='*' element={<Navigate to='/' replace />} />
+        </Routes>
       </div>
 
       {/* New Customer Modal */}
@@ -1283,5 +1337,13 @@ function AddProjectForm({ onAdd, disabled = false }: { onAdd: (num: string) => P
         </p>
       )}
     </div>
+  )
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AppContent />
+    </BrowserRouter>
   )
 }
