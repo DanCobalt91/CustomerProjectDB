@@ -1,14 +1,5 @@
-import React, { useEffect, useState } from 'react'
-import {
-  AlertCircle,
-  ArrowLeft,
-  Copy,
-  ExternalLink,
-  FileText,
-  Plus,
-  Trash2,
-  X,
-} from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { AlertCircle, ArrowLeft, Copy, Plus, Trash2, X } from 'lucide-react'
 import type { Customer, Project, WOType } from '../types'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
@@ -24,12 +15,6 @@ export type ProjectPageProps = {
   onDeleteWO: (woId: string) => void
   onAddPO: (data: { number: string; note?: string }) => Promise<string | null>
   onDeletePO: (poId: string) => void
-  onAddFdsFile: (data: { name: string; url?: string; note?: string }) => Promise<string | null>
-  onDeleteFdsFile: (fileId: string) => void
-  onAddTechnicalDrawing: (data: { name: string; url?: string; note?: string }) => Promise<string | null>
-  onDeleteTechnicalDrawing: (fileId: string) => void
-  onAddSignOff: (data: { title: string; signedBy?: string; date?: string; note?: string }) => Promise<string | null>
-  onDeleteSignOff: (signOffId: string) => void
   onDeleteProject: () => void
   onNavigateBack: () => void
 }
@@ -52,36 +37,23 @@ export default function ProjectPage({
   onDeleteWO,
   onAddPO,
   onDeletePO,
-  onAddFdsFile,
-  onDeleteFdsFile,
-  onAddTechnicalDrawing,
-  onDeleteTechnicalDrawing,
-  onAddSignOff,
-  onDeleteSignOff,
   onDeleteProject,
   onNavigateBack,
 }: ProjectPageProps) {
   const [noteDraft, setNoteDraft] = useState(project.note ?? '')
   const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
   const [poForm, setPoForm] = useState({ number: '', note: '' })
-  const [fdsForm, setFdsForm] = useState({ name: '', url: '', note: '' })
-  const [technicalForm, setTechnicalForm] = useState({ name: '', url: '', note: '' })
-  const [signOffForm, setSignOffForm] = useState({ title: '', signedBy: '', date: '', note: '' })
-
   const [woError, setWoError] = useState<string | null>(null)
   const [poError, setPoError] = useState<string | null>(null)
-  const [fdsError, setFdsError] = useState<string | null>(null)
-  const [technicalError, setTechnicalError] = useState<string | null>(null)
-  const [signOffError, setSignOffError] = useState<string | null>(null)
-
   const [isAddingWo, setIsAddingWo] = useState(false)
   const [isAddingPo, setIsAddingPo] = useState(false)
-  const [isAddingFds, setIsAddingFds] = useState(false)
-  const [isAddingTechnical, setIsAddingTechnical] = useState(false)
-  const [isAddingSignOff, setIsAddingSignOff] = useState(false)
 
   useEffect(() => {
     setNoteDraft(project.note ?? '')
+    setWoForm({ number: '', type: 'Build', note: '' })
+    setPoForm({ number: '', note: '' })
+    setWoError(null)
+    setPoError(null)
   }, [project.id])
 
   useEffect(() => {
@@ -94,10 +66,55 @@ export default function ProjectPage({
   const summary = [
     { label: 'Work Orders', value: project.wos.length },
     { label: 'Purchase Orders', value: project.pos.length },
-    { label: 'FDS Files', value: project.fdsFiles.length },
-    { label: 'Technical Drawings', value: project.technicalDrawings.length },
-    { label: 'Sign Offs', value: project.signOffs.length },
   ]
+
+  const handleAddWO = async () => {
+    if (!canEdit) {
+      setWoError('You have read-only access.')
+      return
+    }
+    const raw = woForm.number.trim()
+    if (!raw) {
+      setWoError('Enter a work order number.')
+      return
+    }
+    setIsAddingWo(true)
+    try {
+      const result = await onAddWO({ number: raw, type: woForm.type, note: woForm.note })
+      if (result) {
+        setWoError(result)
+        return
+      }
+      setWoForm({ number: '', type: 'Build', note: '' })
+      setWoError(null)
+    } finally {
+      setIsAddingWo(false)
+    }
+  }
+
+  const handleAddPO = async () => {
+    if (!canEdit) {
+      setPoError('You have read-only access.')
+      return
+    }
+    const raw = poForm.number.trim()
+    if (!raw) {
+      setPoError('Enter a purchase order number.')
+      return
+    }
+    setIsAddingPo(true)
+    try {
+      const result = await onAddPO({ number: raw, note: poForm.note })
+      if (result) {
+        setPoError(result)
+        return
+      }
+      setPoForm({ number: '', note: '' })
+      setPoError(null)
+    } finally {
+      setIsAddingPo(false)
+    }
+  }
 
   return (
     <Card className='panel'>
@@ -128,7 +145,7 @@ export default function ProjectPage({
         </div>
       </CardHeader>
       <CardContent className='space-y-8'>
-        <section className='grid gap-3 sm:grid-cols-2 lg:grid-cols-5'>
+        <section className='grid gap-3 sm:grid-cols-2'>
           {summary.map(item => (
             <SummaryTile key={item.label} label={item.label} value={item.value} />
           ))}
@@ -229,25 +246,7 @@ export default function ProjectPage({
               <div className='mt-2 space-y-2'>
                 <Button
                   disabled={isAddingWo || !canEdit}
-                  onClick={async () => {
-                    const raw = woForm.number.trim()
-                    if (!raw) {
-                      setWoError('Enter a work order number.')
-                      return
-                    }
-                    setIsAddingWo(true)
-                    try {
-                      const result = await onAddWO({ number: raw, type: woForm.type, note: woForm.note })
-                      if (result) {
-                        setWoError(result)
-                        return
-                      }
-                      setWoForm({ number: '', type: 'Build', note: '' })
-                      setWoError(null)
-                    } finally {
-                      setIsAddingWo(false)
-                    }
-                  }}
+                  onClick={() => void handleAddWO()}
                   title={canEdit ? 'Add work order' : 'Read-only access'}
                 >
                   <Plus size={16} /> Add WO
@@ -317,25 +316,7 @@ export default function ProjectPage({
               <div className='mt-2 space-y-2'>
                 <Button
                   disabled={isAddingPo || !canEdit}
-                  onClick={async () => {
-                    const raw = poForm.number.trim()
-                    if (!raw) {
-                      setPoError('Enter a purchase order number.')
-                      return
-                    }
-                    setIsAddingPo(true)
-                    try {
-                      const result = await onAddPO({ number: raw, note: poForm.note })
-                      if (result) {
-                        setPoError(result)
-                        return
-                      }
-                      setPoForm({ number: '', note: '' })
-                      setPoError(null)
-                    } finally {
-                      setIsAddingPo(false)
-                    }
-                  }}
+                  onClick={() => void handleAddPO()}
                   title={canEdit ? 'Add purchase order' : 'Read-only access'}
                 >
                   <Plus size={16} /> Add PO
@@ -346,344 +327,6 @@ export default function ProjectPage({
                   </p>
                 )}
               </div>
-            </div>
-          </div>
-        </section>
-
-        <section className='grid gap-6 md:grid-cols-2'>
-          <div>
-            <div className='mb-2 flex items-center justify-between text-sm font-semibold text-slate-700'>
-              <span>FDS Files</span>
-            </div>
-            <div className='space-y-2'>
-              {project.fdsFiles.length === 0 && <div className='text-sm text-slate-500'>None yet</div>}
-              {project.fdsFiles.map(file => (
-                <div key={file.id} className='rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
-                  <div className='flex items-start justify-between gap-3'>
-                    <div>
-                      <div className='flex items-center gap-2 text-sm font-semibold text-slate-800'>
-                        <FileText size={16} /> {file.name}
-                      </div>
-                      {file.url && (
-                        <a
-                          href={file.url}
-                          target='_blank'
-                          rel='noreferrer'
-                          className='mt-1 inline-flex items-center gap-1 text-xs font-medium text-sky-600 hover:text-sky-500'
-                        >
-                          <ExternalLink size={14} /> Open link
-                        </a>
-                      )}
-                      {file.note && <div className='mt-1 text-xs text-slate-500'>{file.note}</div>}
-                    </div>
-                    <div className='flex items-center gap-1'>
-                      <Button variant='outline' onClick={() => navigator.clipboard.writeText(file.name)} title='Copy file name'>
-                        <Copy size={16} />
-                      </Button>
-                      <Button
-                        variant='ghost'
-                        className='text-rose-600 hover:bg-rose-50'
-                        onClick={() => onDeleteFdsFile(file.id)}
-                        title={canEdit ? 'Delete file' : 'Read-only access'}
-                        disabled={!canEdit}
-                      >
-                        <X size={16} />
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className='mt-4 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
-              <div className='mb-2 text-sm font-semibold text-slate-700'>Add FDS File</div>
-              <div className='space-y-2'>
-                <div>
-                  <Label>File name</Label>
-                  <Input
-                    value={fdsForm.name}
-                    onChange={(e) => {
-                      setFdsForm({ ...fdsForm, name: (e.target as HTMLInputElement).value })
-                      if (fdsError) setFdsError(null)
-                    }}
-                    placeholder='e.g. FDS-Report.pdf'
-                    disabled={!canEdit}
-                  />
-                </div>
-                <div>
-                  <Label>Link (optional)</Label>
-                  <Input
-                    value={fdsForm.url}
-                    onChange={(e) => setFdsForm({ ...fdsForm, url: (e.target as HTMLInputElement).value })}
-                    placeholder='https://…'
-                    disabled={!canEdit}
-                  />
-                </div>
-                <div>
-                  <Label>Note (optional)</Label>
-                  <Input
-                    value={fdsForm.note}
-                    onChange={(e) => setFdsForm({ ...fdsForm, note: (e.target as HTMLInputElement).value })}
-                    placeholder='Describe the file'
-                    disabled={!canEdit}
-                  />
-                </div>
-              </div>
-              <div className='mt-2 space-y-2'>
-                <Button
-                  disabled={isAddingFds || !canEdit}
-                  onClick={async () => {
-                    const rawName = fdsForm.name.trim()
-                    if (!rawName) {
-                      setFdsError('Enter a file name.')
-                      return
-                    }
-                    setIsAddingFds(true)
-                    try {
-                      const result = await onAddFdsFile({ name: rawName, url: fdsForm.url, note: fdsForm.note })
-                      if (result) {
-                        setFdsError(result)
-                        return
-                      }
-                      setFdsForm({ name: '', url: '', note: '' })
-                      setFdsError(null)
-                    } finally {
-                      setIsAddingFds(false)
-                    }
-                  }}
-                  title={canEdit ? 'Add FDS file' : 'Read-only access'}
-                >
-                  <Plus size={16} /> Add FDS File
-                </Button>
-                {fdsError && (
-                  <p className='flex items-center gap-1 text-sm text-rose-600'>
-                    <AlertCircle size={14} /> {fdsError}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div>
-            <div className='mb-2 text-sm font-semibold text-slate-700'>Technical Drawings</div>
-            <div className='space-y-2'>
-              {project.technicalDrawings.length === 0 && <div className='text-sm text-slate-500'>None yet</div>}
-              {project.technicalDrawings.map(file => (
-                <div key={file.id} className='rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
-                  <div className='flex items-start justify-between gap-3'>
-                    <div>
-                      <div className='flex items-center gap-2 text-sm font-semibold text-slate-800'>
-                        <FileText size={16} /> {file.name}
-                      </div>
-                      {file.url && (
-                        <a
-                          href={file.url}
-                          target='_blank'
-                          rel='noreferrer'
-                          className='mt-1 inline-flex items-center gap-1 text-xs font-medium text-sky-600 hover:text-sky-500'
-                        >
-                          <ExternalLink size={14} /> Open link
-                        </a>
-                      )}
-                      {file.note && <div className='mt-1 text-xs text-slate-500'>{file.note}</div>}
-                    </div>
-                    <div className='flex items-center gap-1'>
-                      <Button variant='outline' onClick={() => navigator.clipboard.writeText(file.name)} title='Copy file name'>
-                        <Copy size={16} />
-                      </Button>
-                      <Button
-                        variant='ghost'
-                        className='text-rose-600 hover:bg-rose-50'
-                        onClick={() => onDeleteTechnicalDrawing(file.id)}
-                        title={canEdit ? 'Delete file' : 'Read-only access'}
-                        disabled={!canEdit}
-                      >
-                        <X size={16} />
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className='mt-4 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
-              <div className='mb-2 text-sm font-semibold text-slate-700'>Add Technical Drawing</div>
-              <div className='space-y-2'>
-                <div>
-                  <Label>File name</Label>
-                  <Input
-                    value={technicalForm.name}
-                    onChange={(e) => {
-                      setTechnicalForm({ ...technicalForm, name: (e.target as HTMLInputElement).value })
-                      if (technicalError) setTechnicalError(null)
-                    }}
-                    placeholder='e.g. Drawing-A1.dwg'
-                    disabled={!canEdit}
-                  />
-                </div>
-                <div>
-                  <Label>Link (optional)</Label>
-                  <Input
-                    value={technicalForm.url}
-                    onChange={(e) => setTechnicalForm({ ...technicalForm, url: (e.target as HTMLInputElement).value })}
-                    placeholder='https://…'
-                    disabled={!canEdit}
-                  />
-                </div>
-                <div>
-                  <Label>Note (optional)</Label>
-                  <Input
-                    value={technicalForm.note}
-                    onChange={(e) => setTechnicalForm({ ...technicalForm, note: (e.target as HTMLInputElement).value })}
-                    placeholder='Describe the drawing'
-                    disabled={!canEdit}
-                  />
-                </div>
-              </div>
-              <div className='mt-2 space-y-2'>
-                <Button
-                  disabled={isAddingTechnical || !canEdit}
-                  onClick={async () => {
-                    const rawName = technicalForm.name.trim()
-                    if (!rawName) {
-                      setTechnicalError('Enter a file name.')
-                      return
-                    }
-                    setIsAddingTechnical(true)
-                    try {
-                      const result = await onAddTechnicalDrawing({ name: rawName, url: technicalForm.url, note: technicalForm.note })
-                      if (result) {
-                        setTechnicalError(result)
-                        return
-                      }
-                      setTechnicalForm({ name: '', url: '', note: '' })
-                      setTechnicalError(null)
-                    } finally {
-                      setIsAddingTechnical(false)
-                    }
-                  }}
-                  title={canEdit ? 'Add technical drawing' : 'Read-only access'}
-                >
-                  <Plus size={16} /> Add Technical Drawing
-                </Button>
-                {technicalError && (
-                  <p className='flex items-center gap-1 text-sm text-rose-600'>
-                    <AlertCircle size={14} /> {technicalError}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section>
-          <div className='mb-2 text-sm font-semibold text-slate-700'>Sign Offs</div>
-          <div className='space-y-2'>
-            {project.signOffs.length === 0 && <div className='text-sm text-slate-500'>No sign-offs recorded.</div>}
-            {project.signOffs.map(item => (
-              <div key={item.id} className='rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
-                <div className='flex flex-col gap-1'>
-                  <div className='flex items-center justify-between gap-2'>
-                    <div className='flex items-center gap-2 text-sm font-semibold text-slate-800'>
-                      <FileText size={16} /> {item.title}
-                    </div>
-                    <Button
-                      variant='ghost'
-                      className='text-rose-600 hover:bg-rose-50'
-                      onClick={() => onDeleteSignOff(item.id)}
-                      title={canEdit ? 'Delete sign-off' : 'Read-only access'}
-                      disabled={!canEdit}
-                    >
-                      <X size={16} />
-                    </Button>
-                  </div>
-                  {item.signedBy && <div className='text-xs text-slate-500'>Signed by {item.signedBy}</div>}
-                  {item.date && <div className='text-xs text-slate-500'>Date: {item.date}</div>}
-                  {item.note && <div className='text-xs text-slate-500'>{item.note}</div>}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className='mt-4 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
-            <div className='mb-2 text-sm font-semibold text-slate-700'>Add Sign-Off</div>
-            <div className='grid gap-2 md:grid-cols-2'>
-              <div className='md:col-span-2'>
-                <Label>Title</Label>
-                <Input
-                  value={signOffForm.title}
-                  onChange={(e) => {
-                    setSignOffForm({ ...signOffForm, title: (e.target as HTMLInputElement).value })
-                    if (signOffError) setSignOffError(null)
-                  }}
-                  placeholder='e.g. Commissioning sign-off'
-                  disabled={!canEdit}
-                />
-              </div>
-              <div>
-                <Label>Signed by (optional)</Label>
-                <Input
-                  value={signOffForm.signedBy}
-                  onChange={(e) => setSignOffForm({ ...signOffForm, signedBy: (e.target as HTMLInputElement).value })}
-                  placeholder='Name'
-                  disabled={!canEdit}
-                />
-              </div>
-              <div>
-                <Label>Date (optional)</Label>
-                <Input
-                  type='date'
-                  value={signOffForm.date}
-                  onChange={(e) => setSignOffForm({ ...signOffForm, date: (e.target as HTMLInputElement).value })}
-                  disabled={!canEdit}
-                />
-              </div>
-              <div className='md:col-span-2'>
-                <Label>Note (optional)</Label>
-                <Input
-                  value={signOffForm.note}
-                  onChange={(e) => setSignOffForm({ ...signOffForm, note: (e.target as HTMLInputElement).value })}
-                  placeholder='Add additional details'
-                  disabled={!canEdit}
-                />
-              </div>
-            </div>
-            <div className='mt-2 space-y-2'>
-              <Button
-                disabled={isAddingSignOff || !canEdit}
-                onClick={async () => {
-                  const rawTitle = signOffForm.title.trim()
-                  if (!rawTitle) {
-                    setSignOffError('Enter a sign-off title.')
-                    return
-                  }
-                  setIsAddingSignOff(true)
-                  try {
-                    const result = await onAddSignOff({
-                      title: rawTitle,
-                      signedBy: signOffForm.signedBy,
-                      date: signOffForm.date,
-                      note: signOffForm.note,
-                    })
-                    if (result) {
-                      setSignOffError(result)
-                      return
-                    }
-                    setSignOffForm({ title: '', signedBy: '', date: '', note: '' })
-                    setSignOffError(null)
-                  } finally {
-                    setIsAddingSignOff(false)
-                  }
-                }}
-                title={canEdit ? 'Add sign-off' : 'Read-only access'}
-              >
-                <Plus size={16} /> Add Sign-Off
-              </Button>
-              {signOffError && (
-                <p className='flex items-center gap-1 text-sm text-rose-600'>
-                  <AlertCircle size={14} /> {signOffError}
-                </p>
-              )}
             </div>
           </div>
         </section>

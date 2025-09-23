@@ -25,12 +25,6 @@ import {
   createPO as createPORecord,
   deletePO as deletePORecord,
   updateProject as updateProjectRecord,
-  createFdsFile as createFdsFileRecord,
-  deleteFdsFile as deleteFdsFileRecord,
-  createTechnicalDrawing as createTechnicalDrawingRecord,
-  deleteTechnicalDrawing as deleteTechnicalDrawingRecord,
-  createSignOff as createSignOffRecord,
-  deleteSignOff as deleteSignOffRecord,
 } from '../lib/storage'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
@@ -416,9 +410,6 @@ function AppContent() {
                         {[
                           { label: 'Work Orders', value: project.wos.length },
                           { label: 'Purchase Orders', value: project.pos.length },
-                          { label: 'FDS Files', value: project.fdsFiles.length },
-                          { label: 'Technical Drawings', value: project.technicalDrawings.length },
-                          { label: 'Sign Offs', value: project.signOffs.length },
                         ].map(item => (
                           <div key={item.label} className='rounded-xl border border-slate-200 bg-white/80 p-3'>
                             <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{item.label}</div>
@@ -618,93 +609,6 @@ function AppContent() {
     }
   }
 
-  async function deleteFdsFile(customerId: string, projectId: string, fileId: string) {
-    if (!canEdit) {
-      setActionError('Not authorized to delete FDS files.')
-      return
-    }
-    try {
-      await deleteFdsFileRecord(fileId)
-      setDb(prev =>
-        prev.map(c =>
-          c.id !== customerId
-            ? c
-            : {
-                ...c,
-                projects: c.projects.map(p =>
-                  p.id !== projectId
-                    ? p
-                    : { ...p, fdsFiles: p.fdsFiles.filter(file => file.id !== fileId) },
-                ),
-              },
-        ),
-      )
-      setActionError(null)
-    } catch (error) {
-      console.error('Failed to delete FDS file', error)
-      const message = toErrorMessage(error, 'Failed to delete FDS file.')
-      setActionError(message)
-    }
-  }
-
-  async function deleteTechnicalDrawing(customerId: string, projectId: string, fileId: string) {
-    if (!canEdit) {
-      setActionError('Not authorized to delete technical drawings.')
-      return
-    }
-    try {
-      await deleteTechnicalDrawingRecord(fileId)
-      setDb(prev =>
-        prev.map(c =>
-          c.id !== customerId
-            ? c
-            : {
-                ...c,
-                projects: c.projects.map(p =>
-                  p.id !== projectId
-                    ? p
-                    : { ...p, technicalDrawings: p.technicalDrawings.filter(file => file.id !== fileId) },
-                ),
-              },
-        ),
-      )
-      setActionError(null)
-    } catch (error) {
-      console.error('Failed to delete technical drawing', error)
-      const message = toErrorMessage(error, 'Failed to delete technical drawing.')
-      setActionError(message)
-    }
-  }
-
-  async function deleteSignOff(customerId: string, projectId: string, signOffId: string) {
-    if (!canEdit) {
-      setActionError('Not authorized to delete sign-offs.')
-      return
-    }
-    try {
-      await deleteSignOffRecord(signOffId)
-      setDb(prev =>
-        prev.map(c =>
-          c.id !== customerId
-            ? c
-            : {
-                ...c,
-                projects: c.projects.map(p =>
-                  p.id !== projectId
-                    ? p
-                    : { ...p, signOffs: p.signOffs.filter(item => item.id !== signOffId) },
-                ),
-              },
-        ),
-      )
-      setActionError(null)
-    } catch (error) {
-      console.error('Failed to delete sign-off', error)
-      const message = toErrorMessage(error, 'Failed to delete sign-off.')
-      setActionError(message)
-    }
-  }
-
   function updateProjectNote(customerId: string, projectId: string, note: string) {
     if (!canEdit) {
       setActionError('Not authorized to update project notes.')
@@ -808,136 +712,6 @@ function AppContent() {
     } catch (error) {
       console.error('Failed to create purchase order', error)
       const message = toErrorMessage(error, 'Failed to create purchase order.')
-      setActionError(message)
-      return message
-    }
-  }
-
-  async function addFdsFile(
-    customerId: string,
-    projectId: string,
-    data: { name: string; url?: string; note?: string },
-  ): Promise<string | null> {
-    if (!canEdit) {
-      const message = 'Not authorized to add FDS files.'
-      setActionError(message)
-      return message
-    }
-    const trimmedName = data.name.trim()
-    if (!trimmedName) return 'Enter a file name.'
-    const url = data.url?.trim()
-    const note = data.note?.trim()
-    try {
-      const file = await createFdsFileRecord(projectId, {
-        name: trimmedName,
-        url: url || undefined,
-        note: note || undefined,
-      })
-      setDb(prev =>
-        prev.map(c =>
-          c.id !== customerId
-            ? c
-            : {
-                ...c,
-                projects: c.projects.map(p =>
-                  p.id !== projectId ? p : { ...p, fdsFiles: [...p.fdsFiles, file] },
-                ),
-              },
-        ),
-      )
-      setActionError(null)
-      return null
-    } catch (error) {
-      console.error('Failed to add FDS file', error)
-      const message = toErrorMessage(error, 'Failed to add FDS file.')
-      setActionError(message)
-      return message
-    }
-  }
-
-  async function addTechnicalDrawing(
-    customerId: string,
-    projectId: string,
-    data: { name: string; url?: string; note?: string },
-  ): Promise<string | null> {
-    if (!canEdit) {
-      const message = 'Not authorized to add technical drawings.'
-      setActionError(message)
-      return message
-    }
-    const trimmedName = data.name.trim()
-    if (!trimmedName) return 'Enter a file name.'
-    const url = data.url?.trim()
-    const note = data.note?.trim()
-    try {
-      const file = await createTechnicalDrawingRecord(projectId, {
-        name: trimmedName,
-        url: url || undefined,
-        note: note || undefined,
-      })
-      setDb(prev =>
-        prev.map(c =>
-          c.id !== customerId
-            ? c
-            : {
-                ...c,
-                projects: c.projects.map(p =>
-                  p.id !== projectId
-                    ? p
-                    : { ...p, technicalDrawings: [...p.technicalDrawings, file] },
-                ),
-              },
-        ),
-      )
-      setActionError(null)
-      return null
-    } catch (error) {
-      console.error('Failed to add technical drawing', error)
-      const message = toErrorMessage(error, 'Failed to add technical drawing.')
-      setActionError(message)
-      return message
-    }
-  }
-
-  async function addSignOff(
-    customerId: string,
-    projectId: string,
-    data: { title: string; signedBy?: string; date?: string; note?: string },
-  ): Promise<string | null> {
-    if (!canEdit) {
-      const message = 'Not authorized to add sign-offs.'
-      setActionError(message)
-      return message
-    }
-    const trimmedTitle = data.title.trim()
-    if (!trimmedTitle) return 'Enter a sign-off title.'
-    const signedBy = data.signedBy?.trim()
-    const date = data.date?.trim()
-    const note = data.note?.trim()
-    try {
-      const signOff = await createSignOffRecord(projectId, {
-        title: trimmedTitle,
-        signedBy: signedBy || undefined,
-        date: date || undefined,
-        note: note || undefined,
-      })
-      setDb(prev =>
-        prev.map(c =>
-          c.id !== customerId
-            ? c
-            : {
-                ...c,
-                projects: c.projects.map(p =>
-                  p.id !== projectId ? p : { ...p, signOffs: [...p.signOffs, signOff] },
-                ),
-              },
-        ),
-      )
-      setActionError(null)
-      return null
-    } catch (error) {
-      console.error('Failed to add sign-off', error)
-      const message = toErrorMessage(error, 'Failed to add sign-off.')
       setActionError(message)
       return message
     }
@@ -1181,18 +955,6 @@ function AppContent() {
               onDeleteWO={(woId) => deleteWO(selectedProjectData.customer.id, selectedProjectData.project.id, woId)}
               onAddPO={(data) => addPO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
               onDeletePO={(poId) => deletePO(selectedProjectData.customer.id, selectedProjectData.project.id, poId)}
-              onAddFdsFile={(data) => addFdsFile(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
-              onDeleteFdsFile={(fileId) => deleteFdsFile(selectedProjectData.customer.id, selectedProjectData.project.id, fileId)}
-              onAddTechnicalDrawing={(data) =>
-                addTechnicalDrawing(selectedProjectData.customer.id, selectedProjectData.project.id, data)
-              }
-              onDeleteTechnicalDrawing={(fileId) =>
-                deleteTechnicalDrawing(selectedProjectData.customer.id, selectedProjectData.project.id, fileId)
-              }
-              onAddSignOff={(data) => addSignOff(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
-              onDeleteSignOff={(signOffId) =>
-                deleteSignOff(selectedProjectData.customer.id, selectedProjectData.project.id, signOffId)
-              }
               onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
               onNavigateBack={() => closeProject()}
             />
