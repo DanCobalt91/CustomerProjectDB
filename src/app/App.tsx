@@ -12,7 +12,8 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import type { Customer, ProjectFDS, WOType } from '../types'
+import type { Customer, CustomerContact, ProjectFile, ProjectFileCategory, WOType } from '../types'
+import { PROJECT_FILE_CATEGORIES } from '../types'
 import {
   listCustomers,
   createCustomer as createCustomerRecord,
@@ -30,24 +31,28 @@ import Label from '../components/ui/Label'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import ProjectPage from './ProjectPage'
 
-const FDS_MIME_BY_EXTENSION: Record<string, string> = {
+const PROJECT_FILE_MIME_BY_EXTENSION: Record<string, string> = {
   pdf: 'application/pdf',
   doc: 'application/msword',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  svg: 'image/svg+xml',
 }
 
 function guessMimeTypeFromName(name: string): string {
   const extension = name.split('.').pop()?.toLowerCase() ?? ''
-  return FDS_MIME_BY_EXTENSION[extension] ?? 'application/octet-stream'
+  return PROJECT_FILE_MIME_BY_EXTENSION[extension] ?? 'application/octet-stream'
 }
 
-function isAllowedFdsFile(file: File): boolean {
+function isAllowedProjectFile(file: File): boolean {
   const normalizedType = file.type?.toLowerCase()
-  if (normalizedType && Object.values(FDS_MIME_BY_EXTENSION).includes(normalizedType)) {
+  if (normalizedType && Object.values(PROJECT_FILE_MIME_BY_EXTENSION).includes(normalizedType)) {
     return true
   }
   const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
-  return !!FDS_MIME_BY_EXTENSION[extension]
+  return !!PROJECT_FILE_MIME_BY_EXTENSION[extension]
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
@@ -66,6 +71,12 @@ function readFileAsDataUrl(file: File): Promise<string> {
     }
     reader.readAsDataURL(file)
   })
+}
+
+function stripPrefix(value: string, pattern: RegExp): string {
+  const trimmed = value.trim()
+  const match = trimmed.match(pattern)
+  return match ? match[1].trim() : trimmed
 }
 
 function AppContent() {
@@ -99,9 +110,19 @@ function AppContent() {
   const [woQuery, setWoQuery] = useState('')
 
   // Create customer (modal)
-  const [newCust, setNewCust] = useState({ name: '', address: '', contactName: '', contactPhone: '', contactEmail: '' })
+  const [newCust, setNewCust] = useState({
+    name: '',
+    address: '',
+    contactName: '',
+    contactPosition: '',
+    contactPhone: '',
+    contactEmail: '',
+  })
   const [showNewCustomer, setShowNewCustomer] = useState(false)
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
+  const [showNewContactForm, setShowNewContactForm] = useState(false)
+  const [newContact, setNewContact] = useState({ name: '', position: '', phone: '', email: '' })
+  const [contactError, setContactError] = useState<string | null>(null)
 
   const refreshCustomers = useCallback(
     async (initial = false) => {
@@ -138,6 +159,14 @@ function AppContent() {
   const selectedCustomerAddressForMap = selectedCustomer?.address?.trim() || null
   const customerOptions = useMemo(() => db.map(c => c.name).sort(), [db])
   const canEdit = true
+
+
+  useEffect(() => {
+    setShowNewContactForm(false)
+    setNewContact({ name: '', position: '', phone: '', email: '' })
+    setContactError(null)
+  }, [selectedCustomer?.id])
+
 
 
   const searchMatches = useMemo(() => {
@@ -289,7 +318,10 @@ function AppContent() {
                     placeholder='Add address'
                     copyable
                     copyTitle='Copy address'
-                    onSave={(v) => upsertCustomer({ ...selectedCustomer, address: v ? v : undefined })}
+                    onSave={async (value) => {
+                      const trimmed = value.trim()
+                      await saveCustomerDetails(selectedCustomer.id, { address: trimmed ? trimmed : null })
+                    }}
                   />
                   {selectedCustomerAddressForMap ? (
                     <a
@@ -302,33 +334,175 @@ function AppContent() {
                     </a>
                   ) : null}
                 </div>
-                <EditableField
-                  label='Contact Name'
-                  value={selectedCustomer.contactName}
-                  fieldKey={`cname_${selectedCustomer.id}`}
-                  placeholder='Add contact'
-                  copyable
-                  copyTitle='Copy contact name'
-                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactName: v ? v : undefined })}
-                />
-                <EditableField
-                  label='Contact Phone'
-                  value={selectedCustomer.contactPhone}
-                  fieldKey={`cphone_${selectedCustomer.id}`}
-                  placeholder='Add phone'
-                  copyable
-                  copyTitle='Copy phone number'
-                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactPhone: v ? v : undefined })}
-                />
-                <EditableField
-                  label='Contact Email'
-                  value={selectedCustomer.contactEmail}
-                  fieldKey={`cemail_${selectedCustomer.id}`}
-                  placeholder='Add email'
-                  copyable
-                  copyTitle='Copy email address'
-                  onSave={(v) => upsertCustomer({ ...selectedCustomer, contactEmail: v ? v : undefined })}
-                />
+              </div>
+
+              <div className='mt-6 space-y-3'>
+                <div className='flex flex-wrap items-center justify-between gap-2'>
+                  <div className='text-sm font-semibold text-slate-700'>Contacts</div>
+                  <Button
+                    variant='outline'
+                    onClick={() => {
+                      setShowNewContactForm(prev => !prev)
+                      setContactError(null)
+                    }}
+                    title={canEdit ? (showNewContactForm ? 'Cancel adding contact' : 'Add contact') : 'Read-only access'}
+                    disabled={!canEdit}
+                  >
+                    {showNewContactForm ? (
+                      <>
+                        <X size={16} /> Cancel
+                      </>
+                    ) : (
+                      <>
+                        <Plus size={16} /> Add Contact
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                {selectedCustomer.contacts.length === 0 && !showNewContactForm && (
+                  <div className='text-sm text-slate-500'>No contacts yet.</div>
+                )}
+
+                {selectedCustomer.contacts.map((contact, index) => {
+                  return (
+                    <div key={contact.id} className='rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm'>
+                      <div className='flex flex-wrap items-center justify-between gap-2'>
+                        <div>
+                          <div className='text-sm font-semibold text-slate-800'>
+                            {contact.name?.trim() || `Contact ${index + 1}`}
+                          </div>
+                          {contact.position ? (
+                            <div className='text-xs text-slate-500'>{contact.position}</div>
+                          ) : null}
+                        </div>
+                        <Button
+                          variant='ghost'
+                          className='text-rose-600 hover:bg-rose-50'
+                          onClick={() => removeContact(selectedCustomer, contact.id)}
+                          title={canEdit ? 'Remove contact' : 'Read-only access'}
+                          disabled={!canEdit}
+                        >
+                          <Trash2 size={16} /> Remove
+                        </Button>
+                      </div>
+                      <div className='mt-3 grid gap-3 md:grid-cols-2'>
+                        <EditableField
+                          label='Name'
+                          value={contact.name}
+                          fieldKey={`contact_${contact.id}_name`}
+                          placeholder='Add name'
+                          copyable
+                          copyTitle='Copy contact name'
+                          onSave={(value) => saveContactField(selectedCustomer, contact.id, 'name', value)}
+                        />
+                        <EditableField
+                          label='Position'
+                          value={contact.position}
+                          fieldKey={`contact_${contact.id}_position`}
+                          placeholder='Add position'
+                          copyable
+                          copyTitle='Copy contact position'
+                          onSave={(value) => saveContactField(selectedCustomer, contact.id, 'position', value)}
+                        />
+                        <EditableField
+                          label='Phone'
+                          value={contact.phone}
+                          fieldKey={`contact_${contact.id}_phone`}
+                          placeholder='Add phone'
+                          copyable
+                          copyTitle='Copy phone number'
+                          onSave={(value) => saveContactField(selectedCustomer, contact.id, 'phone', value)}
+                        />
+                        <EditableField
+                          label='Email'
+                          value={contact.email}
+                          fieldKey={`contact_${contact.id}_email`}
+                          placeholder='Add email'
+                          copyable
+                          copyTitle='Copy email address'
+                          onSave={(value) => saveContactField(selectedCustomer, contact.id, 'email', value)}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+
+                {showNewContactForm && (
+                  <div className='rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
+                    <div className='text-sm font-semibold text-slate-700'>New Contact</div>
+                    <div className='mt-3 grid gap-3 md:grid-cols-2'>
+                      <div>
+                        <Label>Name</Label>
+                        <Input
+                          value={newContact.name}
+                          onChange={(e) => setNewContact({ ...newContact, name: (e.target as HTMLInputElement).value })}
+                          placeholder='Jane Doe'
+                          disabled={!canEdit}
+                        />
+                      </div>
+                      <div>
+                        <Label>Position</Label>
+                        <Input
+                          value={newContact.position}
+                          onChange={(e) => setNewContact({ ...newContact, position: (e.target as HTMLInputElement).value })}
+                          placeholder='Project Manager'
+                          disabled={!canEdit}
+                        />
+                      </div>
+                      <div>
+                        <Label>Phone</Label>
+                        <Input
+                          value={newContact.phone}
+                          onChange={(e) => setNewContact({ ...newContact, phone: (e.target as HTMLInputElement).value })}
+                          placeholder='555-123-4567'
+                          disabled={!canEdit}
+                        />
+                      </div>
+                      <div>
+                        <Label>Email</Label>
+                        <Input
+                          value={newContact.email}
+                          onChange={(e) => setNewContact({ ...newContact, email: (e.target as HTMLInputElement).value })}
+                          placeholder='name@example.com'
+                          disabled={!canEdit}
+                        />
+                      </div>
+                    </div>
+                    <div className='mt-3 flex flex-wrap items-center gap-2'>
+                      <Button
+                        onClick={async () => {
+                          if (!selectedCustomer) return
+                          const result = await addContact(selectedCustomer, newContact)
+                          if (result) {
+                            setContactError(result)
+                          } else {
+                            setNewContact({ name: '', position: '', phone: '', email: '' })
+                            setContactError(null)
+                            setShowNewContactForm(false)
+                          }
+                        }}
+                        disabled={!canEdit}
+                        title={canEdit ? 'Save contact' : 'Read-only access'}
+                      >
+                        <Save size={16} /> Save Contact
+                      </Button>
+                      <Button
+                        variant='ghost'
+                        onClick={() => {
+                          setShowNewContactForm(false)
+                          setNewContact({ name: '', position: '', phone: '', email: '' })
+                          setContactError(null)
+                        }}
+                      >
+                        <X size={16} /> Cancel
+                      </Button>
+                      {contactError && (
+                        <p className='text-sm text-rose-600'>{contactError}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className='mt-6 rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm'>
@@ -351,7 +525,7 @@ function AppContent() {
                       <div className='flex flex-wrap items-center gap-2'>
                         <Button
                           variant='outline'
-                          onClick={() => navigator.clipboard.writeText(project.number)}
+                          onClick={() => navigator.clipboard.writeText(stripPrefix(project.number, /^P[-\s]?(.+)$/i))}
                           title='Copy project number'
                         >
                           <Copy size={16} />
@@ -383,7 +557,13 @@ function AppContent() {
                       <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
                         {[
                           { label: 'Work Orders', value: project.wos.length },
-                          { label: 'FDS Uploaded', value: project.fds ? 'Yes' : 'No' },
+                          {
+                            label: 'Project Files',
+                            value: PROJECT_FILE_CATEGORIES.reduce(
+                              (count, category) => (project.documents?.[category] ? count + 1 : count),
+                              0,
+                            ),
+                          },
                         ].map(item => (
                           <div key={item.label} className='rounded-xl border border-slate-200 bg-white/80 p-3'>
                             <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{item.label}</div>
@@ -434,33 +614,23 @@ function AppContent() {
   }
 
   // Mutators
-  async function upsertCustomer(updated: Customer) {
+  async function saveCustomerDetails(
+    customerId: string,
+    updates: {
+      name?: string
+      address?: string | null
+      contacts?: Array<{ id?: string; name?: string; position?: string; phone?: string; email?: string }> | null
+    },
+    errorMessage = 'Failed to update customer.',
+  ) {
     try {
-      const saved = await updateCustomerRecord(updated.id, {
-        name: updated.name,
-        address: updated.address ?? null,
-        contactName: updated.contactName ?? null,
-        contactPhone: updated.contactPhone ?? null,
-        contactEmail: updated.contactEmail ?? null,
-      })
-      setDb(prev =>
-        prev.map(c =>
-          c.id === saved.id
-            ? {
-                ...c,
-                name: saved.name,
-                address: saved.address,
-                contactName: saved.contactName,
-                contactPhone: saved.contactPhone,
-                contactEmail: saved.contactEmail,
-              }
-            : c,
-        ),
-      )
+      const saved = await updateCustomerRecord(customerId, updates)
+      setDb(prev => prev.map(c => (c.id === saved.id ? saved : c)))
       setActionError(null)
+      return saved
     } catch (error) {
-      console.error('Failed to update customer', error)
-      const message = toErrorMessage(error, 'Failed to update customer.')
+      console.error(errorMessage, error)
+      const message = toErrorMessage(error, errorMessage)
       setActionError(message)
       throw new Error(message)
     }
@@ -542,14 +712,19 @@ function AppContent() {
     }
   }
 
-  async function uploadFds(customerId: string, projectId: string, file: File): Promise<string | null> {
+  async function uploadProjectDocument(
+    customerId: string,
+    projectId: string,
+    category: ProjectFileCategory,
+    file: File,
+  ): Promise<string | null> {
     if (!canEdit) {
-      const message = 'Not authorized to upload FDS documents.'
+      const message = 'Not authorized to upload project documents.'
       setActionError(message)
       return message
     }
-    if (!isAllowedFdsFile(file)) {
-      return 'Upload a PDF or Word document (.doc or .docx).'
+    if (!isAllowedProjectFile(file)) {
+      return 'Upload a PDF, Word, or image file.'
     }
     if (file.size === 0) {
       return 'The selected file is empty.'
@@ -557,64 +732,192 @@ function AppContent() {
 
     try {
       const dataUrl = await readFileAsDataUrl(file)
-      const payload: ProjectFDS = {
+      const payload: ProjectFile = {
         name: file.name,
         type: file.type || guessMimeTypeFromName(file.name),
         dataUrl,
         uploadedAt: new Date().toISOString(),
       }
 
-      await updateProjectRecord(projectId, { fds: payload })
+      await updateProjectRecord(projectId, { documents: { [category]: payload } })
       setDb(prev =>
         prev.map(c =>
           c.id !== customerId
             ? c
             : {
                 ...c,
-                projects: c.projects.map(p =>
-                  p.id !== projectId ? p : { ...p, fds: payload },
-                ),
+                projects: c.projects.map(p => {
+                  if (p.id !== projectId) {
+                    return p
+                  }
+                  const nextDocuments = { ...(p.documents ?? {}) }
+                  nextDocuments[category] = payload
+                  return { ...p, documents: nextDocuments }
+                }),
               },
         ),
       )
       setActionError(null)
       return null
     } catch (error) {
-      console.error('Failed to upload FDS document', error)
-      const message = toErrorMessage(error, 'Failed to upload FDS document.')
+      console.error('Failed to upload project document', error)
+      const message = toErrorMessage(error, 'Failed to upload project document.')
       setActionError(message)
       return message
     }
   }
 
-  async function clearFds(customerId: string, projectId: string): Promise<string | null> {
+  async function removeProjectDocument(
+    customerId: string,
+    projectId: string,
+    category: ProjectFileCategory,
+  ): Promise<string | null> {
     if (!canEdit) {
-      const message = 'Not authorized to remove FDS documents.'
+      const message = 'Not authorized to remove project documents.'
       setActionError(message)
       return message
     }
 
     try {
-      await updateProjectRecord(projectId, { fds: null })
+      await updateProjectRecord(projectId, { documents: { [category]: null } })
       setDb(prev =>
         prev.map(c =>
           c.id !== customerId
             ? c
             : {
                 ...c,
-                projects: c.projects.map(p =>
-                  p.id !== projectId ? p : { ...p, fds: undefined },
-                ),
+                projects: c.projects.map(p => {
+                  if (p.id !== projectId) {
+                    return p
+                  }
+                  if (!p.documents) {
+                    return p
+                  }
+                  const nextDocuments = { ...p.documents }
+                  delete nextDocuments[category]
+                  const hasRemaining = PROJECT_FILE_CATEGORIES.some(key => !!nextDocuments[key])
+                  return { ...p, documents: hasRemaining ? nextDocuments : undefined }
+                }),
               },
         ),
       )
       setActionError(null)
       return null
     } catch (error) {
-      console.error('Failed to remove FDS document', error)
-      const message = toErrorMessage(error, 'Failed to remove FDS document.')
+      console.error('Failed to remove project document', error)
+      const message = toErrorMessage(error, 'Failed to remove project document.')
       setActionError(message)
       return message
+    }
+  }
+
+  async function addContact(
+    customer: Customer,
+    data: { name: string; position: string; phone: string; email: string },
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to update contacts.'
+      setActionError(message)
+      return message
+    }
+    const name = data.name.trim()
+    const position = data.position.trim()
+    const phone = data.phone.trim()
+    const email = data.email.trim()
+    if (!name && !position && !phone && !email) {
+      return 'Enter at least one detail for the contact.'
+    }
+
+    const payload = [
+      ...customer.contacts.map(contact => ({
+        id: contact.id,
+        name: contact.name,
+        position: contact.position,
+        phone: contact.phone,
+        email: contact.email,
+      })),
+      {
+        name: name || undefined,
+        position: position || undefined,
+        phone: phone || undefined,
+        email: email || undefined,
+      },
+    ]
+
+    try {
+      await saveCustomerDetails(customer.id, { contacts: payload }, 'Failed to add contact.')
+      return null
+    } catch (error) {
+      return error instanceof Error ? error.message : 'Failed to add contact.'
+    }
+  }
+
+  async function saveContactField(
+    customer: Customer,
+    contactId: string,
+    field: Exclude<keyof CustomerContact, 'id'>,
+    value: string,
+  ) {
+    if (!canEdit) {
+      setActionError('Not authorized to update contacts.')
+      return
+    }
+
+    const payload = customer.contacts.map(contact => {
+      if (contact.id !== contactId) {
+        return {
+          id: contact.id,
+          name: contact.name,
+          position: contact.position,
+          phone: contact.phone,
+          email: contact.email,
+        }
+      }
+      return {
+        id: contact.id,
+        name: field === 'name' ? value : contact.name,
+        position: field === 'position' ? value : contact.position,
+        phone: field === 'phone' ? value : contact.phone,
+        email: field === 'email' ? value : contact.email,
+      }
+    })
+
+    try {
+      await saveCustomerDetails(customer.id, { contacts: payload }, 'Failed to update contact.')
+    } catch {
+      // error handled in saveCustomerDetails
+    }
+  }
+
+  async function removeContact(customer: Customer, contactId: string) {
+    if (!canEdit) {
+      setActionError('Not authorized to update contacts.')
+      return
+    }
+
+    const payload = customer.contacts
+      .filter(contact => contact.id !== contactId)
+      .map(contact => ({
+        id: contact.id,
+        name: contact.name,
+        position: contact.position,
+        phone: contact.phone,
+        email: contact.email,
+      }))
+
+    try {
+      await saveCustomerDetails(customer.id, { contacts: payload }, 'Failed to remove contact.')
+      setEditingInfo(prev => {
+        const next = { ...prev }
+        Object.keys(next).forEach(key => {
+          if (key.includes(contactId)) {
+            delete next[key]
+          }
+        })
+        return next
+      })
+    } catch {
+      // error handled in saveCustomerDetails
     }
   }
 
@@ -716,7 +1019,13 @@ function AppContent() {
     }
   }
 
-  async function createCustomer(data: Omit<Customer, 'id' | 'projects'>): Promise<string | null> {
+  async function createCustomer(
+    data: {
+      name: string
+      address?: string
+      contacts?: Array<{ name?: string; position?: string; phone?: string; email?: string }>
+    },
+  ): Promise<string | null> {
     if (!canEdit) {
       const message = 'Not authorized to create customers.'
       setActionError(message)
@@ -725,12 +1034,18 @@ function AppContent() {
     const trimmedName = data.name.trim()
     if (!trimmedName) return 'Customer name is required.'
     if (customerNameExists(trimmedName)) return 'A customer with this name already exists.'
+    const contactsPayload = (data.contacts ?? [])
+      .map(contact => ({
+        name: contact.name?.trim() || undefined,
+        position: contact.position?.trim() || undefined,
+        phone: contact.phone?.trim() || undefined,
+        email: contact.email?.trim() || undefined,
+      }))
+      .filter(contact => contact.name || contact.position || contact.phone || contact.email)
     const payload = {
       name: trimmedName,
       address: data.address?.trim() || undefined,
-      contactName: data.contactName?.trim() || undefined,
-      contactPhone: data.contactPhone?.trim() || undefined,
-      contactEmail: data.contactEmail?.trim() || undefined,
+      contacts: contactsPayload,
     }
     try {
       const customer = await createCustomerRecord(payload)
@@ -924,8 +1239,12 @@ function AppContent() {
               }
               onAddWO={(data) => addWO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
               onDeleteWO={(woId) => deleteWO(selectedProjectData.customer.id, selectedProjectData.project.id, woId)}
-              onUploadFds={(file) => uploadFds(selectedProjectData.customer.id, selectedProjectData.project.id, file)}
-              onRemoveFds={() => clearFds(selectedProjectData.customer.id, selectedProjectData.project.id)}
+              onUploadDocument={(category, file) =>
+                uploadProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category, file)
+              }
+              onRemoveDocument={(category) =>
+                removeProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category)
+              }
               onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
               onNavigateBack={() => setSelectedProjectId(null)}
             />
@@ -995,6 +1314,15 @@ function AppContent() {
                     />
                   </div>
                   <div>
+                    <Label>Contact Position</Label>
+                    <Input
+                      value={newCust.contactPosition}
+                      onChange={(e) => setNewCust({ ...newCust, contactPosition: (e.target as HTMLInputElement).value })}
+                      placeholder='e.g. Project Manager'
+                      disabled={!canEdit}
+                    />
+                  </div>
+                  <div>
                     <Label>Contact Phone</Label>
                     <Input
                       value={newCust.contactPhone}
@@ -1047,15 +1375,27 @@ function AppContent() {
                         const result = await createCustomer({
                           name: newCust.name,
                           address: newCust.address,
-                          contactName: newCust.contactName,
-                          contactPhone: newCust.contactPhone,
-                          contactEmail: newCust.contactEmail,
+                          contacts: [
+                            {
+                              name: newCust.contactName,
+                              position: newCust.contactPosition,
+                              phone: newCust.contactPhone,
+                              email: newCust.contactEmail,
+                            },
+                          ],
                         })
                         if (result) {
                           setNewCustomerError(result)
                           return
                         }
-                        setNewCust({ name: '', address: '', contactName: '', contactPhone: '', contactEmail: '' })
+                        setNewCust({
+                          name: '',
+                          address: '',
+                          contactName: '',
+                          contactPosition: '',
+                          contactPhone: '',
+                          contactEmail: '',
+                        })
                         setShowNewCustomer(false)
                         setNewCustomerError(null)
                       } finally {

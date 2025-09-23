@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { AlertCircle, ArrowLeft, Copy, Download, FileText, Plus, Trash2, Upload, X } from 'lucide-react'
-import type { Customer, Project, WOType } from '../types'
+import { AlertCircle, ArrowLeft, ChevronDown, Copy, Download, FileText, Plus, Trash2, Upload, X } from 'lucide-react'
+import type { Customer, Project, ProjectFile, ProjectFileCategory, WOType } from '../types'
+import { PROJECT_FILE_CATEGORIES } from '../types'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
@@ -14,10 +15,69 @@ export type ProjectPageProps = {
   onUpdateProjectNote: (note: string) => void
   onAddWO: (data: { number: string; type: WOType; note?: string }) => Promise<string | null>
   onDeleteWO: (woId: string) => void
-  onUploadFds: (file: File) => Promise<string | null>
-  onRemoveFds: () => Promise<string | null>
+  onUploadDocument: (category: ProjectFileCategory, file: File) => Promise<string | null>
+  onRemoveDocument: (category: ProjectFileCategory) => Promise<string | null>
   onDeleteProject: () => void
   onNavigateBack: () => void
+}
+
+const PROJECT_FILE_METADATA: Record<ProjectFileCategory, { label: string; description: string }> = {
+  fds: {
+    label: 'FDS Document',
+    description: 'Upload a PDF or Word document to keep it with this project.',
+  },
+  electrical: {
+    label: 'Electrical Drawing',
+    description: 'Upload an electrical drawing (PDF or image).',
+  },
+  mechanical: {
+    label: 'Mechanical Drawing',
+    description: 'Upload a mechanical drawing (PDF or image).',
+  },
+}
+
+const PROJECT_FILE_ACCEPT =
+  '.pdf,.doc,.docx,.png,.jpg,.jpeg,.svg,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/svg+xml'
+
+function stripPrefix(value: string, pattern: RegExp): string {
+  const trimmed = value.trim()
+  const match = trimmed.match(pattern)
+  return match ? match[1].trim() : trimmed
+}
+
+function isPdfDocument(file?: ProjectFile): boolean {
+  if (!file) {
+    return false
+  }
+  const type = file.type?.toLowerCase() ?? ''
+  if (type.includes('pdf')) {
+    return true
+  }
+  const name = file.name?.toLowerCase() ?? ''
+  return name.endsWith('.pdf')
+}
+
+function isImageDocument(file?: ProjectFile): boolean {
+  if (!file) {
+    return false
+  }
+  const type = file.type?.toLowerCase() ?? ''
+  if (type.startsWith('image/')) {
+    return true
+  }
+  const name = file.name?.toLowerCase() ?? ''
+  return ['.png', '.jpg', '.jpeg', '.svg'].some(ext => name.endsWith(ext))
+}
+
+function formatUploadedTimestamp(file?: ProjectFile): string | null {
+  if (!file?.uploadedAt) {
+    return null
+  }
+  const parsed = Date.parse(file.uploadedAt)
+  if (Number.isNaN(parsed)) {
+    return null
+  }
+  return new Date(parsed).toLocaleString()
 }
 
 function SummaryTile({ label, value }: { label: string; value: string | number }) {
@@ -36,8 +96,8 @@ export default function ProjectPage({
   onUpdateProjectNote,
   onAddWO,
   onDeleteWO,
-  onUploadFds,
-  onRemoveFds,
+  onUploadDocument,
+  onRemoveDocument,
   onDeleteProject,
   onNavigateBack,
 }: ProjectPageProps) {
@@ -45,37 +105,35 @@ export default function ProjectPage({
   const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
   const [woError, setWoError] = useState<string | null>(null)
   const [isAddingWo, setIsAddingWo] = useState(false)
-  const [fdsError, setFdsError] = useState<string | null>(null)
-  const [isUploadingFds, setIsUploadingFds] = useState(false)
-  const [isRemovingFds, setIsRemovingFds] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement | null>(null)
-  const hasFds = !!project.fds
-  const isPdfFds = useMemo(() => {
-    if (!project.fds) {
-      return false
-    }
-    const type = project.fds.type?.toLowerCase() ?? ''
-    if (type.includes('pdf')) {
-      return true
-    }
-    return project.fds.name.toLowerCase().endsWith('.pdf')
-  }, [project.fds])
-  const fdsUploadedAt = useMemo(() => {
-    if (!project.fds?.uploadedAt) {
-      return null
-    }
-    const parsed = Date.parse(project.fds.uploadedAt)
-    if (Number.isNaN(parsed)) {
-      return null
-    }
-    return new Date(parsed).toLocaleString()
-  }, [project.fds?.uploadedAt])
+  const [fileErrors, setFileErrors] = useState<Record<ProjectFileCategory, string | null>>({
+    fds: null,
+    electrical: null,
+    mechanical: null,
+  })
+  const [uploadingCategory, setUploadingCategory] = useState<ProjectFileCategory | null>(null)
+  const [removingCategory, setRemovingCategory] = useState<ProjectFileCategory | null>(null)
+  const [filesExpanded, setFilesExpanded] = useState(() =>
+    PROJECT_FILE_CATEGORIES.some(category => !!project.documents?.[category]),
+  )
+  const fileInputRefs = useRef<Record<ProjectFileCategory, HTMLInputElement | null>>({
+    fds: null,
+    electrical: null,
+    mechanical: null,
+  })
+  const documents = project.documents ?? {}
+  const documentsCount = useMemo(
+    () => PROJECT_FILE_CATEGORIES.reduce((count, category) => (project.documents?.[category] ? count + 1 : count), 0),
+    [project.documents],
+  )
 
   useEffect(() => {
     setNoteDraft(project.note ?? '')
     setWoForm({ number: '', type: 'Build', note: '' })
     setWoError(null)
-    setFdsError(null)
+    setFileErrors({ fds: null, electrical: null, mechanical: null })
+    setUploadingCategory(null)
+    setRemovingCategory(null)
+    setFilesExpanded(PROJECT_FILE_CATEGORIES.some(category => !!project.documents?.[category]))
   }, [project.id])
 
   useEffect(() => {
@@ -87,7 +145,7 @@ export default function ProjectPage({
 
   const summary = [
     { label: 'Work Orders', value: project.wos.length },
-    { label: 'FDS Uploaded', value: project.fds ? 'Yes' : 'No' },
+    { label: 'Project Files', value: documentsCount },
   ]
 
   const handleAddWO = async () => {
@@ -114,72 +172,77 @@ export default function ProjectPage({
     }
   }
 
-  const handleFdsChange = async (event: ChangeEvent<HTMLInputElement>) => {
+  const updateFileError = (category: ProjectFileCategory, message: string | null) => {
+    setFileErrors(prev => ({ ...prev, [category]: message }))
+  }
+
+  const handleFileChange = async (category: ProjectFileCategory, event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) {
       return
     }
     if (!canEdit) {
-      setFdsError('You have read-only access.')
+      updateFileError(category, 'You have read-only access.')
       event.target.value = ''
       return
     }
 
-    setIsUploadingFds(true)
-    setFdsError(null)
+    setUploadingCategory(category)
+    updateFileError(category, null)
     try {
-      const result = await onUploadFds(file)
+      const result = await onUploadDocument(category, file)
       if (result) {
-        setFdsError(result)
+        updateFileError(category, result)
       }
     } catch (error) {
-      console.error('Failed to upload FDS', error)
-      setFdsError('Failed to upload FDS document.')
+      console.error('Failed to upload project document', error)
+      updateFileError(category, 'Failed to upload document.')
     } finally {
-      setIsUploadingFds(false)
+      setUploadingCategory(null)
       event.target.value = ''
     }
   }
 
-  const handleRemoveFds = async () => {
-    if (!project.fds) {
+  const handleRemoveDocument = async (category: ProjectFileCategory) => {
+    if (!documents[category]) {
       return
     }
     if (!canEdit) {
-      setFdsError('You have read-only access.')
+      updateFileError(category, 'You have read-only access.')
       return
     }
 
-    setIsRemovingFds(true)
-    setFdsError(null)
+    setRemovingCategory(category)
+    updateFileError(category, null)
     try {
-      const result = await onRemoveFds()
+      const result = await onRemoveDocument(category)
       if (result) {
-        setFdsError(result)
+        updateFileError(category, result)
       }
     } catch (error) {
-      console.error('Failed to remove FDS', error)
-      setFdsError('Failed to remove FDS document.')
+      console.error('Failed to remove project document', error)
+      updateFileError(category, 'Failed to remove document.')
     } finally {
-      setIsRemovingFds(false)
+      setRemovingCategory(null)
     }
   }
 
-  const handleDownloadFds = () => {
-    if (!project.fds) {
+  const handleDownloadDocument = (category: ProjectFileCategory) => {
+    const file = documents[category]
+    if (!file) {
       return
     }
     try {
       const link = document.createElement('a')
-      link.href = project.fds.dataUrl
-      link.download = project.fds.name || 'fds-document'
+      link.href = file.dataUrl
+      link.download = file.name || `${category}-document`
       link.rel = 'noopener'
       document.body.appendChild(link)
       link.click()
       document.body.removeChild(link)
     } catch (error) {
-      console.error('Failed to download FDS', error)
-      setFdsError('Unable to download FDS document.')
+      console.error('Failed to download project document', error)
+      updateFileError(category, 'Unable to download document.')
     }
   }
 
@@ -193,7 +256,11 @@ export default function ProjectPage({
           <div className='text-lg font-semibold text-slate-800'>Project: {project.number}</div>
         </div>
         <div className='flex flex-wrap items-center gap-2'>
-          <Button variant='outline' onClick={() => navigator.clipboard.writeText(project.number)} title='Copy project number'>
+          <Button
+            variant='outline'
+            onClick={() => navigator.clipboard.writeText(stripPrefix(project.number, /^P[-\s]?(.+)$/i))}
+            title='Copy project number'
+          >
             <Copy size={16} />
           </Button>
           <Button
@@ -249,7 +316,11 @@ export default function ProjectPage({
                     {wo.note && <div className='text-xs text-slate-500'>{wo.note}</div>}
                   </div>
                   <div className='flex items-center gap-1'>
-                    <Button variant='outline' onClick={() => navigator.clipboard.writeText(wo.number)} title='Copy work order'>
+                    <Button
+                      variant='outline'
+                      onClick={() => navigator.clipboard.writeText(stripPrefix(wo.number, /^WO[-\s]?(.+)$/i))}
+                      title='Copy work order'
+                    >
                       <Copy size={16} />
                     </Button>
                     <Button
@@ -328,75 +399,111 @@ export default function ProjectPage({
           </div>
 
           <div>
-            <div className='mb-2 text-sm font-semibold text-slate-700'>FDS Document</div>
-            {hasFds ? (
-              <div className='space-y-3'>
-                <div className='rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
-                  <div className='flex flex-col gap-3'>
-                    <div>
-                      <div className='font-semibold text-slate-800'>{project.fds?.name}</div>
-                      {fdsUploadedAt && <div className='text-xs text-slate-500'>Uploaded {fdsUploadedAt}</div>}
-                    </div>
-                    <div className='overflow-hidden rounded-xl border border-slate-200/70 bg-slate-50'>
-                      {isPdfFds ? (
-                        <iframe src={project.fds?.dataUrl ?? ''} title='FDS preview' className='h-52 w-full border-0' />
-                      ) : (
-                        <div className='flex h-52 flex-col items-center justify-center gap-2 text-xs text-slate-500'>
-                          <FileText size={24} className='text-slate-400' />
-                          <span>Preview not available for this file type.</span>
+            <button
+              type='button'
+              className='flex w-full items-center justify-between rounded-2xl border border-slate-200/70 bg-white/75 px-4 py-3 text-left shadow-sm transition hover:bg-white'
+              onClick={() => setFilesExpanded(prev => !prev)}
+            >
+              <span className='text-sm font-semibold text-slate-700'>Project Files</span>
+              <span className='flex items-center gap-2 text-xs text-slate-500'>
+                {documentsCount} uploaded
+                <ChevronDown
+                  size={16}
+                  className={`transition-transform ${filesExpanded ? 'rotate-180' : ''}`}
+                />
+              </span>
+            </button>
+            {filesExpanded && (
+              <div className='mt-3 space-y-4'>
+                {PROJECT_FILE_CATEGORIES.map(category => {
+                  const metadata = PROJECT_FILE_METADATA[category]
+                  const file = documents[category]
+                  const uploadedAt = formatUploadedTimestamp(file)
+                  const isPdf = isPdfDocument(file)
+                  const isImage = isImageDocument(file)
+                  const isUploading = uploadingCategory === category
+                  const isRemoving = removingCategory === category
+                  const errorMessage = fileErrors[category]
+                  return (
+                    <div key={category} className='rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm'>
+                      <div className='flex flex-col gap-3'>
+                        <div>
+                          <div className='font-semibold text-slate-800'>{metadata.label}</div>
+                          {file ? (
+                            <>
+                              <div className='text-sm text-slate-500'>{file.name}</div>
+                              {uploadedAt && <div className='text-xs text-slate-500'>Uploaded {uploadedAt}</div>}
+                            </>
+                          ) : (
+                            <div className='text-xs text-slate-500'>{metadata.description}</div>
+                          )}
                         </div>
-                      )}
+                        <div className='overflow-hidden rounded-xl border border-slate-200/70 bg-slate-50'>
+                          {file ? (
+                            isPdf ? (
+                              <iframe src={file.dataUrl} title={`${metadata.label} preview`} className='h-52 w-full border-0' />
+                            ) : isImage ? (
+                              <img src={file.dataUrl} alt={metadata.label} className='h-52 w-full bg-white object-contain' />
+                            ) : (
+                              <div className='flex h-52 flex-col items-center justify-center gap-2 text-xs text-slate-500'>
+                                <FileText size={24} className='text-slate-400' />
+                                <span>Preview not available for this file type.</span>
+                              </div>
+                            )
+                          ) : (
+                            <div className='flex h-32 flex-col items-center justify-center gap-2 text-xs text-slate-500'>
+                              <FileText size={24} className='text-slate-400' />
+                              <span>No file uploaded.</span>
+                            </div>
+                          )}
+                        </div>
+                        <div className='flex flex-wrap items-center gap-2'>
+                          <Button
+                            onClick={() => fileInputRefs.current[category]?.click()}
+                            disabled={!canEdit || isUploading}
+                            title={canEdit ? (file ? 'Replace file' : 'Upload file') : 'Read-only access'}
+                          >
+                            <Upload size={16} /> {file ? 'Replace File' : 'Upload File'}
+                          </Button>
+                          {file && (
+                            <>
+                              <Button variant='outline' onClick={() => handleDownloadDocument(category)} title='Download file'>
+                                <Download size={16} /> Download
+                              </Button>
+                              <Button
+                                variant='ghost'
+                                className='text-rose-600 hover:bg-rose-50'
+                                onClick={() => void handleRemoveDocument(category)}
+                                title={canEdit ? 'Remove file' : 'Read-only access'}
+                                disabled={!canEdit || isRemoving}
+                              >
+                                <Trash2 size={16} /> Remove
+                              </Button>
+                              {isRemoving && <span className='text-xs text-slate-500'>Removing…</span>}
+                            </>
+                          )}
+                          {isUploading && <span className='text-xs text-slate-500'>Uploading…</span>}
+                        </div>
+                        {errorMessage && (
+                          <p className='flex items-center gap-1 text-sm text-rose-600'>
+                            <AlertCircle size={14} /> {errorMessage}
+                          </p>
+                        )}
+                        <input
+                          ref={node => {
+                            fileInputRefs.current[category] = node
+                          }}
+                          type='file'
+                          accept={PROJECT_FILE_ACCEPT}
+                          className='hidden'
+                          onChange={(event) => void handleFileChange(category, event)}
+                        />
+                      </div>
                     </div>
-                    <div className='flex flex-wrap items-center gap-2'>
-                      <Button variant='outline' onClick={handleDownloadFds} title='Download FDS document'>
-                        <Download size={16} /> Download
-                      </Button>
-                      <Button
-                        variant='ghost'
-                        className='text-rose-600 hover:bg-rose-50'
-                        onClick={() => void handleRemoveFds()}
-                        title={canEdit ? 'Remove FDS document' : 'Read-only access'}
-                        disabled={!canEdit || isRemovingFds}
-                      >
-                        <Trash2 size={16} /> Remove
-                      </Button>
-                      {isRemovingFds && <span className='text-xs text-slate-500'>Removing…</span>}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className='rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-sm text-slate-500 shadow-sm'>
-                No FDS uploaded yet.
+                  )
+                })}
               </div>
             )}
-
-            <div className='mt-4 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
-              <div className='mb-2 text-sm font-semibold text-slate-700'>Upload FDS</div>
-              <p className='text-xs text-slate-500'>Upload a PDF or Word document to keep it with this project.</p>
-              <input
-                ref={fileInputRef}
-                type='file'
-                accept='.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-                className='hidden'
-                onChange={handleFdsChange}
-              />
-              <div className='mt-3 flex flex-wrap items-center gap-2'>
-                <Button
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={!canEdit || isUploadingFds}
-                  title={canEdit ? 'Upload FDS document' : 'Read-only access'}
-                >
-                  <Upload size={16} /> {hasFds ? 'Replace FDS' : 'Upload FDS'}
-                </Button>
-                {isUploadingFds && <span className='text-xs text-slate-500'>Uploading…</span>}
-              </div>
-              {fdsError && (
-                <p className='mt-2 flex items-center gap-1 text-sm text-rose-600'>
-                  <AlertCircle size={14} /> {fdsError}
-                </p>
-              )}
-            </div>
           </div>
         </section>
       </CardContent>

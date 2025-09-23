@@ -7,28 +7,40 @@ export type WO = {
   note?: string;
 };
 
-export type ProjectFDS = {
+export type ProjectFileCategory = 'fds' | 'electrical' | 'mechanical';
+
+export const PROJECT_FILE_CATEGORIES: ProjectFileCategory[] = ['fds', 'electrical', 'mechanical'];
+
+export type ProjectFile = {
   name: string;
   type: string;
   dataUrl: string;
   uploadedAt: string;
 };
 
+export type ProjectDocuments = Partial<Record<ProjectFileCategory, ProjectFile>>;
+
 export type Project = {
   id: string;
   number: string;
   note?: string; // ⬅️ new
   wos: WO[];
-  fds?: ProjectFDS;
+  documents?: ProjectDocuments;
+};
+
+export type CustomerContact = {
+  id: string;
+  name?: string;
+  position?: string;
+  phone?: string;
+  email?: string;
 };
 
 export type Customer = {
   id: string;
   name: string;
   address?: string;
-  contactName?: string;
-  contactPhone?: string;
-  contactEmail?: string;
+  contacts: CustomerContact[];
   projects: Project[];
 };
 
