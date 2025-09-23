@@ -1,10 +1,9 @@
-import type { Customer, PO, Project, WO, WOType } from '../types'
+import type { Customer, Project, ProjectFDS, WO, WOType } from '../types'
 
 type StorageApi = {
   listCustomers(): Promise<Customer[]>
   listProjectsByCustomer(customerId: string): Promise<Project[]>
   listWOs(projectId: string): Promise<WO[]>
-  listPOs(projectId: string): Promise<PO[]>
   createCustomer(data: {
     name: string
     address?: string
@@ -24,12 +23,13 @@ type StorageApi = {
   ): Promise<Customer>
   deleteCustomer(customerId: string): Promise<void>
   createProject(customerId: string, number: string): Promise<Project>
-  updateProject(projectId: string, data: { note?: string | null }): Promise<Project>
+  updateProject(
+    projectId: string,
+    data: { note?: string | null; fds?: ProjectFDS | null },
+  ): Promise<Project>
   deleteProject(projectId: string): Promise<void>
   createWO(projectId: string, data: { number: string; type: WOType; note?: string }): Promise<WO>
   deleteWO(woId: string): Promise<void>
-  createPO(projectId: string, data: { number: string; note?: string }): Promise<PO>
-  deletePO(poId: string): Promise<void>
 }
 
 let localStorageStorage: StorageApi | null = null
@@ -52,10 +52,6 @@ export function listProjectsByCustomer(customerId: string): Promise<Project[]> {
 
 export function listWOs(projectId: string): Promise<WO[]> {
   return ensureLocalStorage().listWOs(projectId)
-}
-
-export function listPOs(projectId: string): Promise<PO[]> {
-  return ensureLocalStorage().listPOs(projectId)
 }
 
 export function createCustomer(data: {
@@ -89,7 +85,10 @@ export function createProject(customerId: string, number: string): Promise<Proje
   return ensureLocalStorage().createProject(customerId, number)
 }
 
-export function updateProject(projectId: string, data: { note?: string | null }): Promise<Project> {
+export function updateProject(
+  projectId: string,
+  data: { note?: string | null; fds?: ProjectFDS | null },
+): Promise<Project> {
   return ensureLocalStorage().updateProject(projectId, data)
 }
 
@@ -106,14 +105,6 @@ export function createWO(
 
 export function deleteWO(woId: string): Promise<void> {
   return ensureLocalStorage().deleteWO(woId)
-}
-
-export function createPO(projectId: string, data: { number: string; note?: string }): Promise<PO> {
-  return ensureLocalStorage().createPO(projectId, data)
-}
-
-export function deletePO(poId: string): Promise<void> {
-  return ensureLocalStorage().deletePO(poId)
 }
 
 function sortByText<T>(items: T[], getValue: (item: T) => string): T[] {
@@ -211,22 +202,30 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
-  function normalizePurchaseOrder(value: unknown): PO | null {
+  function normalizeProjectFds(value: unknown): ProjectFDS | undefined {
     if (!value || typeof value !== 'object') {
-      return null
+      return undefined
     }
 
     const raw = value as Record<string, unknown>
-    const id = typeof raw.id === 'string' ? raw.id : null
-    const number = typeof raw.number === 'string' ? raw.number : null
-    if (!id || !number) {
-      return null
+    const name = typeof raw.name === 'string' ? raw.name : null
+    const type = typeof raw.type === 'string' ? raw.type : 'application/octet-stream'
+    const dataUrl = typeof raw.dataUrl === 'string' ? raw.dataUrl : null
+    const uploadedAtRaw = typeof raw.uploadedAt === 'string' ? raw.uploadedAt : null
+
+    if (!name || !dataUrl) {
+      return undefined
     }
 
+    const uploadedAt = uploadedAtRaw && !Number.isNaN(Date.parse(uploadedAtRaw))
+      ? uploadedAtRaw
+      : new Date().toISOString()
+
     return {
-      id,
-      number,
-      note: toOptionalString(raw.note),
+      name,
+      type,
+      dataUrl,
+      uploadedAt,
     }
   }
 
@@ -243,21 +242,18 @@ function createLocalStorageStorage(): StorageApi {
     }
 
     const wosSource = Array.isArray(raw.wos) ? (raw.wos as unknown[]) : []
-    const posSource = Array.isArray(raw.pos) ? (raw.pos as unknown[]) : []
 
     const wos = wosSource
       .map(normalizeWorkOrder)
       .filter((wo): wo is WO => !!wo)
-    const pos = posSource
-      .map(normalizePurchaseOrder)
-      .filter((po): po is PO => !!po)
+    const fds = normalizeProjectFds((raw as { fds?: unknown }).fds)
 
     return {
       id,
       number,
       note: toOptionalString(raw.note),
       wos: sortWOs(wos),
-      pos: sortPOs(pos),
+      fds,
     }
   }
 
@@ -335,11 +331,12 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
-  function clonePurchaseOrder(po: PO): PO {
+  function cloneProjectFds(fds: ProjectFDS): ProjectFDS {
     return {
-      id: po.id,
-      number: po.number,
-      note: po.note,
+      name: fds.name,
+      type: fds.type,
+      dataUrl: fds.dataUrl,
+      uploadedAt: fds.uploadedAt,
     }
   }
 
@@ -349,7 +346,7 @@ function createLocalStorageStorage(): StorageApi {
       number: project.number,
       note: project.note,
       wos: project.wos.map(cloneWorkOrder),
-      pos: project.pos.map(clonePurchaseOrder),
+      fds: project.fds ? cloneProjectFds(project.fds) : undefined,
     }
   }
 
@@ -375,10 +372,6 @@ function createLocalStorageStorage(): StorageApi {
 
   function sortWOs(wos: WO[]): WO[] {
     return sortByText(wos, wo => wo.number)
-  }
-
-  function sortPOs(pos: PO[]): PO[] {
-    return sortByText(pos, po => po.number)
   }
 
   function normalizeInput(value: string | undefined): string | undefined {
@@ -446,21 +439,6 @@ function createLocalStorageStorage(): StorageApi {
     return null
   }
 
-  function locatePurchaseOrder(db: Database, poId: string) {
-    for (let customerIndex = 0; customerIndex < db.customers.length; customerIndex += 1) {
-      const customer = db.customers[customerIndex]
-      for (let projectIndex = 0; projectIndex < customer.projects.length; projectIndex += 1) {
-        const project = customer.projects[projectIndex]
-        const poIndex = project.pos.findIndex(po => po.id === poId)
-        if (poIndex !== -1) {
-          const po = project.pos[poIndex]
-          return { customerIndex, projectIndex, poIndex, customer, project, po }
-        }
-      }
-    }
-    return null
-  }
-
   return {
     async listCustomers(): Promise<Customer[]> {
       const db = loadDatabase()
@@ -485,16 +463,6 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       return located.project.wos.map(cloneWorkOrder)
-    },
-
-    async listPOs(projectId: string): Promise<PO[]> {
-      const db = loadDatabase()
-      const located = locateProject(db, projectId)
-      if (!located) {
-        return []
-      }
-
-      return located.project.pos.map(clonePurchaseOrder)
     },
 
     async createCustomer(data: {
@@ -577,7 +545,6 @@ function createLocalStorageStorage(): StorageApi {
         number: number.trim(),
         note: undefined,
         wos: [],
-        pos: [],
       }
 
       const nextProjects = sortProjects([project, ...customer.projects])
@@ -587,7 +554,10 @@ function createLocalStorageStorage(): StorageApi {
       return cloneProject(project)
     },
 
-    async updateProject(projectId: string, data: { note?: string | null }): Promise<Project> {
+    async updateProject(
+      projectId: string,
+      data: { note?: string | null; fds?: ProjectFDS | null },
+    ): Promise<Project> {
       const db = loadDatabase()
       const located = locateProject(db, projectId)
       if (!located) {
@@ -595,9 +565,16 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       const { customerIndex, projectIndex, customer, project } = located
+      const nextFds =
+        data.fds === undefined
+          ? project.fds
+          : data.fds === null
+          ? undefined
+          : normalizeProjectFds(data.fds) ?? project.fds
       const nextProject: Project = {
         ...project,
         note: applyNullable(project.note, data.note),
+        fds: nextFds,
       }
 
       const updatedProjects = [...customer.projects]
@@ -662,51 +639,6 @@ function createLocalStorageStorage(): StorageApi {
       const updatedWos = [...project.wos]
       updatedWos.splice(woIndex, 1)
       const updatedProject: Project = { ...project, wos: sortWOs(updatedWos) }
-      const updatedProjects = [...customer.projects]
-      updatedProjects[projectIndex] = updatedProject
-      const nextCustomers = [...db.customers]
-      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers })
-    },
-
-    async createPO(projectId: string, data: { number: string; note?: string }): Promise<PO> {
-      const db = loadDatabase()
-      const located = locateProject(db, projectId)
-      if (!located) {
-        throw new Error('Project not found.')
-      }
-
-      const { customerIndex, projectIndex, customer, project } = located
-      const purchaseOrder: PO = {
-        id: createId(),
-        number: data.number.trim(),
-        note: normalizeInput(data.note),
-      }
-
-      const updatedProject: Project = {
-        ...project,
-        pos: sortPOs([...project.pos, purchaseOrder]),
-      }
-
-      const updatedProjects = [...customer.projects]
-      updatedProjects[projectIndex] = updatedProject
-      const nextCustomers = [...db.customers]
-      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers })
-      return clonePurchaseOrder(purchaseOrder)
-    },
-
-    async deletePO(poId: string): Promise<void> {
-      const db = loadDatabase()
-      const located = locatePurchaseOrder(db, poId)
-      if (!located) {
-        throw new Error('Purchase order not found.')
-      }
-
-      const { customerIndex, projectIndex, poIndex, customer, project } = located
-      const updatedPos = [...project.pos]
-      updatedPos.splice(poIndex, 1)
-      const updatedProject: Project = { ...project, pos: sortPOs(updatedPos) }
       const updatedProjects = [...customer.projects]
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]

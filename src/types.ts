@@ -7,10 +7,11 @@ export type WO = {
   note?: string;
 };
 
-export type PO = {
-  id: string;
-  number: string;
-  note?: string;
+export type ProjectFDS = {
+  name: string;
+  type: string;
+  dataUrl: string;
+  uploadedAt: string;
 };
 
 export type Project = {
@@ -18,7 +19,7 @@ export type Project = {
   number: string;
   note?: string; // ⬅️ new
   wos: WO[];
-  pos: PO[];
+  fds?: ProjectFDS;
 };
 
 export type Customer = {

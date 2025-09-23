@@ -12,7 +12,7 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import type { Customer, Project, WOType } from '../types'
+import type { Customer, ProjectFDS, WOType } from '../types'
 import {
   listCustomers,
   createCustomer as createCustomerRecord,
@@ -22,8 +22,6 @@ import {
   deleteProject as deleteProjectRecord,
   createWO as createWORecord,
   deleteWO as deleteWORecord,
-  createPO as createPORecord,
-  deletePO as deletePORecord,
   updateProject as updateProjectRecord,
 } from '../lib/storage'
 import Button from '../components/ui/Button'
@@ -31,6 +29,44 @@ import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import ProjectPage from './ProjectPage'
+
+const FDS_MIME_BY_EXTENSION: Record<string, string> = {
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+}
+
+function guessMimeTypeFromName(name: string): string {
+  const extension = name.split('.').pop()?.toLowerCase() ?? ''
+  return FDS_MIME_BY_EXTENSION[extension] ?? 'application/octet-stream'
+}
+
+function isAllowedFdsFile(file: File): boolean {
+  const normalizedType = file.type?.toLowerCase()
+  if (normalizedType && Object.values(FDS_MIME_BY_EXTENSION).includes(normalizedType)) {
+    return true
+  }
+  const extension = file.name.split('.').pop()?.toLowerCase() ?? ''
+  return !!FDS_MIME_BY_EXTENSION[extension]
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result
+      if (typeof result === 'string') {
+        resolve(result)
+      } else {
+        reject(new Error('Unable to read file.'))
+      }
+    }
+    reader.onerror = () => {
+      reject(reader.error ?? new Error('Unable to read file.'))
+    }
+    reader.readAsDataURL(file)
+  })
+}
 
 function AppContent() {
   const [db, setDb] = useState<Customer[]>([])
@@ -347,7 +383,7 @@ function AppContent() {
                       <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
                         {[
                           { label: 'Work Orders', value: project.wos.length },
-                          { label: 'Purchase Orders', value: project.pos.length },
+                          { label: 'FDS Uploaded', value: project.fds ? 'Yes' : 'No' },
                         ].map(item => (
                           <div key={item.label} className='rounded-xl border border-slate-200 bg-white/80 p-3'>
                             <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{item.label}</div>
@@ -395,10 +431,6 @@ function AppContent() {
   const woNumberExists = (number: string, excludeWoId?: string) => {
     const norm = number.trim().toLowerCase()
     return db.some(c => c.projects.some(p => p.wos.some(w => w.id !== excludeWoId && w.number.trim().toLowerCase() === norm)))
-  }
-  const poNumberExists = (number: string, excludePoId?: string) => {
-    const norm = number.trim().toLowerCase()
-    return db.some(c => c.projects.some(p => p.pos.some(po => po.id !== excludePoId && po.number.trim().toLowerCase() === norm)))
   }
 
   // Mutators
@@ -510,13 +542,29 @@ function AppContent() {
     }
   }
 
-  async function deletePO(customerId: string, projectId: string, poId: string) {
+  async function uploadFds(customerId: string, projectId: string, file: File): Promise<string | null> {
     if (!canEdit) {
-      setActionError('Not authorized to delete purchase orders.')
-      return
+      const message = 'Not authorized to upload FDS documents.'
+      setActionError(message)
+      return message
     }
+    if (!isAllowedFdsFile(file)) {
+      return 'Upload a PDF or Word document (.doc or .docx).'
+    }
+    if (file.size === 0) {
+      return 'The selected file is empty.'
+    }
+
     try {
-      await deletePORecord(poId)
+      const dataUrl = await readFileAsDataUrl(file)
+      const payload: ProjectFDS = {
+        name: file.name,
+        type: file.type || guessMimeTypeFromName(file.name),
+        dataUrl,
+        uploadedAt: new Date().toISOString(),
+      }
+
+      await updateProjectRecord(projectId, { fds: payload })
       setDb(prev =>
         prev.map(c =>
           c.id !== customerId
@@ -524,16 +572,49 @@ function AppContent() {
             : {
                 ...c,
                 projects: c.projects.map(p =>
-                  p.id !== projectId ? p : { ...p, pos: p.pos.filter(po => po.id !== poId) },
+                  p.id !== projectId ? p : { ...p, fds: payload },
                 ),
               },
         ),
       )
       setActionError(null)
+      return null
     } catch (error) {
-      console.error('Failed to delete purchase order', error)
-      const message = toErrorMessage(error, 'Failed to delete purchase order.')
+      console.error('Failed to upload FDS document', error)
+      const message = toErrorMessage(error, 'Failed to upload FDS document.')
       setActionError(message)
+      return message
+    }
+  }
+
+  async function clearFds(customerId: string, projectId: string): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to remove FDS documents.'
+      setActionError(message)
+      return message
+    }
+
+    try {
+      await updateProjectRecord(projectId, { fds: null })
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, fds: undefined },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to remove FDS document', error)
+      const message = toErrorMessage(error, 'Failed to remove FDS document.')
+      setActionError(message)
+      return message
     }
   }
 
@@ -602,44 +683,6 @@ function AppContent() {
     } catch (error) {
       console.error('Failed to create work order', error)
       const message = toErrorMessage(error, 'Failed to create work order.')
-      setActionError(message)
-      return message
-    }
-  }
-
-  async function addPO(
-    customerId: string,
-    projectId: string,
-    data: { number: string; note?: string },
-  ): Promise<string | null> {
-    if (!canEdit) {
-      const message = 'Not authorized to create purchase orders.'
-      setActionError(message)
-      return message
-    }
-    const trimmed = data.number.trim()
-    if (!trimmed) return 'Enter a purchase order number.'
-    if (poNumberExists(trimmed)) return 'A purchase order with this number already exists.'
-    const note = data.note?.trim()
-    try {
-      const newPO = await createPORecord(projectId, { number: trimmed, note })
-      setDb(prev =>
-        prev.map(c =>
-          c.id !== customerId
-            ? c
-            : {
-                ...c,
-                projects: c.projects.map(p =>
-                  p.id !== projectId ? p : { ...p, pos: [...p.pos, newPO] },
-                ),
-              },
-        ),
-      )
-      setActionError(null)
-      return null
-    } catch (error) {
-      console.error('Failed to create purchase order', error)
-      const message = toErrorMessage(error, 'Failed to create purchase order.')
       setActionError(message)
       return message
     }
@@ -881,8 +924,8 @@ function AppContent() {
               }
               onAddWO={(data) => addWO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
               onDeleteWO={(woId) => deleteWO(selectedProjectData.customer.id, selectedProjectData.project.id, woId)}
-              onAddPO={(data) => addPO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
-              onDeletePO={(poId) => deletePO(selectedProjectData.customer.id, selectedProjectData.project.id, poId)}
+              onUploadFds={(file) => uploadFds(selectedProjectData.customer.id, selectedProjectData.project.id, file)}
+              onRemoveFds={() => clearFds(selectedProjectData.customer.id, selectedProjectData.project.id)}
               onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
               onNavigateBack={() => setSelectedProjectId(null)}
             />
