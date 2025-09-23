@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "sh -c \"node --loader ./ts-test-loader.mjs --test $(find tests -name '*.test.ts' -print | tr '\\n' ' ')\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",

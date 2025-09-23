@@ -3,6 +3,18 @@ import { getSupabaseClient } from './supabase'
 import { extractSupabaseErrorMessage, isSupabaseEdgeFunctionUnavailable, isSupabaseUnavailableError } from './supabaseErrors'
 import type { AppRole } from '../types'
 
+type SupabaseClientGetter = () => ReturnType<typeof getSupabaseClient>
+
+let resolveSupabaseClient: SupabaseClientGetter = getSupabaseClient
+
+export function __setSupabaseClientGetterForTesting(getter: SupabaseClientGetter): void {
+  resolveSupabaseClient = getter
+}
+
+export function __resetSupabaseClientGetterForTesting(): void {
+  resolveSupabaseClient = getSupabaseClient
+}
+
 type RoleRow = { role: string | null }
 
 export type ManagedUser = {
@@ -60,7 +72,7 @@ export function getFriendlySupabaseError(
 }
 
 export async function fetchCurrentUserRoles(): Promise<AppRole[]> {
-  const client = getSupabaseClient()
+  const client = resolveSupabaseClient()
   const { data, error } = await client.from('me_roles').select('role')
 
   if (error) {
@@ -83,7 +95,7 @@ export async function fetchManagedUsers(session: Session): Promise<ManagedUser[]
     throw new Error('A valid session token is required to load users.')
   }
 
-  const client = getSupabaseClient()
+  const client = resolveSupabaseClient()
   const { data, error } = await client.functions.invoke('user-management', {
     body: { action: 'list-users' },
     headers: { Authorization: `Bearer ${session.access_token}` },
@@ -139,7 +151,7 @@ export async function updateUserRole(
     throw new Error('A valid session token is required to update roles.')
   }
 
-  const client = getSupabaseClient()
+  const client = resolveSupabaseClient()
   const { data, error } = await client.functions.invoke('user-management', {
     body: { action: 'update-role', email: payload.email, role: payload.role, mode: payload.action },
     headers: { Authorization: `Bearer ${session.access_token}` },
@@ -164,3 +176,4 @@ export async function updateUserRole(
 
   return { message }
 }
+

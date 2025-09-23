@@ -12,11 +12,10 @@ const NETWORK_ERROR_PATTERNS = [
   'ssl connect error',
   'certificate',
   'temporarily unreachable',
-  'edge function',
   'functionsfetcherror',
 ]
 
-const EDGE_FUNCTION_PATTERNS = ['edge function', 'functionsfetcherror']
+const EDGE_FUNCTION_FETCH_ERROR_NAME = 'functionsfetcherror'
 
 type WithMessage = { message?: unknown; name?: unknown }
 
@@ -67,16 +66,17 @@ export function isSupabaseUnavailableError(error: unknown): boolean {
 }
 
 export function isSupabaseEdgeFunctionUnavailable(error: unknown): boolean {
-  const message = extractSupabaseErrorMessage(error).toLowerCase()
   const name = getErrorName(error).toLowerCase()
 
-  if (EDGE_FUNCTION_PATTERNS.some(pattern => name.includes(pattern))) {
-    return true
-  }
-
-  if (!message) {
+  if (name !== EDGE_FUNCTION_FETCH_ERROR_NAME) {
     return false
   }
 
-  return EDGE_FUNCTION_PATTERNS.some(pattern => message.includes(pattern))
+  const message = extractSupabaseErrorMessage(error).toLowerCase()
+
+  if (!message) {
+    return true
+  }
+
+  return NETWORK_ERROR_PATTERNS.some(pattern => message.includes(pattern))
 }
