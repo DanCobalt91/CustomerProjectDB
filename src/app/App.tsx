@@ -12,8 +12,21 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import type { Customer, CustomerContact, Project, ProjectFile, ProjectFileCategory, WOType } from '../types'
-import { PROJECT_FILE_CATEGORIES } from '../types'
+import type {
+  Customer,
+  CustomerContact,
+  Project,
+  ProjectActiveSubStatus,
+  ProjectFile,
+  ProjectFileCategory,
+  ProjectStatus,
+  WOType,
+} from '../types'
+import {
+  DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
+  PROJECT_FILE_CATEGORIES,
+  formatProjectStatus,
+} from '../types'
 import {
   listCustomers,
   createCustomer as createCustomerRecord,
@@ -79,47 +92,67 @@ function stripPrefix(value: string, pattern: RegExp): string {
   return match ? match[1].trim() : trimmed
 }
 
-type ProjectSubStatus = 'noWorkOrders' | 'buildOnly' | 'onsiteOnly' | 'mixed'
+type ProjectStatusBucket =
+  | 'active_fds'
+  | 'active_design'
+  | 'active_build'
+  | 'active_install'
+  | 'complete'
 
-const PROJECT_SUB_STATUS_META: Record<
-  ProjectSubStatus,
+const PROJECT_STATUS_BUCKETS: ProjectStatusBucket[] = [
+  'active_fds',
+  'active_design',
+  'active_build',
+  'active_install',
+  'complete',
+]
+
+const PROJECT_STATUS_BUCKET_META: Record<
+  ProjectStatusBucket,
   { label: string; description: string; colorClass: string }
 > = {
-  noWorkOrders: {
-    label: 'No Work Orders',
-    description: 'Projects that have been created but do not contain any work orders yet.',
-    colorClass: 'bg-slate-400',
+  active_fds: {
+    label: 'Active — FDS',
+    description: 'Projects currently in the front-end design stage.',
+    colorClass: 'bg-indigo-500',
   },
-  buildOnly: {
-    label: 'Build Only',
-    description: 'Projects with build work orders recorded but no onsite work orders.',
-    colorClass: 'bg-emerald-500',
-  },
-  onsiteOnly: {
-    label: 'Onsite Only',
-    description: 'Projects that only include onsite work orders.',
+  active_design: {
+    label: 'Active — Design',
+    description: 'Projects progressing through design activities.',
     colorClass: 'bg-sky-500',
   },
-  mixed: {
-    label: 'Build & Onsite',
-    description: 'Projects containing a mix of build and onsite work orders.',
-    colorClass: 'bg-violet-500',
+  active_build: {
+    label: 'Active — Build',
+    description: 'Projects moving through build execution.',
+    colorClass: 'bg-emerald-500',
+  },
+  active_install: {
+    label: 'Active — Install',
+    description: 'Projects carrying out installation work.',
+    colorClass: 'bg-amber-500',
+  },
+  complete: {
+    label: 'Complete',
+    description: 'Projects that have been marked as complete.',
+    colorClass: 'bg-slate-400',
   },
 }
 
-function resolveProjectSubStatus(project: Project): ProjectSubStatus {
-  const hasBuild = project.wos.some(wo => wo.type === 'Build')
-  const hasOnsite = project.wos.some(wo => wo.type === 'Onsite')
-  if (hasBuild && hasOnsite) {
-    return 'mixed'
+function resolveProjectStatusBucket(project: Project): ProjectStatusBucket {
+  if (project.status === 'Complete') {
+    return 'complete'
   }
-  if (hasBuild) {
-    return 'buildOnly'
+  const stage = project.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+  switch (stage) {
+    case 'Design':
+      return 'active_design'
+    case 'Build':
+      return 'active_build'
+    case 'Install':
+      return 'active_install'
+    default:
+      return 'active_fds'
   }
-  if (hasOnsite) {
-    return 'onsiteOnly'
-  }
-  return 'noWorkOrders'
 }
 
 function AppContent() {
@@ -244,35 +277,45 @@ function AppContent() {
 
   const customerCount = db.length
 
-  const projectSubStatusCounts = useMemo(() => {
-    const counts: Record<ProjectSubStatus, number> = {
-      noWorkOrders: 0,
-      buildOnly: 0,
-      onsiteOnly: 0,
-      mixed: 0,
+  const projectStatusBucketCounts = useMemo(() => {
+    const counts: Record<ProjectStatusBucket, number> = {
+      active_fds: 0,
+      active_design: 0,
+      active_build: 0,
+      active_install: 0,
+      complete: 0,
     }
     db.forEach(customer => {
       customer.projects.forEach(project => {
-        const status = resolveProjectSubStatus(project)
-        counts[status] += 1
+        const bucket = resolveProjectStatusBucket(project)
+        counts[bucket] += 1
       })
     })
     return counts
   }, [db])
 
-  const projectSubStatusData = useMemo(
+  const projectStatusData = useMemo(
     () =>
-      (Object.keys(PROJECT_SUB_STATUS_META) as ProjectSubStatus[]).map(status => ({
-        key: status,
-        count: projectSubStatusCounts[status],
-        ...PROJECT_SUB_STATUS_META[status],
+      PROJECT_STATUS_BUCKETS.map(bucket => ({
+        key: bucket,
+        count: projectStatusBucketCounts[bucket],
+        ...PROJECT_STATUS_BUCKET_META[bucket],
       })),
-    [projectSubStatusCounts],
+    [projectStatusBucketCounts],
   )
 
   const totalProjects = useMemo(
-    () => projectSubStatusData.reduce((sum, item) => sum + item.count, 0),
-    [projectSubStatusData],
+    () => projectStatusData.reduce((sum, item) => sum + item.count, 0),
+    [projectStatusData],
+  )
+
+  const activeProjects = useMemo(
+    () =>
+      projectStatusBucketCounts.active_fds +
+      projectStatusBucketCounts.active_design +
+      projectStatusBucketCounts.active_build +
+      projectStatusBucketCounts.active_install,
+    [projectStatusBucketCounts],
   )
 
   const totalWorkOrders = useMemo(
@@ -643,6 +686,10 @@ function AppContent() {
                     <CardContent>
                       <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
                         {[
+                          {
+                            label: 'Status',
+                            value: formatProjectStatus(project.status, project.activeSubStatus),
+                          },
                           { label: 'Work Orders', value: project.wos.length },
                           {
                             label: 'Project Files',
@@ -678,7 +725,7 @@ function AppContent() {
 
   const DashboardView = () => {
     const averageWorkOrders = totalProjects > 0 ? totalWorkOrders / totalProjects : 0
-    const maxStatusCount = projectSubStatusData.reduce((max, item) => (item.count > max ? item.count : max), 0)
+    const maxStatusCount = projectStatusData.reduce((max, item) => (item.count > max ? item.count : max), 0)
     const barDenominator = maxStatusCount > 0 ? maxStatusCount : 1
 
     return (
@@ -700,9 +747,11 @@ function AppContent() {
           <CardContent>
             <div className='grid gap-4 sm:grid-cols-3'>
               <div className='rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm'>
-                <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Active Projects</div>
+                <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Projects</div>
                 <div className='mt-1 text-3xl font-semibold text-slate-900'>{totalProjects}</div>
-                <p className='mt-2 text-sm text-slate-500'>Across {customerCount} {customerCount === 1 ? 'customer' : 'customers'}.</p>
+                <p className='mt-2 text-sm text-slate-500'>
+                  {activeProjects} active across {customerCount} {customerCount === 1 ? 'customer' : 'customers'}.
+                </p>
               </div>
               <div className='rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm'>
                 <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Work Orders</div>
@@ -720,15 +769,15 @@ function AppContent() {
 
         <Card className='panel'>
           <CardHeader className='flex-col items-start gap-2'>
-            <div className='text-lg font-semibold text-slate-900'>Active projects sub-status</div>
-            <p className='text-sm text-slate-500'>Breakdown by the mix of work order types attached to each active project.</p>
+            <div className='text-lg font-semibold text-slate-900'>Project status overview</div>
+            <p className='text-sm text-slate-500'>Track each project's lifecycle stage, from FDS through install and completion.</p>
           </CardHeader>
           <CardContent>
             {totalProjects === 0 ? (
-              <p className='text-sm text-slate-500'>Add a project to see sub-status details.</p>
+              <p className='text-sm text-slate-500'>Add a project to see status details.</p>
             ) : (
               <div className='space-y-4'>
-                {projectSubStatusData.map(status => (
+                {projectStatusData.map(status => (
                   <div key={status.key}>
                     <div className='flex items-center gap-3'>
                       <div className={`h-2.5 w-2.5 rounded-full ${status.colorClass}`} aria-hidden />
@@ -1114,6 +1163,65 @@ function AppContent() {
     })()
   }
 
+  function updateProjectStatus(
+    customerId: string,
+    projectId: string,
+    status: ProjectStatus,
+    activeSubStatus?: ProjectActiveSubStatus,
+  ) {
+    if (!canEdit) {
+      setActionError('Not authorized to update project status.')
+      return
+    }
+
+    const existingProject = db
+      .find(customer => customer.id === customerId)
+      ?.projects.find(project => project.id === projectId)
+
+    const normalizedActiveSubStatus =
+      status === 'Active'
+        ? activeSubStatus ?? existingProject?.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+        : undefined
+
+    const nextActiveSubStatus =
+      status === 'Active'
+        ? normalizedActiveSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+        : undefined
+
+    setDb(prev =>
+      prev.map(c =>
+        c.id !== customerId
+          ? c
+          : {
+              ...c,
+              projects: c.projects.map(p =>
+                p.id !== projectId
+                  ? p
+                  : {
+                      ...p,
+                      status,
+                      activeSubStatus: nextActiveSubStatus,
+                    },
+              ),
+            },
+      ),
+    )
+
+    void (async () => {
+      try {
+        await updateProjectRecord(projectId, {
+          status,
+          activeSubStatus: status === 'Active' ? nextActiveSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS : null,
+        })
+        setActionError(null)
+      } catch (error) {
+        console.error('Failed to update project status', error)
+        const message = toErrorMessage(error, 'Failed to update project status.')
+        setActionError(message)
+      }
+    })()
+  }
+
   async function addWO(
     customerId: string,
     projectId: string,
@@ -1427,6 +1535,14 @@ function AppContent() {
               canEdit={canEdit}
               onUpdateProjectNote={(note) =>
                 updateProjectNote(selectedProjectData.customer.id, selectedProjectData.project.id, note)
+              }
+              onUpdateProjectStatus={(status, activeSubStatus) =>
+                updateProjectStatus(
+                  selectedProjectData.customer.id,
+                  selectedProjectData.project.id,
+                  status,
+                  activeSubStatus,
+                )
               }
               onAddWO={(data) => addWO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
               onDeleteWO={(woId) => deleteWO(selectedProjectData.customer.id, selectedProjectData.project.id, woId)}

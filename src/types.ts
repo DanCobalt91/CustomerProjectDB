@@ -11,6 +11,18 @@ export type ProjectFileCategory = 'fds' | 'electrical' | 'mechanical';
 
 export const PROJECT_FILE_CATEGORIES: ProjectFileCategory[] = ['fds', 'electrical', 'mechanical'];
 
+export const PROJECT_STATUS_OPTIONS = ['Active', 'Complete'] as const;
+
+export type ProjectStatus = (typeof PROJECT_STATUS_OPTIONS)[number];
+
+export const PROJECT_ACTIVE_SUB_STATUS_OPTIONS = ['FDS', 'Design', 'Build', 'Install'] as const;
+
+export type ProjectActiveSubStatus = (typeof PROJECT_ACTIVE_SUB_STATUS_OPTIONS)[number];
+
+export const DEFAULT_PROJECT_STATUS: ProjectStatus = 'Active';
+
+export const DEFAULT_PROJECT_ACTIVE_SUB_STATUS: ProjectActiveSubStatus = 'FDS';
+
 export type ProjectFile = {
   name: string;
   type: string;
@@ -23,6 +35,8 @@ export type ProjectDocuments = Partial<Record<ProjectFileCategory, ProjectFile>>
 export type Project = {
   id: string;
   number: string;
+  status: ProjectStatus;
+  activeSubStatus?: ProjectActiveSubStatus;
   note?: string; // ⬅️ new
   wos: WO[];
   documents?: ProjectDocuments;
@@ -45,3 +59,9 @@ export type Customer = {
 };
 
 export type AppRole = 'viewer' | 'editor' | 'admin';
+
+export function formatProjectStatus(status: ProjectStatus, activeSubStatus?: ProjectActiveSubStatus): string {
+  return status === 'Active'
+    ? `Active — ${activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS}`
+    : 'Complete';
+}

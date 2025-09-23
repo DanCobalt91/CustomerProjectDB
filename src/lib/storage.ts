@@ -2,13 +2,20 @@ import type {
   Customer,
   CustomerContact,
   Project,
+  ProjectActiveSubStatus,
   ProjectDocuments,
   ProjectFile,
   ProjectFileCategory,
+  ProjectStatus,
   WO,
   WOType,
 } from '../types'
-import { PROJECT_FILE_CATEGORIES } from '../types'
+import {
+  DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
+  DEFAULT_PROJECT_STATUS,
+  PROJECT_ACTIVE_SUB_STATUS_OPTIONS,
+  PROJECT_FILE_CATEGORIES,
+} from '../types'
 
 type ContactInput = Partial<Omit<CustomerContact, 'id'>> & { id?: string }
 type ProjectDocumentsUpdate = Partial<Record<ProjectFileCategory, ProjectFile | null>>
@@ -34,7 +41,12 @@ type StorageApi = {
   createProject(customerId: string, number: string): Promise<Project>
   updateProject(
     projectId: string,
-    data: { note?: string | null; documents?: ProjectDocumentsUpdate },
+    data: {
+      note?: string | null
+      documents?: ProjectDocumentsUpdate
+      status?: ProjectStatus
+      activeSubStatus?: ProjectActiveSubStatus | null
+    },
   ): Promise<Project>
   deleteProject(projectId: string): Promise<void>
   createWO(projectId: string, data: { number: string; type: WOType; note?: string }): Promise<WO>
@@ -92,7 +104,12 @@ export function createProject(customerId: string, number: string): Promise<Proje
 
 export function updateProject(
   projectId: string,
-  data: { note?: string | null; documents?: ProjectDocumentsUpdate },
+  data: {
+    note?: string | null
+    documents?: ProjectDocumentsUpdate
+    status?: ProjectStatus
+    activeSubStatus?: ProjectActiveSubStatus | null
+  },
 ): Promise<Project> {
   return ensureLocalStorage().updateProject(projectId, data)
 }
@@ -248,6 +265,17 @@ function createLocalStorageStorage(): StorageApi {
     return documents
   }
 
+  function isProjectStatus(value: unknown): value is ProjectStatus {
+    return value === 'Active' || value === 'Complete'
+  }
+
+  function isProjectActiveSubStatus(value: unknown): value is ProjectActiveSubStatus {
+    return (
+      typeof value === 'string' &&
+      PROJECT_ACTIVE_SUB_STATUS_OPTIONS.includes(value as ProjectActiveSubStatus)
+    )
+  }
+
   function hasProjectDocuments(documents?: ProjectDocuments): documents is ProjectDocuments {
     if (!documents) {
       return false
@@ -311,9 +339,21 @@ function createLocalStorageStorage(): StorageApi {
       }
     }
 
+    const rawStatus = (raw as { status?: unknown }).status
+    const status: ProjectStatus = isProjectStatus(rawStatus) ? rawStatus : DEFAULT_PROJECT_STATUS
+    const rawActiveSubStatus = (raw as { activeSubStatus?: unknown }).activeSubStatus
+    const activeSubStatus: ProjectActiveSubStatus | undefined =
+      status === 'Active'
+        ? isProjectActiveSubStatus(rawActiveSubStatus)
+          ? rawActiveSubStatus
+          : DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+        : undefined
+
     return {
       id,
       number,
+      status,
+      activeSubStatus,
       note: toOptionalString(raw.note),
       wos: sortWOs(wos),
       documents: hasProjectDocuments(documents) ? documents : undefined,
@@ -450,6 +490,8 @@ function createLocalStorageStorage(): StorageApi {
     return {
       id: project.id,
       number: project.number,
+      status: project.status,
+      activeSubStatus: project.activeSubStatus,
       note: project.note,
       wos: project.wos.map(cloneWorkOrder),
       documents: cloneProjectDocuments(project.documents),
@@ -655,6 +697,8 @@ function createLocalStorageStorage(): StorageApi {
       const project: Project = {
         id: createId(),
         number: number.trim(),
+        status: DEFAULT_PROJECT_STATUS,
+        activeSubStatus: DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
         note: undefined,
         wos: [],
       }
@@ -668,7 +712,12 @@ function createLocalStorageStorage(): StorageApi {
 
     async updateProject(
       projectId: string,
-      data: { note?: string | null; documents?: ProjectDocumentsUpdate },
+      data: {
+        note?: string | null
+        documents?: ProjectDocumentsUpdate
+        status?: ProjectStatus
+        activeSubStatus?: ProjectActiveSubStatus | null
+      },
     ): Promise<Project> {
       const db = loadDatabase()
       const located = locateProject(db, projectId)
@@ -704,8 +753,31 @@ function createLocalStorageStorage(): StorageApi {
         }
       }
       const normalizedDocuments = hasProjectDocuments(nextDocuments) ? nextDocuments : undefined
+
+      let nextStatus = project.status
+      if (data.status !== undefined && isProjectStatus(data.status)) {
+        nextStatus = data.status
+      }
+
+      let nextActiveSubStatus = project.activeSubStatus
+      if (data.activeSubStatus !== undefined) {
+        if (data.activeSubStatus === null) {
+          nextActiveSubStatus = undefined
+        } else if (isProjectActiveSubStatus(data.activeSubStatus)) {
+          nextActiveSubStatus = data.activeSubStatus
+        }
+      }
+
+      if (nextStatus === 'Complete') {
+        nextActiveSubStatus = undefined
+      } else {
+        nextActiveSubStatus = nextActiveSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+      }
+
       const nextProject: Project = {
         ...project,
+        status: nextStatus,
+        activeSubStatus: nextActiveSubStatus,
         note: applyNullable(project.note, data.note),
         documents: normalizedDocuments,
       }
