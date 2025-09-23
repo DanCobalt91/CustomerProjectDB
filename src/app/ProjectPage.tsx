@@ -1,8 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import { AlertCircle, ArrowLeft, ChevronDown, Copy, Download, FileText, Plus, Trash2, Upload, X } from 'lucide-react'
-import type { Customer, Project, ProjectFile, ProjectFileCategory, WOType } from '../types'
-import { PROJECT_FILE_CATEGORIES } from '../types'
+import type {
+  Customer,
+  Project,
+  ProjectActiveSubStatus,
+  ProjectFile,
+  ProjectFileCategory,
+  ProjectStatus,
+  WOType,
+} from '../types'
+import {
+  DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
+  PROJECT_ACTIVE_SUB_STATUS_OPTIONS,
+  PROJECT_FILE_CATEGORIES,
+  formatProjectStatus,
+} from '../types'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
@@ -13,6 +26,7 @@ export type ProjectPageProps = {
   project: Project
   canEdit: boolean
   onUpdateProjectNote: (note: string) => void
+  onUpdateProjectStatus: (status: ProjectStatus, activeSubStatus?: ProjectActiveSubStatus) => void
   onAddWO: (data: { number: string; type: WOType; note?: string }) => Promise<string | null>
   onDeleteWO: (woId: string) => void
   onUploadDocument: (category: ProjectFileCategory, file: File) => Promise<string | null>
@@ -94,6 +108,7 @@ export default function ProjectPage({
   project,
   canEdit,
   onUpdateProjectNote,
+  onUpdateProjectStatus,
   onAddWO,
   onDeleteWO,
   onUploadDocument,
@@ -101,6 +116,10 @@ export default function ProjectPage({
   onDeleteProject,
   onNavigateBack,
 }: ProjectPageProps) {
+  const [statusDraft, setStatusDraft] = useState<ProjectStatus>(project.status)
+  const [activeSubStatusDraft, setActiveSubStatusDraft] = useState<ProjectActiveSubStatus>(
+    project.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
+  )
   const [noteDraft, setNoteDraft] = useState(project.note ?? '')
   const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
   const [woError, setWoError] = useState<string | null>(null)
@@ -127,6 +146,8 @@ export default function ProjectPage({
   )
 
   useEffect(() => {
+    setStatusDraft(project.status)
+    setActiveSubStatusDraft(project.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS)
     setNoteDraft(project.note ?? '')
     setWoForm({ number: '', type: 'Build', note: '' })
     setWoError(null)
@@ -143,10 +164,56 @@ export default function ProjectPage({
     })
   }, [project.note])
 
+  useEffect(() => {
+    setStatusDraft(project.status)
+  }, [project.status])
+
+  useEffect(() => {
+    if (project.status === 'Active') {
+      setActiveSubStatusDraft(project.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS)
+    }
+  }, [project.status, project.activeSubStatus])
+
   const summary = [
+    { label: 'Status', value: formatProjectStatus(project.status, project.activeSubStatus) },
     { label: 'Work Orders', value: project.wos.length },
     { label: 'Project Files', value: documentsCount },
   ]
+
+  const handleStatusChange = (nextStatus: ProjectStatus) => {
+    setStatusDraft(nextStatus)
+    if (!canEdit) {
+      return
+    }
+    if (nextStatus === project.status) {
+      if (nextStatus === 'Active') {
+        const currentStage = project.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+        if (currentStage === activeSubStatusDraft) {
+          return
+        }
+      } else {
+        return
+      }
+    }
+
+    if (nextStatus === 'Active') {
+      onUpdateProjectStatus('Active', activeSubStatusDraft)
+    } else {
+      onUpdateProjectStatus('Complete')
+    }
+  }
+
+  const handleActiveSubStatusChange = (nextStage: ProjectActiveSubStatus) => {
+    setActiveSubStatusDraft(nextStage)
+    if (!canEdit) {
+      return
+    }
+    const currentStage = project.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+    if (project.status === 'Active' && currentStage === nextStage) {
+      return
+    }
+    onUpdateProjectStatus('Active', nextStage)
+  }
 
   const handleAddWO = async () => {
     if (!canEdit) {
@@ -283,6 +350,44 @@ export default function ProjectPage({
           {summary.map(item => (
             <SummaryTile key={item.label} label={item.label} value={item.value} />
           ))}
+        </section>
+
+        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
+          <div className='mb-3 text-sm font-semibold text-slate-700'>Project Status</div>
+          <div className='grid gap-3 sm:grid-cols-2 md:grid-cols-3'>
+            <div>
+              <Label>Status</Label>
+              <select
+                className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                value={statusDraft}
+                onChange={(event) => handleStatusChange(event.target.value as ProjectStatus)}
+                disabled={!canEdit}
+              >
+                <option value='Active'>Active</option>
+                <option value='Complete'>Complete</option>
+              </select>
+            </div>
+            {statusDraft === 'Active' && (
+              <div>
+                <Label>Stage</Label>
+                <select
+                  className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                  value={activeSubStatusDraft}
+                  onChange={(event) =>
+                    handleActiveSubStatusChange(event.target.value as ProjectActiveSubStatus)
+                  }
+                  disabled={!canEdit}
+                >
+                  {PROJECT_ACTIVE_SUB_STATUS_OPTIONS.map(option => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+          <p className='mt-2 text-xs text-slate-500'>Updates here are reflected on the dashboard overview.</p>
         </section>
 
         <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
