@@ -1,5 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, useParams } from 'react-router-dom'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Plus,
   Trash2,
@@ -931,7 +930,9 @@ function AppContent() {
             : {
                 ...c,
                 projects: c.projects.map(p =>
-                  p.id !== projectId ? p : { ...p, technicalDrawings: [...p.technicalDrawings, file] },
+                  p.id !== projectId
+                    ? p
+                    : { ...p, technicalDrawings: [...p.technicalDrawings, file] },
                 ),
               },
         ),
