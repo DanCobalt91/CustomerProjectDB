@@ -13,12 +13,30 @@ export type PO = {
   note?: string;
 };
 
+export type ProjectFile = {
+  id: string;
+  name: string;
+  url?: string;
+  note?: string;
+};
+
+export type SignOff = {
+  id: string;
+  title: string;
+  signedBy?: string;
+  date?: string;
+  note?: string;
+};
+
 export type Project = {
   id: string;
   number: string;
   note?: string; // ⬅️ new
   wos: WO[];
   pos: PO[];
+  fdsFiles: ProjectFile[];
+  technicalDrawings: ProjectFile[];
+  signOffs: SignOff[];
 };
 
 export type Customer = {
