@@ -1,4 +1,4 @@
-import type { Customer, PO, Project, WO, WOType } from '../types'
+import type { Customer, PO, Project, ProjectFile, SignOff, WO, WOType } from '../types'
 
 type StorageApi = {
   listCustomers(): Promise<Customer[]>
@@ -30,6 +30,15 @@ type StorageApi = {
   deleteWO(woId: string): Promise<void>
   createPO(projectId: string, data: { number: string; note?: string }): Promise<PO>
   deletePO(poId: string): Promise<void>
+  createFdsFile(projectId: string, data: { name: string; url?: string; note?: string }): Promise<ProjectFile>
+  deleteFdsFile(fileId: string): Promise<void>
+  createTechnicalDrawing(projectId: string, data: { name: string; url?: string; note?: string }): Promise<ProjectFile>
+  deleteTechnicalDrawing(fileId: string): Promise<void>
+  createSignOff(
+    projectId: string,
+    data: { title: string; signedBy?: string; date?: string; note?: string },
+  ): Promise<SignOff>
+  deleteSignOff(signOffId: string): Promise<void>
 }
 
 let localStorageStorage: StorageApi | null = null
@@ -114,6 +123,39 @@ export function createPO(projectId: string, data: { number: string; note?: strin
 
 export function deletePO(poId: string): Promise<void> {
   return ensureLocalStorage().deletePO(poId)
+}
+
+export function createFdsFile(
+  projectId: string,
+  data: { name: string; url?: string; note?: string },
+): Promise<ProjectFile> {
+  return ensureLocalStorage().createFdsFile(projectId, data)
+}
+
+export function deleteFdsFile(fileId: string): Promise<void> {
+  return ensureLocalStorage().deleteFdsFile(fileId)
+}
+
+export function createTechnicalDrawing(
+  projectId: string,
+  data: { name: string; url?: string; note?: string },
+): Promise<ProjectFile> {
+  return ensureLocalStorage().createTechnicalDrawing(projectId, data)
+}
+
+export function deleteTechnicalDrawing(fileId: string): Promise<void> {
+  return ensureLocalStorage().deleteTechnicalDrawing(fileId)
+}
+
+export function createSignOff(
+  projectId: string,
+  data: { title: string; signedBy?: string; date?: string; note?: string },
+): Promise<SignOff> {
+  return ensureLocalStorage().createSignOff(projectId, data)
+}
+
+export function deleteSignOff(signOffId: string): Promise<void> {
+  return ensureLocalStorage().deleteSignOff(signOffId)
 }
 
 function sortByText<T>(items: T[], getValue: (item: T) => string): T[] {
@@ -230,6 +272,47 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
+  function normalizeProjectFile(value: unknown): ProjectFile | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const id = typeof raw.id === 'string' ? raw.id : null
+    const name = typeof raw.name === 'string' ? raw.name : null
+    if (!id || !name) {
+      return null
+    }
+
+    return {
+      id,
+      name,
+      url: toOptionalString(raw.url),
+      note: toOptionalString(raw.note),
+    }
+  }
+
+  function normalizeSignOff(value: unknown): SignOff | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const id = typeof raw.id === 'string' ? raw.id : null
+    const title = typeof raw.title === 'string' ? raw.title : null
+    if (!id || !title) {
+      return null
+    }
+
+    return {
+      id,
+      title,
+      signedBy: toOptionalString(raw.signedBy),
+      date: toOptionalString(raw.date),
+      note: toOptionalString(raw.note),
+    }
+  }
+
   function normalizeProject(value: unknown): Project | null {
     if (!value || typeof value !== 'object') {
       return null
@@ -244,6 +327,9 @@ function createLocalStorageStorage(): StorageApi {
 
     const wosSource = Array.isArray(raw.wos) ? (raw.wos as unknown[]) : []
     const posSource = Array.isArray(raw.pos) ? (raw.pos as unknown[]) : []
+    const fdsSource = Array.isArray(raw.fdsFiles) ? (raw.fdsFiles as unknown[]) : []
+    const techSource = Array.isArray(raw.technicalDrawings) ? (raw.technicalDrawings as unknown[]) : []
+    const signOffSource = Array.isArray(raw.signOffs) ? (raw.signOffs as unknown[]) : []
 
     const wos = wosSource
       .map(normalizeWorkOrder)
@@ -251,6 +337,15 @@ function createLocalStorageStorage(): StorageApi {
     const pos = posSource
       .map(normalizePurchaseOrder)
       .filter((po): po is PO => !!po)
+    const fdsFiles = fdsSource
+      .map(normalizeProjectFile)
+      .filter((file): file is ProjectFile => !!file)
+    const technicalDrawings = techSource
+      .map(normalizeProjectFile)
+      .filter((file): file is ProjectFile => !!file)
+    const signOffs = signOffSource
+      .map(normalizeSignOff)
+      .filter((signOff): signOff is SignOff => !!signOff)
 
     return {
       id,
@@ -258,6 +353,9 @@ function createLocalStorageStorage(): StorageApi {
       note: toOptionalString(raw.note),
       wos: sortWOs(wos),
       pos: sortPOs(pos),
+      fdsFiles: sortProjectFiles(fdsFiles),
+      technicalDrawings: sortProjectFiles(technicalDrawings),
+      signOffs: sortSignOffs(signOffs),
     }
   }
 
@@ -343,6 +441,25 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
+  function cloneProjectFile(file: ProjectFile): ProjectFile {
+    return {
+      id: file.id,
+      name: file.name,
+      url: file.url,
+      note: file.note,
+    }
+  }
+
+  function cloneSignOff(signOff: SignOff): SignOff {
+    return {
+      id: signOff.id,
+      title: signOff.title,
+      signedBy: signOff.signedBy,
+      date: signOff.date,
+      note: signOff.note,
+    }
+  }
+
   function cloneProject(project: Project): Project {
     return {
       id: project.id,
@@ -350,6 +467,9 @@ function createLocalStorageStorage(): StorageApi {
       note: project.note,
       wos: project.wos.map(cloneWorkOrder),
       pos: project.pos.map(clonePurchaseOrder),
+      fdsFiles: project.fdsFiles.map(cloneProjectFile),
+      technicalDrawings: project.technicalDrawings.map(cloneProjectFile),
+      signOffs: project.signOffs.map(cloneSignOff),
     }
   }
 
@@ -379,6 +499,14 @@ function createLocalStorageStorage(): StorageApi {
 
   function sortPOs(pos: PO[]): PO[] {
     return sortByText(pos, po => po.number)
+  }
+
+  function sortProjectFiles(files: ProjectFile[]): ProjectFile[] {
+    return sortByText(files, file => file.name)
+  }
+
+  function sortSignOffs(signOffs: SignOff[]): SignOff[] {
+    return sortByText(signOffs, signOff => signOff.title)
   }
 
   function normalizeInput(value: string | undefined): string | undefined {
@@ -455,6 +583,51 @@ function createLocalStorageStorage(): StorageApi {
         if (poIndex !== -1) {
           const po = project.pos[poIndex]
           return { customerIndex, projectIndex, poIndex, customer, project, po }
+        }
+      }
+    }
+    return null
+  }
+
+  function locateFdsFile(db: Database, fileId: string) {
+    for (let customerIndex = 0; customerIndex < db.customers.length; customerIndex += 1) {
+      const customer = db.customers[customerIndex]
+      for (let projectIndex = 0; projectIndex < customer.projects.length; projectIndex += 1) {
+        const project = customer.projects[projectIndex]
+        const fileIndex = project.fdsFiles.findIndex(file => file.id === fileId)
+        if (fileIndex !== -1) {
+          const file = project.fdsFiles[fileIndex]
+          return { customerIndex, projectIndex, fileIndex, customer, project, file }
+        }
+      }
+    }
+    return null
+  }
+
+  function locateTechnicalDrawing(db: Database, fileId: string) {
+    for (let customerIndex = 0; customerIndex < db.customers.length; customerIndex += 1) {
+      const customer = db.customers[customerIndex]
+      for (let projectIndex = 0; projectIndex < customer.projects.length; projectIndex += 1) {
+        const project = customer.projects[projectIndex]
+        const fileIndex = project.technicalDrawings.findIndex(file => file.id === fileId)
+        if (fileIndex !== -1) {
+          const file = project.technicalDrawings[fileIndex]
+          return { customerIndex, projectIndex, fileIndex, customer, project, file }
+        }
+      }
+    }
+    return null
+  }
+
+  function locateSignOff(db: Database, signOffId: string) {
+    for (let customerIndex = 0; customerIndex < db.customers.length; customerIndex += 1) {
+      const customer = db.customers[customerIndex]
+      for (let projectIndex = 0; projectIndex < customer.projects.length; projectIndex += 1) {
+        const project = customer.projects[projectIndex]
+        const signOffIndex = project.signOffs.findIndex(signOff => signOff.id === signOffId)
+        if (signOffIndex !== -1) {
+          const signOff = project.signOffs[signOffIndex]
+          return { customerIndex, projectIndex, signOffIndex, customer, project, signOff }
         }
       }
     }
@@ -578,6 +751,9 @@ function createLocalStorageStorage(): StorageApi {
         note: undefined,
         wos: [],
         pos: [],
+        fdsFiles: [],
+        technicalDrawings: [],
+        signOffs: [],
       }
 
       const nextProjects = sortProjects([project, ...customer.projects])
@@ -707,6 +883,154 @@ function createLocalStorageStorage(): StorageApi {
       const updatedPos = [...project.pos]
       updatedPos.splice(poIndex, 1)
       const updatedProject: Project = { ...project, pos: sortPOs(updatedPos) }
+      const updatedProjects = [...customer.projects]
+      updatedProjects[projectIndex] = updatedProject
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
+    },
+
+    async createFdsFile(
+      projectId: string,
+      data: { name: string; url?: string; note?: string },
+    ): Promise<ProjectFile> {
+      const db = loadDatabase()
+      const located = locateProject(db, projectId)
+      if (!located) {
+        throw new Error('Project not found.')
+      }
+
+      const { customerIndex, projectIndex, customer, project } = located
+      const file: ProjectFile = {
+        id: createId(),
+        name: data.name.trim(),
+        url: normalizeInput(data.url),
+        note: normalizeInput(data.note),
+      }
+
+      const updatedProject: Project = {
+        ...project,
+        fdsFiles: sortProjectFiles([...project.fdsFiles, file]),
+      }
+
+      const updatedProjects = [...customer.projects]
+      updatedProjects[projectIndex] = updatedProject
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
+      return cloneProjectFile(file)
+    },
+
+    async deleteFdsFile(fileId: string): Promise<void> {
+      const db = loadDatabase()
+      const located = locateFdsFile(db, fileId)
+      if (!located) {
+        throw new Error('File not found.')
+      }
+
+      const { customerIndex, projectIndex, fileIndex, customer, project } = located
+      const updatedFiles = [...project.fdsFiles]
+      updatedFiles.splice(fileIndex, 1)
+      const updatedProject: Project = { ...project, fdsFiles: sortProjectFiles(updatedFiles) }
+      const updatedProjects = [...customer.projects]
+      updatedProjects[projectIndex] = updatedProject
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
+    },
+
+    async createTechnicalDrawing(
+      projectId: string,
+      data: { name: string; url?: string; note?: string },
+    ): Promise<ProjectFile> {
+      const db = loadDatabase()
+      const located = locateProject(db, projectId)
+      if (!located) {
+        throw new Error('Project not found.')
+      }
+
+      const { customerIndex, projectIndex, customer, project } = located
+      const file: ProjectFile = {
+        id: createId(),
+        name: data.name.trim(),
+        url: normalizeInput(data.url),
+        note: normalizeInput(data.note),
+      }
+
+      const updatedProject: Project = {
+        ...project,
+        technicalDrawings: sortProjectFiles([...project.technicalDrawings, file]),
+      }
+
+      const updatedProjects = [...customer.projects]
+      updatedProjects[projectIndex] = updatedProject
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
+      return cloneProjectFile(file)
+    },
+
+    async deleteTechnicalDrawing(fileId: string): Promise<void> {
+      const db = loadDatabase()
+      const located = locateTechnicalDrawing(db, fileId)
+      if (!located) {
+        throw new Error('File not found.')
+      }
+
+      const { customerIndex, projectIndex, fileIndex, customer, project } = located
+      const updatedFiles = [...project.technicalDrawings]
+      updatedFiles.splice(fileIndex, 1)
+      const updatedProject: Project = { ...project, technicalDrawings: sortProjectFiles(updatedFiles) }
+      const updatedProjects = [...customer.projects]
+      updatedProjects[projectIndex] = updatedProject
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
+    },
+
+    async createSignOff(
+      projectId: string,
+      data: { title: string; signedBy?: string; date?: string; note?: string },
+    ): Promise<SignOff> {
+      const db = loadDatabase()
+      const located = locateProject(db, projectId)
+      if (!located) {
+        throw new Error('Project not found.')
+      }
+
+      const { customerIndex, projectIndex, customer, project } = located
+      const signOff: SignOff = {
+        id: createId(),
+        title: data.title.trim(),
+        signedBy: normalizeInput(data.signedBy),
+        date: normalizeInput(data.date),
+        note: normalizeInput(data.note),
+      }
+
+      const updatedProject: Project = {
+        ...project,
+        signOffs: sortSignOffs([...project.signOffs, signOff]),
+      }
+
+      const updatedProjects = [...customer.projects]
+      updatedProjects[projectIndex] = updatedProject
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
+      return cloneSignOff(signOff)
+    },
+
+    async deleteSignOff(signOffId: string): Promise<void> {
+      const db = loadDatabase()
+      const located = locateSignOff(db, signOffId)
+      if (!located) {
+        throw new Error('Sign-off not found.')
+      }
+
+      const { customerIndex, projectIndex, signOffIndex, customer, project } = located
+      const updatedSignOffs = [...project.signOffs]
+      updatedSignOffs.splice(signOffIndex, 1)
+      const updatedProject: Project = { ...project, signOffs: sortSignOffs(updatedSignOffs) }
       const updatedProjects = [...customer.projects]
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
