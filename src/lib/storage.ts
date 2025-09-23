@@ -1,4 +1,17 @@
-import type { Customer, Project, ProjectFDS, WO, WOType } from '../types'
+import type {
+  Customer,
+  CustomerContact,
+  Project,
+  ProjectDocuments,
+  ProjectFile,
+  ProjectFileCategory,
+  WO,
+  WOType,
+} from '../types'
+import { PROJECT_FILE_CATEGORIES } from '../types'
+
+type ContactInput = Partial<Omit<CustomerContact, 'id'>> & { id?: string }
+type ProjectDocumentsUpdate = Partial<Record<ProjectFileCategory, ProjectFile | null>>
 
 type StorageApi = {
   listCustomers(): Promise<Customer[]>
@@ -7,25 +20,21 @@ type StorageApi = {
   createCustomer(data: {
     name: string
     address?: string
-    contactName?: string
-    contactPhone?: string
-    contactEmail?: string
+    contacts?: ContactInput[]
   }): Promise<Customer>
   updateCustomer(
     customerId: string,
     data: {
       name?: string
       address?: string | null
-      contactName?: string | null
-      contactPhone?: string | null
-      contactEmail?: string | null
+      contacts?: ContactInput[] | null
     },
   ): Promise<Customer>
   deleteCustomer(customerId: string): Promise<void>
   createProject(customerId: string, number: string): Promise<Project>
   updateProject(
     projectId: string,
-    data: { note?: string | null; fds?: ProjectFDS | null },
+    data: { note?: string | null; documents?: ProjectDocumentsUpdate },
   ): Promise<Project>
   deleteProject(projectId: string): Promise<void>
   createWO(projectId: string, data: { number: string; type: WOType; note?: string }): Promise<WO>
@@ -57,9 +66,7 @@ export function listWOs(projectId: string): Promise<WO[]> {
 export function createCustomer(data: {
   name: string
   address?: string
-  contactName?: string
-  contactPhone?: string
-  contactEmail?: string
+  contacts?: ContactInput[]
 }): Promise<Customer> {
   return ensureLocalStorage().createCustomer(data)
 }
@@ -69,9 +76,7 @@ export function updateCustomer(
   data: {
     name?: string
     address?: string | null
-    contactName?: string | null
-    contactPhone?: string | null
-    contactEmail?: string | null
+    contacts?: ContactInput[] | null
   },
 ): Promise<Customer> {
   return ensureLocalStorage().updateCustomer(customerId, data)
@@ -87,7 +92,7 @@ export function createProject(customerId: string, number: string): Promise<Proje
 
 export function updateProject(
   projectId: string,
-  data: { note?: string | null; fds?: ProjectFDS | null },
+  data: { note?: string | null; documents?: ProjectDocumentsUpdate },
 ): Promise<Project> {
   return ensureLocalStorage().updateProject(projectId, data)
 }
@@ -202,14 +207,14 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
-  function normalizeProjectFds(value: unknown): ProjectFDS | undefined {
+  function normalizeProjectFile(value: unknown): ProjectFile | undefined {
     if (!value || typeof value !== 'object') {
       return undefined
     }
 
     const raw = value as Record<string, unknown>
     const name = typeof raw.name === 'string' ? raw.name : null
-    const type = typeof raw.type === 'string' ? raw.type : 'application/octet-stream'
+    const type = typeof raw.type === 'string' && raw.type ? raw.type : 'application/octet-stream'
     const dataUrl = typeof raw.dataUrl === 'string' ? raw.dataUrl : null
     const uploadedAtRaw = typeof raw.uploadedAt === 'string' ? raw.uploadedAt : null
 
@@ -229,6 +234,58 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
+  function normalizeProjectDocuments(value: unknown): ProjectDocuments {
+    const documents: ProjectDocuments = {}
+    if (value && typeof value === 'object') {
+      const raw = value as Record<string, unknown>
+      for (const category of PROJECT_FILE_CATEGORIES) {
+        const file = normalizeProjectFile(raw[category])
+        if (file) {
+          documents[category] = file
+        }
+      }
+    }
+    return documents
+  }
+
+  function hasProjectDocuments(documents?: ProjectDocuments): documents is ProjectDocuments {
+    if (!documents) {
+      return false
+    }
+    return PROJECT_FILE_CATEGORIES.some(category => !!documents[category])
+  }
+
+  function normalizeCustomerContact(value: unknown): CustomerContact | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const name = toOptionalString(raw.name)
+    const position = toOptionalString(raw.position)
+    const phone = toOptionalString(raw.phone)
+    const email = toOptionalString(raw.email)
+
+    if (!name && !position && !phone && !email) {
+      return null
+    }
+
+    const idRaw = typeof raw.id === 'string' ? raw.id.trim() : ''
+    const id = idRaw || createId()
+
+    return {
+      id,
+      name,
+      position,
+      phone,
+      email,
+    }
+  }
+
+  function sortContacts(contacts: CustomerContact[]): CustomerContact[] {
+    return sortByText(contacts, contact => contact.name || contact.position || contact.email || contact.phone || contact.id)
+  }
+
   function normalizeProject(value: unknown): Project | null {
     if (!value || typeof value !== 'object') {
       return null
@@ -246,14 +303,20 @@ function createLocalStorageStorage(): StorageApi {
     const wos = wosSource
       .map(normalizeWorkOrder)
       .filter((wo): wo is WO => !!wo)
-    const fds = normalizeProjectFds((raw as { fds?: unknown }).fds)
+    const documents = normalizeProjectDocuments((raw as { documents?: unknown }).documents)
+    if (!documents.fds) {
+      const legacyFds = normalizeProjectFile((raw as { fds?: unknown }).fds)
+      if (legacyFds) {
+        documents.fds = legacyFds
+      }
+    }
 
     return {
       id,
       number,
       note: toOptionalString(raw.note),
       wos: sortWOs(wos),
-      fds,
+      documents: hasProjectDocuments(documents) ? documents : undefined,
     }
   }
 
@@ -274,13 +337,29 @@ function createLocalStorageStorage(): StorageApi {
       .map(normalizeProject)
       .filter((project): project is Project => !!project)
 
+    const contactsSource = Array.isArray((raw as { contacts?: unknown }).contacts)
+      ? ((raw as { contacts?: unknown }).contacts as unknown[])
+      : []
+    let contacts = contactsSource
+      .map(normalizeCustomerContact)
+      .filter((contact): contact is CustomerContact => !!contact)
+
+    if (contacts.length === 0) {
+      const fallbackContact = normalizeCustomerContact({
+        name: (raw as { contactName?: unknown }).contactName,
+        phone: (raw as { contactPhone?: unknown }).contactPhone,
+        email: (raw as { contactEmail?: unknown }).contactEmail,
+      })
+      if (fallbackContact) {
+        contacts = [fallbackContact]
+      }
+    }
+
     return {
       id,
       name,
       address: toOptionalString(raw.address),
-      contactName: toOptionalString(raw.contactName),
-      contactPhone: toOptionalString(raw.contactPhone),
-      contactEmail: toOptionalString(raw.contactEmail),
+      contacts: sortContacts(contacts),
       projects: sortProjects(projects),
     }
   }
@@ -331,12 +410,39 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
-  function cloneProjectFds(fds: ProjectFDS): ProjectFDS {
+  function cloneProjectFile(file: ProjectFile): ProjectFile {
     return {
-      name: fds.name,
-      type: fds.type,
-      dataUrl: fds.dataUrl,
-      uploadedAt: fds.uploadedAt,
+      name: file.name,
+      type: file.type,
+      dataUrl: file.dataUrl,
+      uploadedAt: file.uploadedAt,
+    }
+  }
+
+  function cloneProjectDocuments(documents?: ProjectDocuments): ProjectDocuments | undefined {
+    if (!documents) {
+      return undefined
+    }
+    const entries: [ProjectFileCategory, ProjectFile][] = []
+    for (const category of PROJECT_FILE_CATEGORIES) {
+      const file = documents[category]
+      if (file) {
+        entries.push([category, cloneProjectFile(file)])
+      }
+    }
+    if (entries.length === 0) {
+      return undefined
+    }
+    return Object.fromEntries(entries) as ProjectDocuments
+  }
+
+  function cloneCustomerContact(contact: CustomerContact): CustomerContact {
+    return {
+      id: contact.id,
+      name: contact.name,
+      position: contact.position,
+      phone: contact.phone,
+      email: contact.email,
     }
   }
 
@@ -346,7 +452,7 @@ function createLocalStorageStorage(): StorageApi {
       number: project.number,
       note: project.note,
       wos: project.wos.map(cloneWorkOrder),
-      fds: project.fds ? cloneProjectFds(project.fds) : undefined,
+      documents: cloneProjectDocuments(project.documents),
     }
   }
 
@@ -355,9 +461,7 @@ function createLocalStorageStorage(): StorageApi {
       id: customer.id,
       name: customer.name,
       address: customer.address,
-      contactName: customer.contactName,
-      contactPhone: customer.contactPhone,
-      contactEmail: customer.contactEmail,
+      contacts: customer.contacts.map(cloneCustomerContact),
       projects: customer.projects.map(cloneProject),
     }
   }
@@ -468,18 +572,20 @@ function createLocalStorageStorage(): StorageApi {
     async createCustomer(data: {
       name: string
       address?: string
-      contactName?: string
-      contactPhone?: string
-      contactEmail?: string
+      contacts?: ContactInput[]
     }): Promise<Customer> {
       const db = loadDatabase()
+      const contactsSource = Array.isArray(data.contacts) ? data.contacts : []
+      const contacts = sortContacts(
+        contactsSource
+          .map(normalizeCustomerContact)
+          .filter((contact): contact is CustomerContact => !!contact),
+      )
       const customer: Customer = {
         id: createId(),
         name: data.name.trim(),
         address: normalizeInput(data.address),
-        contactName: normalizeInput(data.contactName),
-        contactPhone: normalizeInput(data.contactPhone),
-        contactEmail: normalizeInput(data.contactEmail),
+        contacts,
         projects: [],
       }
 
@@ -493,9 +599,7 @@ function createLocalStorageStorage(): StorageApi {
       data: {
         name?: string
         address?: string | null
-        contactName?: string | null
-        contactPhone?: string | null
-        contactEmail?: string | null
+        contacts?: ContactInput[] | null
       },
     ): Promise<Customer> {
       const db = loadDatabase()
@@ -505,13 +609,21 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       const { index, customer } = located
+      const contacts =
+        data.contacts === undefined
+          ? customer.contacts
+          : data.contacts === null
+          ? []
+          : sortContacts(
+              data.contacts
+                .map(normalizeCustomerContact)
+                .filter((contact): contact is CustomerContact => !!contact),
+            )
       const nextCustomer: Customer = {
         ...customer,
         name: typeof data.name === 'string' ? data.name.trim() || customer.name : customer.name,
         address: applyNullable(customer.address, data.address),
-        contactName: applyNullable(customer.contactName, data.contactName),
-        contactPhone: applyNullable(customer.contactPhone, data.contactPhone),
-        contactEmail: applyNullable(customer.contactEmail, data.contactEmail),
+        contacts,
       }
 
       const nextCustomers = [...db.customers]
@@ -556,7 +668,7 @@ function createLocalStorageStorage(): StorageApi {
 
     async updateProject(
       projectId: string,
-      data: { note?: string | null; fds?: ProjectFDS | null },
+      data: { note?: string | null; documents?: ProjectDocumentsUpdate },
     ): Promise<Project> {
       const db = loadDatabase()
       const located = locateProject(db, projectId)
@@ -565,16 +677,37 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       const { customerIndex, projectIndex, customer, project } = located
-      const nextFds =
-        data.fds === undefined
-          ? project.fds
-          : data.fds === null
-          ? undefined
-          : normalizeProjectFds(data.fds) ?? project.fds
+      let documentsUpdate = data.documents
+      const legacyFds = (data as { fds?: ProjectFile | null }).fds
+      if (legacyFds !== undefined) {
+        documentsUpdate = { ...(documentsUpdate ?? {}), fds: legacyFds }
+      }
+
+      const nextDocuments: ProjectDocuments = { ...(project.documents ?? {}) }
+      if (documentsUpdate) {
+        for (const category of PROJECT_FILE_CATEGORIES) {
+          if (!(category in documentsUpdate)) {
+            continue
+          }
+          const value = documentsUpdate[category]
+          if (value === undefined) {
+            continue
+          }
+          if (value === null) {
+            delete nextDocuments[category]
+            continue
+          }
+          const normalized = normalizeProjectFile(value)
+          if (normalized) {
+            nextDocuments[category] = normalized
+          }
+        }
+      }
+      const normalizedDocuments = hasProjectDocuments(nextDocuments) ? nextDocuments : undefined
       const nextProject: Project = {
         ...project,
         note: applyNullable(project.note, data.note),
-        fds: nextFds,
+        documents: normalizedDocuments,
       }
 
       const updatedProjects = [...customer.projects]
