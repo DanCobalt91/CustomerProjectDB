@@ -36,19 +36,22 @@ type StorageApi = {
 }
 
 let supabaseStorage: StorageApi | null = null
+let localStorageStorage: StorageApi | null = null
 
 function ensureSupabaseStorage(): StorageApi {
-  if (!isSupabaseConfigured()) {
-    throw new Error(
-      'Supabase client is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable Supabase storage.',
-    )
-  }
-
   if (!supabaseStorage) {
     supabaseStorage = createSupabaseStorage(getSupabaseClient())
   }
 
   return supabaseStorage
+}
+
+function ensureLocalStorage(): StorageApi {
+  if (!localStorageStorage) {
+    localStorageStorage = createLocalStorageStorage()
+  }
+
+  return localStorageStorage
 }
 
 function isRlsMessage(message: string): boolean {
@@ -61,7 +64,7 @@ function isRlsMessage(message: string): boolean {
   )
 }
 
-function normalizeStorageError(error: unknown, fallbackMessage: string): Error {
+function normalizeSupabaseError(error: unknown, fallbackMessage: string): Error {
   if (isSupabaseUnavailableError(error)) {
     return new Error('Unable to reach Supabase right now. Please check your connection and try again.')
   }
@@ -88,36 +91,52 @@ async function runWithSupabase<T>(operation: () => Promise<T>, fallbackMessage: 
   try {
     return await operation()
   } catch (error) {
-    throw normalizeStorageError(error, fallbackMessage)
+    throw normalizeSupabaseError(error, fallbackMessage)
   }
 }
 
 export function listCustomers(): Promise<Customer[]> {
-  return runWithSupabase(
-    () => ensureSupabaseStorage().listCustomers(),
-    'Unable to load customers from Supabase.',
-  )
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().listCustomers(),
+      'Unable to load customers from Supabase.',
+    )
+  }
+
+  return ensureLocalStorage().listCustomers()
 }
 
 export function listProjectsByCustomer(customerId: string): Promise<Project[]> {
-  return runWithSupabase(
-    () => ensureSupabaseStorage().listProjectsByCustomer(customerId),
-    'Unable to load projects from Supabase.',
-  )
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().listProjectsByCustomer(customerId),
+      'Unable to load projects from Supabase.',
+    )
+  }
+
+  return ensureLocalStorage().listProjectsByCustomer(customerId)
 }
 
 export function listWOs(projectId: string): Promise<WO[]> {
-  return runWithSupabase(
-    () => ensureSupabaseStorage().listWOs(projectId),
-    'Unable to load work orders from Supabase.',
-  )
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().listWOs(projectId),
+      'Unable to load work orders from Supabase.',
+    )
+  }
+
+  return ensureLocalStorage().listWOs(projectId)
 }
 
 export function listPOs(projectId: string): Promise<PO[]> {
-  return runWithSupabase(
-    () => ensureSupabaseStorage().listPOs(projectId),
-    'Unable to load purchase orders from Supabase.',
-  )
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().listPOs(projectId),
+      'Unable to load purchase orders from Supabase.',
+    )
+  }
+
+  return ensureLocalStorage().listPOs(projectId)
 }
 
 export function createCustomer(data: {
@@ -127,10 +146,14 @@ export function createCustomer(data: {
   contactPhone?: string
   contactEmail?: string
 }): Promise<Customer> {
-  return runWithSupabase(
-    () => ensureSupabaseStorage().createCustomer(data),
-    'Failed to create customer.',
-  )
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().createCustomer(data),
+      'Failed to create customer.',
+    )
+  }
+
+  return ensureLocalStorage().createCustomer(data)
 }
 
 export function updateCustomer(
@@ -143,57 +166,105 @@ export function updateCustomer(
     contactEmail?: string | null
   },
 ): Promise<Customer> {
-  return runWithSupabase(
-    () => ensureSupabaseStorage().updateCustomer(customerId, data),
-    'Failed to update customer.',
-  )
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().updateCustomer(customerId, data),
+      'Failed to update customer.',
+    )
+  }
+
+  return ensureLocalStorage().updateCustomer(customerId, data)
 }
 
 export function deleteCustomer(customerId: string): Promise<void> {
-  return runWithSupabase(() => ensureSupabaseStorage().deleteCustomer(customerId), 'Failed to delete customer.')
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().deleteCustomer(customerId),
+      'Failed to delete customer.',
+    )
+  }
+
+  return ensureLocalStorage().deleteCustomer(customerId)
 }
 
 export function createProject(customerId: string, number: string): Promise<Project> {
-  return runWithSupabase(
-    () => ensureSupabaseStorage().createProject(customerId, number),
-    'Failed to create project.',
-  )
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().createProject(customerId, number),
+      'Failed to create project.',
+    )
+  }
+
+  return ensureLocalStorage().createProject(customerId, number)
 }
 
 export function updateProject(projectId: string, data: { note?: string | null }): Promise<Project> {
-  return runWithSupabase(
-    () => ensureSupabaseStorage().updateProject(projectId, data),
-    'Failed to update project.',
-  )
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().updateProject(projectId, data),
+      'Failed to update project.',
+    )
+  }
+
+  return ensureLocalStorage().updateProject(projectId, data)
 }
 
 export function deleteProject(projectId: string): Promise<void> {
-  return runWithSupabase(() => ensureSupabaseStorage().deleteProject(projectId), 'Failed to delete project.')
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().deleteProject(projectId),
+      'Failed to delete project.',
+    )
+  }
+
+  return ensureLocalStorage().deleteProject(projectId)
 }
 
 export function createWO(
   projectId: string,
   data: { number: string; type: WOType; note?: string },
 ): Promise<WO> {
-  return runWithSupabase(
-    () => ensureSupabaseStorage().createWO(projectId, data),
-    'Failed to create work order.',
-  )
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().createWO(projectId, data),
+      'Failed to create work order.',
+    )
+  }
+
+  return ensureLocalStorage().createWO(projectId, data)
 }
 
 export function deleteWO(woId: string): Promise<void> {
-  return runWithSupabase(() => ensureSupabaseStorage().deleteWO(woId), 'Failed to delete work order.')
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().deleteWO(woId),
+      'Failed to delete work order.',
+    )
+  }
+
+  return ensureLocalStorage().deleteWO(woId)
 }
 
 export function createPO(projectId: string, data: { number: string; note?: string }): Promise<PO> {
-  return runWithSupabase(
-    () => ensureSupabaseStorage().createPO(projectId, data),
-    'Failed to create purchase order.',
-  )
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().createPO(projectId, data),
+      'Failed to create purchase order.',
+    )
+  }
+
+  return ensureLocalStorage().createPO(projectId, data)
 }
 
 export function deletePO(poId: string): Promise<void> {
-  return runWithSupabase(() => ensureSupabaseStorage().deletePO(poId), 'Failed to delete purchase order.')
+  if (isSupabaseConfigured()) {
+    return runWithSupabase(
+      () => ensureSupabaseStorage().deletePO(poId),
+      'Failed to delete purchase order.',
+    )
+  }
+
+  return ensureLocalStorage().deletePO(poId)
 }
 
 function sortByText<T>(items: T[], getValue: (item: T) => string): T[] {
@@ -413,7 +484,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
         return []
       }
 
-      return sortByText(data.map(mapWO), wo => wo.number)
+      return sortByText(data.map(row => mapWO({ ...row } as WORow)), wo => wo.number)
     },
 
     async listPOs(projectId: string): Promise<PO[]> {
@@ -432,7 +503,7 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
         return []
       }
 
-      return sortByText(data.map(mapPO), po => po.number)
+      return sortByText(data.map(row => mapPO({ ...row } as PORow)), po => po.number)
     },
 
     async createCustomer(data: {
@@ -455,11 +526,20 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
       const { data: row, error } = await client
         .from('customers')
         .insert(payload)
-        .select('id, name, address, contact_name, contact_phone, contact_email')
+        .select(
+          `
+        id,
+        name,
+        address,
+        contact_name,
+        contact_phone,
+        contact_email
+      `,
+        )
         .single()
 
-      const result = requireData(row, error, 'Failed to create customer.')
-      return mapCustomer({ ...result, projects: [] })
+      const inserted = requireData(row, error, 'Failed to create customer.')
+      return mapCustomer({ ...inserted, projects: [] })
     },
 
     async updateCustomer(
@@ -473,111 +553,109 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
       },
     ): Promise<Customer> {
       const userId = await requireUserId()
-      const payload: Record<string, unknown> = {}
-      if (data.name !== undefined) payload.name = data.name
-      if (data.address !== undefined) payload.address = data.address
-      if (data.contactName !== undefined) payload.contact_name = data.contactName
-      if (data.contactPhone !== undefined) payload.contact_phone = data.contactPhone
-      if (data.contactEmail !== undefined) payload.contact_email = data.contactEmail
+      const payload = {
+        name: data.name,
+        address: data.address ?? null,
+        contact_name: data.contactName ?? null,
+        contact_phone: data.contactPhone ?? null,
+        contact_email: data.contactEmail ?? null,
+      }
 
       const { data: row, error } = await client
         .from('customers')
         .update(payload)
         .eq('id', customerId)
         .eq('owner_id', userId)
-        .select('id, name, address, contact_name, contact_phone, contact_email')
+        .select(
+          `
+        id,
+        name,
+        address,
+        contact_name,
+        contact_phone,
+        contact_email
+      `,
+        )
         .single()
 
-      const result = requireData(row, error, 'Failed to update customer.')
-      return mapCustomer({ ...result, projects: [] })
+      const updated = requireData(row, error, 'Failed to update customer.')
+      return mapCustomer({ ...updated, projects: [] })
     },
 
     async deleteCustomer(customerId: string): Promise<void> {
       const userId = await requireUserId()
-      const { data: projects, error: projectError } = await client
-        .from('projects')
-        .select('id')
-        .eq('customer_id', customerId)
-        .eq('owner_id', userId)
-
-      requireNoError(projectError)
-
-      const projectIds = (projects ?? []).map(project => project.id)
-
-      if (projectIds.length > 0) {
-        const [{ error: woError }, { error: poError }, { error: deleteProjectsError }] = await Promise.all([
-          client.from('work_orders').delete().in('project_id', projectIds).eq('owner_id', userId),
-          client.from('purchase_orders').delete().in('project_id', projectIds).eq('owner_id', userId),
-          client.from('projects').delete().in('id', projectIds).eq('owner_id', userId),
-        ])
-
-        requireNoError(woError)
-        requireNoError(poError)
-        requireNoError(deleteProjectsError)
-      }
-
       const { error } = await client.from('customers').delete().eq('id', customerId).eq('owner_id', userId)
       requireNoError(error)
     },
 
     async createProject(customerId: string, number: string): Promise<Project> {
       const userId = await requireUserId()
-      const { data, error } = await client
+      const payload = { customer_id: customerId, number, owner_id: userId }
+      const { data: row, error } = await client
         .from('projects')
-        .insert({ customer_id: customerId, number, note: null, owner_id: userId })
+        .insert(payload)
         .select('id, customer_id, number, note')
         .single()
 
-      const row = requireData(data, error, 'Failed to create project.')
-      return mapProject({ ...row, work_orders: [], purchase_orders: [] })
+      const inserted = requireData(row, error, 'Failed to create project.')
+      return mapProject({ ...inserted, work_orders: [], purchase_orders: [] })
     },
 
     async updateProject(projectId: string, data: { note?: string | null }): Promise<Project> {
       const userId = await requireUserId()
-      const payload: Record<string, unknown> = {}
-      if (data.note !== undefined) payload.note = data.note
+      const payload = { note: data.note ?? null }
 
       const { data: row, error } = await client
         .from('projects')
         .update(payload)
         .eq('id', projectId)
         .eq('owner_id', userId)
-        .select('id, customer_id, number, note')
+        .select(
+          `
+        id,
+        customer_id,
+        number,
+        note,
+        work_orders:work_orders (
+          id,
+          project_id,
+          number,
+          type,
+          note
+        ),
+        purchase_orders:purchase_orders (
+          id,
+          project_id,
+          number,
+          note
+        )
+      `,
+        )
         .single()
 
-      const result = requireData(row, error, 'Failed to update project.')
-      return mapProject({ ...result, work_orders: [], purchase_orders: [] })
+      const updated = requireData(row, error, 'Failed to update project.')
+      return mapProject({ ...updated })
     },
 
     async deleteProject(projectId: string): Promise<void> {
       const userId = await requireUserId()
-      const [{ error: woError }, { error: poError }, { error: projectError }] = await Promise.all([
-        client.from('work_orders').delete().eq('project_id', projectId).eq('owner_id', userId),
-        client.from('purchase_orders').delete().eq('project_id', projectId).eq('owner_id', userId),
-        client.from('projects').delete().eq('id', projectId).eq('owner_id', userId),
-      ])
-
-      requireNoError(woError)
-      requireNoError(poError)
-      requireNoError(projectError)
+      const { error } = await client.from('projects').delete().eq('id', projectId).eq('owner_id', userId)
+      requireNoError(error)
     },
 
     async createWO(projectId: string, data: { number: string; type: WOType; note?: string }): Promise<WO> {
       const userId = await requireUserId()
-      const { data: row, error } = await client
-        .from('work_orders')
-        .insert({
-          project_id: projectId,
-          number: data.number,
-          type: data.type,
-          note: data.note ?? null,
-          owner_id: userId,
-        })
-        .select('id, project_id, number, type, note')
-        .single()
+      const payload = {
+        project_id: projectId,
+        owner_id: userId,
+        number: data.number,
+        type: data.type,
+        note: data.note ?? null,
+      }
+      const { data: row, error } = await client.from('work_orders').insert(payload).select().single()
 
-      const result = requireData(row, error, 'Failed to create work order.')
-      return mapWO(result)
+      const inserted = requireData(row, error, 'Failed to create work order.')
+      return mapWO({ ...inserted } as WORow)
     },
 
     async deleteWO(woId: string): Promise<void> {
@@ -588,25 +666,613 @@ function createSupabaseStorage(client: SupabaseClient): StorageApi {
 
     async createPO(projectId: string, data: { number: string; note?: string }): Promise<PO> {
       const userId = await requireUserId()
-      const { data: row, error } = await client
-        .from('purchase_orders')
-        .insert({
-          project_id: projectId,
-          number: data.number,
-          note: data.note ?? null,
-          owner_id: userId,
-        })
-        .select('id, project_id, number, note')
-        .single()
+      const payload = {
+        project_id: projectId,
+        owner_id: userId,
+        number: data.number,
+        note: data.note ?? null,
+      }
+      const { data: row, error } = await client.from('purchase_orders').insert(payload).select().single()
 
-      const result = requireData(row, error, 'Failed to create purchase order.')
-      return mapPO(result)
+      const inserted = requireData(row, error, 'Failed to create purchase order.')
+      return mapPO({ ...inserted } as PORow)
     },
 
     async deletePO(poId: string): Promise<void> {
       const userId = await requireUserId()
       const { error } = await client.from('purchase_orders').delete().eq('id', poId).eq('owner_id', userId)
       requireNoError(error)
+    },
+  }
+}
+function createLocalStorageStorage(): StorageApi {
+  type Database = { customers: Customer[] }
+
+  type StorageLike = {
+    getItem(key: string): string | null
+    setItem(key: string, value: string): void
+    removeItem(key: string): void
+  }
+
+  const STORAGE_KEY = 'customer-project-db'
+  const memoryStorage: StorageLike = (() => {
+    const store = new Map<string, string>()
+    return {
+      getItem(key: string) {
+        return store.has(key) ? store.get(key)! : null
+      },
+      setItem(key: string, value: string) {
+        store.set(key, value)
+      },
+      removeItem(key: string) {
+        store.delete(key)
+      },
+    }
+  })()
+
+  let cachedStorage: StorageLike | null = null
+
+  function resolveStorage(): StorageLike {
+    if (cachedStorage) {
+      return cachedStorage
+    }
+
+    try {
+      if (typeof globalThis !== 'undefined') {
+        const potential = (globalThis as { localStorage?: unknown }).localStorage
+        if (
+          potential &&
+          typeof (potential as StorageLike).getItem === 'function' &&
+          typeof (potential as StorageLike).setItem === 'function' &&
+          typeof (potential as StorageLike).removeItem === 'function'
+        ) {
+          const storage = potential as StorageLike
+          const testKey = '__customer_project_db__'
+          try {
+            storage.setItem(testKey, testKey)
+            storage.removeItem(testKey)
+            cachedStorage = storage
+            return cachedStorage
+          } catch {
+            // Ignore storage write errors and fall back to memory storage
+          }
+        }
+      }
+    } catch {
+      // Ignore detection errors and fall back to memory storage
+    }
+
+    cachedStorage = memoryStorage
+    return cachedStorage
+  }
+
+  function toOptionalString(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined
+    }
+    const trimmed = value.trim()
+    return trimmed ? trimmed : undefined
+  }
+
+  function normalizeWorkOrder(value: unknown): WO | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const id = typeof raw.id === 'string' ? raw.id : null
+    const number = typeof raw.number === 'string' ? raw.number : null
+    if (!id || !number) {
+      return null
+    }
+
+    const type = raw.type === 'Build' || raw.type === 'Onsite' ? (raw.type as WOType) : 'Build'
+
+    return {
+      id,
+      number,
+      type,
+      note: toOptionalString(raw.note),
+    }
+  }
+
+  function normalizePurchaseOrder(value: unknown): PO | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const id = typeof raw.id === 'string' ? raw.id : null
+    const number = typeof raw.number === 'string' ? raw.number : null
+    if (!id || !number) {
+      return null
+    }
+
+    return {
+      id,
+      number,
+      note: toOptionalString(raw.note),
+    }
+  }
+
+  function normalizeProject(value: unknown): Project | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const id = typeof raw.id === 'string' ? raw.id : null
+    const number = typeof raw.number === 'string' ? raw.number : null
+    if (!id || !number) {
+      return null
+    }
+
+    const wosSource = Array.isArray(raw.wos) ? (raw.wos as unknown[]) : []
+    const posSource = Array.isArray(raw.pos) ? (raw.pos as unknown[]) : []
+
+    const wos = wosSource
+      .map(normalizeWorkOrder)
+      .filter((wo): wo is WO => !!wo)
+    const pos = posSource
+      .map(normalizePurchaseOrder)
+      .filter((po): po is PO => !!po)
+
+    return {
+      id,
+      number,
+      note: toOptionalString(raw.note),
+      wos: sortWOs(wos),
+      pos: sortPOs(pos),
+    }
+  }
+
+  function normalizeCustomer(value: unknown): Customer | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const id = typeof raw.id === 'string' ? raw.id : null
+    const name = typeof raw.name === 'string' ? raw.name : null
+    if (!id || !name) {
+      return null
+    }
+
+    const projectsSource = Array.isArray(raw.projects) ? (raw.projects as unknown[]) : []
+    const projects = projectsSource
+      .map(normalizeProject)
+      .filter((project): project is Project => !!project)
+
+    return {
+      id,
+      name,
+      address: toOptionalString(raw.address),
+      contactName: toOptionalString(raw.contactName),
+      contactPhone: toOptionalString(raw.contactPhone),
+      contactEmail: toOptionalString(raw.contactEmail),
+      projects: sortProjects(projects),
+    }
+  }
+
+  function normalizeDatabase(value: unknown): Database {
+    if (!value || typeof value !== 'object') {
+      return { customers: [] }
+    }
+
+    const rawCustomers = Array.isArray((value as { customers?: unknown }).customers)
+      ? ((value as { customers?: unknown }).customers as unknown[])
+      : []
+
+    const customers = rawCustomers
+      .map(normalizeCustomer)
+      .filter((customer): customer is Customer => !!customer)
+
+    return { customers: sortCustomers(customers) }
+  }
+
+  function loadDatabase(): Database {
+    const storage = resolveStorage()
+    const raw = storage.getItem(STORAGE_KEY)
+    if (!raw) {
+      return { customers: [] }
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as unknown
+      return normalizeDatabase(parsed)
+    } catch {
+      return { customers: [] }
+    }
+  }
+
+  function saveDatabase(db: Database): void {
+    const storage = resolveStorage()
+    const normalized = normalizeDatabase(db)
+    storage.setItem(STORAGE_KEY, JSON.stringify(normalized))
+  }
+
+  function cloneWorkOrder(wo: WO): WO {
+    return {
+      id: wo.id,
+      number: wo.number,
+      type: wo.type,
+      note: wo.note,
+    }
+  }
+
+  function clonePurchaseOrder(po: PO): PO {
+    return {
+      id: po.id,
+      number: po.number,
+      note: po.note,
+    }
+  }
+
+  function cloneProject(project: Project): Project {
+    return {
+      id: project.id,
+      number: project.number,
+      note: project.note,
+      wos: project.wos.map(cloneWorkOrder),
+      pos: project.pos.map(clonePurchaseOrder),
+    }
+  }
+
+  function cloneCustomer(customer: Customer): Customer {
+    return {
+      id: customer.id,
+      name: customer.name,
+      address: customer.address,
+      contactName: customer.contactName,
+      contactPhone: customer.contactPhone,
+      contactEmail: customer.contactEmail,
+      projects: customer.projects.map(cloneProject),
+    }
+  }
+
+  function sortCustomers(customers: Customer[]): Customer[] {
+    return sortByText(customers, customer => customer.name)
+  }
+
+  function sortProjects(projects: Project[]): Project[] {
+    return sortByText(projects, project => project.number)
+  }
+
+  function sortWOs(wos: WO[]): WO[] {
+    return sortByText(wos, wo => wo.number)
+  }
+
+  function sortPOs(pos: PO[]): PO[] {
+    return sortByText(pos, po => po.number)
+  }
+
+  function normalizeInput(value: string | undefined): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined
+    }
+    const trimmed = value.trim()
+    return trimmed ? trimmed : undefined
+  }
+
+  function applyNullable(current: string | undefined, next: string | null | undefined): string | undefined {
+    if (next === undefined) {
+      return current
+    }
+    if (next === null) {
+      return undefined
+    }
+    return normalizeInput(next)
+  }
+
+  function createId(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      try {
+        return crypto.randomUUID()
+      } catch {
+        // Ignore and use fallback id generation
+      }
+    }
+    return `id-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+  }
+
+  function locateCustomer(db: Database, customerId: string) {
+    const index = db.customers.findIndex(customer => customer.id === customerId)
+    if (index === -1) {
+      return null
+    }
+    const customer = db.customers[index]
+    return { index, customer }
+  }
+
+  function locateProject(db: Database, projectId: string) {
+    for (let customerIndex = 0; customerIndex < db.customers.length; customerIndex += 1) {
+      const customer = db.customers[customerIndex]
+      const projectIndex = customer.projects.findIndex(project => project.id === projectId)
+      if (projectIndex !== -1) {
+        const project = customer.projects[projectIndex]
+        return { customerIndex, projectIndex, customer, project }
+      }
+    }
+    return null
+  }
+
+  function locateWorkOrder(db: Database, woId: string) {
+    for (let customerIndex = 0; customerIndex < db.customers.length; customerIndex += 1) {
+      const customer = db.customers[customerIndex]
+      for (let projectIndex = 0; projectIndex < customer.projects.length; projectIndex += 1) {
+        const project = customer.projects[projectIndex]
+        const woIndex = project.wos.findIndex(wo => wo.id === woId)
+        if (woIndex !== -1) {
+          return { customerIndex, projectIndex, woIndex, customer, project }
+        }
+      }
+    }
+    return null
+  }
+
+  function locatePurchaseOrder(db: Database, poId: string) {
+    for (let customerIndex = 0; customerIndex < db.customers.length; customerIndex += 1) {
+      const customer = db.customers[customerIndex]
+      for (let projectIndex = 0; projectIndex < customer.projects.length; projectIndex += 1) {
+        const project = customer.projects[projectIndex]
+        const poIndex = project.pos.findIndex(po => po.id === poId)
+        if (poIndex !== -1) {
+          return { customerIndex, projectIndex, poIndex, customer, project }
+        }
+      }
+    }
+    return null
+  }
+
+  return {
+    async listCustomers(): Promise<Customer[]> {
+      const db = loadDatabase()
+      return db.customers.map(cloneCustomer)
+    },
+
+    async listProjectsByCustomer(customerId: string): Promise<Project[]> {
+      const db = loadDatabase()
+      const located = locateCustomer(db, customerId)
+      if (!located) {
+        return []
+      }
+      return located.customer.projects.map(cloneProject)
+    },
+
+    async listWOs(projectId: string): Promise<WO[]> {
+      const db = loadDatabase()
+      const located = locateProject(db, projectId)
+      if (!located) {
+        return []
+      }
+      return located.project.wos.map(cloneWorkOrder)
+    },
+
+    async listPOs(projectId: string): Promise<PO[]> {
+      const db = loadDatabase()
+      const located = locateProject(db, projectId)
+      if (!located) {
+        return []
+      }
+      return located.project.pos.map(clonePurchaseOrder)
+    },
+
+    async createCustomer(data: {
+      name: string
+      address?: string
+      contactName?: string
+      contactPhone?: string
+      contactEmail?: string
+    }): Promise<Customer> {
+      const db = loadDatabase()
+      const customer: Customer = {
+        id: createId(),
+        name: data.name.trim(),
+        address: normalizeInput(data.address),
+        contactName: normalizeInput(data.contactName),
+        contactPhone: normalizeInput(data.contactPhone),
+        contactEmail: normalizeInput(data.contactEmail),
+        projects: [],
+      }
+
+      const next: Database = { customers: [...db.customers, customer] }
+      saveDatabase(next)
+      return cloneCustomer(customer)
+    },
+
+    async updateCustomer(
+      customerId: string,
+      data: {
+        name?: string
+        address?: string | null
+        contactName?: string | null
+        contactPhone?: string | null
+        contactEmail?: string | null
+      },
+    ): Promise<Customer> {
+      const db = loadDatabase()
+      const located = locateCustomer(db, customerId)
+      if (!located) {
+        throw new Error('Customer not found.')
+      }
+
+      const { index, customer } = located
+      const nextCustomer: Customer = {
+        ...customer,
+        name: typeof data.name === 'string' ? data.name.trim() || customer.name : customer.name,
+        address: applyNullable(customer.address, data.address),
+        contactName: applyNullable(customer.contactName, data.contactName),
+        contactPhone: applyNullable(customer.contactPhone, data.contactPhone),
+        contactEmail: applyNullable(customer.contactEmail, data.contactEmail),
+      }
+
+      const nextCustomers = [...db.customers]
+      nextCustomers[index] = nextCustomer
+      saveDatabase({ customers: nextCustomers })
+      return cloneCustomer(nextCustomer)
+    },
+
+    async deleteCustomer(customerId: string): Promise<void> {
+      const db = loadDatabase()
+      const located = locateCustomer(db, customerId)
+      if (!located) {
+        throw new Error('Customer not found.')
+      }
+
+      const nextCustomers = [...db.customers]
+      nextCustomers.splice(located.index, 1)
+      saveDatabase({ customers: nextCustomers })
+    },
+
+    async createProject(customerId: string, number: string): Promise<Project> {
+      const db = loadDatabase()
+      const located = locateCustomer(db, customerId)
+      if (!located) {
+        throw new Error('Customer not found.')
+      }
+
+      const projectNumber = number.trim()
+      const project: Project = {
+        id: createId(),
+        number: projectNumber,
+        note: undefined,
+        wos: [],
+        pos: [],
+      }
+
+      const nextCustomers = [...db.customers]
+      const customer = located.customer
+      const projects = sortProjects([...customer.projects, project])
+      nextCustomers[located.index] = { ...customer, projects }
+      saveDatabase({ customers: nextCustomers })
+      return cloneProject(project)
+    },
+
+    async updateProject(projectId: string, data: { note?: string | null }): Promise<Project> {
+      const db = loadDatabase()
+      const located = locateProject(db, projectId)
+      if (!located) {
+        throw new Error('Project not found.')
+      }
+
+      const { customerIndex, projectIndex, customer, project } = located
+      const nextProject: Project = {
+        ...project,
+        note: applyNullable(project.note, data.note),
+      }
+
+      const updatedProjects = [...customer.projects]
+      updatedProjects[projectIndex] = nextProject
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
+      return cloneProject(nextProject)
+    },
+
+    async deleteProject(projectId: string): Promise<void> {
+      const db = loadDatabase()
+      const located = locateProject(db, projectId)
+      if (!located) {
+        throw new Error('Project not found.')
+      }
+
+      const { customerIndex, projectIndex, customer } = located
+      const updatedProjects = [...customer.projects]
+      updatedProjects.splice(projectIndex, 1)
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
+    },
+
+    async createWO(projectId: string, data: { number: string; type: WOType; note?: string }): Promise<WO> {
+      const db = loadDatabase()
+      const located = locateProject(db, projectId)
+      if (!located) {
+        throw new Error('Project not found.')
+      }
+
+      const { customerIndex, projectIndex, customer, project } = located
+      const workOrder: WO = {
+        id: createId(),
+        number: data.number.trim(),
+        type: data.type,
+        note: normalizeInput(data.note),
+      }
+
+      const updatedProject: Project = {
+        ...project,
+        wos: sortWOs([...project.wos, workOrder]),
+      }
+
+      const updatedProjects = [...customer.projects]
+      updatedProjects[projectIndex] = updatedProject
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
+      return cloneWorkOrder(workOrder)
+    },
+
+    async deleteWO(woId: string): Promise<void> {
+      const db = loadDatabase()
+      const located = locateWorkOrder(db, woId)
+      if (!located) {
+        throw new Error('Work order not found.')
+      }
+
+      const { customerIndex, projectIndex, woIndex, customer, project } = located
+      const updatedWos = [...project.wos]
+      updatedWos.splice(woIndex, 1)
+      const updatedProject: Project = { ...project, wos: sortWOs(updatedWos) }
+      const updatedProjects = [...customer.projects]
+      updatedProjects[projectIndex] = updatedProject
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
+    },
+
+    async createPO(projectId: string, data: { number: string; note?: string }): Promise<PO> {
+      const db = loadDatabase()
+      const located = locateProject(db, projectId)
+      if (!located) {
+        throw new Error('Project not found.')
+      }
+
+      const { customerIndex, projectIndex, customer, project } = located
+      const purchaseOrder: PO = {
+        id: createId(),
+        number: data.number.trim(),
+        note: normalizeInput(data.note),
+      }
+
+      const updatedProject: Project = {
+        ...project,
+        pos: sortPOs([...project.pos, purchaseOrder]),
+      }
+
+      const updatedProjects = [...customer.projects]
+      updatedProjects[projectIndex] = updatedProject
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
+      return clonePurchaseOrder(purchaseOrder)
+    },
+
+    async deletePO(poId: string): Promise<void> {
+      const db = loadDatabase()
+      const located = locatePurchaseOrder(db, poId)
+      if (!located) {
+        throw new Error('Purchase order not found.')
+      }
+
+      const { customerIndex, projectIndex, poIndex, customer, project } = located
+      const updatedPos = [...project.pos]
+      updatedPos.splice(poIndex, 1)
+      const updatedProject: Project = { ...project, pos: sortPOs(updatedPos) }
+      const updatedProjects = [...customer.projects]
+      updatedProjects[projectIndex] = updatedProject
+      const nextCustomers = [...db.customers]
+      nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
+      saveDatabase({ customers: nextCustomers })
     },
   }
 }

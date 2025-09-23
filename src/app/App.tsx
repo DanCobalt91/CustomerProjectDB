@@ -72,16 +72,16 @@ export default function App() {
 
   const supabaseEnabled = isSupabaseConfigured()
   const usingSupabase = supabaseEnabled
-  const storageLabel = 'Supabase'
+  const storageLabel = supabaseEnabled ? 'Supabase' : 'Local browser storage'
   const storageTitle = supabaseEnabled
     ? 'Data is stored securely in Supabase for your account.'
-    : 'Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable storage.'
+    : 'Data is stored locally in this browser for testing.'
   const storageBadgeClass = supabaseEnabled
     ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-    : 'border-amber-200 bg-amber-50 text-amber-700'
+    : 'border-slate-300 bg-white text-slate-700'
   const storageNotice = supabaseEnabled
     ? null
-    : 'Supabase is not configured. Data cannot be loaded or saved until the environment variables are set.'
+    : 'Data is stored in your browser for testing only. Clearing your cache will remove it.'
   const {
     status: authStatus,
     user: authUser,
@@ -104,17 +104,6 @@ export default function App() {
 
   const refreshCustomers = useCallback(
     async (initial = false) => {
-      if (!supabaseEnabled) {
-        setDb([])
-        setLoadError('Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to enable storage.')
-        if (initial) {
-          setIsLoading(false)
-        } else {
-          setIsSyncing(false)
-        }
-        return
-      }
-
       if (initial) {
         setIsLoading(true)
       } else {
@@ -132,7 +121,10 @@ export default function App() {
           setDb([])
           setLoadError(null)
         } else {
-          setLoadError(message || 'Unable to load customers right now. Please try again.')
+          const fallback = supabaseEnabled
+            ? 'Unable to load customers right now. Please try again.'
+            : 'Unable to load customers from local storage.'
+          setLoadError(message || fallback)
         }
       } finally {
         if (initial) {
@@ -235,9 +227,9 @@ export default function App() {
   const fallbackRoles: AppRole[] = ['admin', 'editor', 'viewer']
   const resolvedRoles: AppRole[] = roles.length > 0 ? roles : fallbackRoles
   const hasEditorRole = resolvedRoles.includes('editor') || resolvedRoles.includes('admin')
-  const canEdit = authStatus === 'signed-in' && hasEditorRole
-  const canManageUsers = authStatus === 'signed-in' && resolvedRoles.includes('admin')
-  const isViewerOnly = authStatus === 'signed-in' && !hasEditorRole && !isRolesLoading
+  const canEdit = usingSupabase ? authStatus === 'signed-in' && hasEditorRole : true
+  const canManageUsers = usingSupabase && authStatus === 'signed-in' && resolvedRoles.includes('admin')
+  const isViewerOnly = usingSupabase && authStatus === 'signed-in' && !hasEditorRole && !isRolesLoading
   const formatDateTime = useCallback((value: string | null) => {
     if (!value) return '—'
     const date = new Date(value)
@@ -1388,10 +1380,9 @@ export default function App() {
           </div>
         </div>
 
-        {!usingSupabase && (
-          <div className='mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800'>
-            {storageNotice ??
-              'Supabase is not configured — data cannot be loaded or saved until VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.'}
+        {!usingSupabase && storageNotice && (
+          <div className='mb-6 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700'>
+            {storageNotice}
           </div>
         )}
 
