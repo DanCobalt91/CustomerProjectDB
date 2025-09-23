@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { AlertCircle, ArrowLeft, Copy, Plus, Trash2, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ChangeEvent } from 'react'
+import { AlertCircle, ArrowLeft, Copy, Download, FileText, Plus, Trash2, Upload, X } from 'lucide-react'
 import type { Customer, Project, WOType } from '../types'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
@@ -13,13 +14,13 @@ export type ProjectPageProps = {
   onUpdateProjectNote: (note: string) => void
   onAddWO: (data: { number: string; type: WOType; note?: string }) => Promise<string | null>
   onDeleteWO: (woId: string) => void
-  onAddPO: (data: { number: string; note?: string }) => Promise<string | null>
-  onDeletePO: (poId: string) => void
+  onUploadFds: (file: File) => Promise<string | null>
+  onRemoveFds: () => Promise<string | null>
   onDeleteProject: () => void
   onNavigateBack: () => void
 }
 
-function SummaryTile({ label, value }: { label: string; value: number }) {
+function SummaryTile({ label, value }: { label: string; value: string | number }) {
   return (
     <div className='rounded-xl border border-slate-200 bg-white/80 p-3 shadow-sm'>
       <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{label}</div>
@@ -35,25 +36,46 @@ export default function ProjectPage({
   onUpdateProjectNote,
   onAddWO,
   onDeleteWO,
-  onAddPO,
-  onDeletePO,
+  onUploadFds,
+  onRemoveFds,
   onDeleteProject,
   onNavigateBack,
 }: ProjectPageProps) {
   const [noteDraft, setNoteDraft] = useState(project.note ?? '')
   const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
-  const [poForm, setPoForm] = useState({ number: '', note: '' })
   const [woError, setWoError] = useState<string | null>(null)
-  const [poError, setPoError] = useState<string | null>(null)
   const [isAddingWo, setIsAddingWo] = useState(false)
-  const [isAddingPo, setIsAddingPo] = useState(false)
+  const [fdsError, setFdsError] = useState<string | null>(null)
+  const [isUploadingFds, setIsUploadingFds] = useState(false)
+  const [isRemovingFds, setIsRemovingFds] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const hasFds = !!project.fds
+  const isPdfFds = useMemo(() => {
+    if (!project.fds) {
+      return false
+    }
+    const type = project.fds.type?.toLowerCase() ?? ''
+    if (type.includes('pdf')) {
+      return true
+    }
+    return project.fds.name.toLowerCase().endsWith('.pdf')
+  }, [project.fds])
+  const fdsUploadedAt = useMemo(() => {
+    if (!project.fds?.uploadedAt) {
+      return null
+    }
+    const parsed = Date.parse(project.fds.uploadedAt)
+    if (Number.isNaN(parsed)) {
+      return null
+    }
+    return new Date(parsed).toLocaleString()
+  }, [project.fds?.uploadedAt])
 
   useEffect(() => {
     setNoteDraft(project.note ?? '')
     setWoForm({ number: '', type: 'Build', note: '' })
-    setPoForm({ number: '', note: '' })
     setWoError(null)
-    setPoError(null)
+    setFdsError(null)
   }, [project.id])
 
   useEffect(() => {
@@ -65,7 +87,7 @@ export default function ProjectPage({
 
   const summary = [
     { label: 'Work Orders', value: project.wos.length },
-    { label: 'Purchase Orders', value: project.pos.length },
+    { label: 'FDS Uploaded', value: project.fds ? 'Yes' : 'No' },
   ]
 
   const handleAddWO = async () => {
@@ -92,27 +114,72 @@ export default function ProjectPage({
     }
   }
 
-  const handleAddPO = async () => {
+  const handleFdsChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
     if (!canEdit) {
-      setPoError('You have read-only access.')
+      setFdsError('You have read-only access.')
+      event.target.value = ''
       return
     }
-    const raw = poForm.number.trim()
-    if (!raw) {
-      setPoError('Enter a purchase order number.')
-      return
-    }
-    setIsAddingPo(true)
+
+    setIsUploadingFds(true)
+    setFdsError(null)
     try {
-      const result = await onAddPO({ number: raw, note: poForm.note })
+      const result = await onUploadFds(file)
       if (result) {
-        setPoError(result)
-        return
+        setFdsError(result)
       }
-      setPoForm({ number: '', note: '' })
-      setPoError(null)
+    } catch (error) {
+      console.error('Failed to upload FDS', error)
+      setFdsError('Failed to upload FDS document.')
     } finally {
-      setIsAddingPo(false)
+      setIsUploadingFds(false)
+      event.target.value = ''
+    }
+  }
+
+  const handleRemoveFds = async () => {
+    if (!project.fds) {
+      return
+    }
+    if (!canEdit) {
+      setFdsError('You have read-only access.')
+      return
+    }
+
+    setIsRemovingFds(true)
+    setFdsError(null)
+    try {
+      const result = await onRemoveFds()
+      if (result) {
+        setFdsError(result)
+      }
+    } catch (error) {
+      console.error('Failed to remove FDS', error)
+      setFdsError('Failed to remove FDS document.')
+    } finally {
+      setIsRemovingFds(false)
+    }
+  }
+
+  const handleDownloadFds = () => {
+    if (!project.fds) {
+      return
+    }
+    try {
+      const link = document.createElement('a')
+      link.href = project.fds.dataUrl
+      link.download = project.fds.name || 'fds-document'
+      link.rel = 'noopener'
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+    } catch (error) {
+      console.error('Failed to download FDS', error)
+      setFdsError('Unable to download FDS document.')
     }
   }
 
@@ -261,72 +328,74 @@ export default function ProjectPage({
           </div>
 
           <div>
-            <div className='mb-2 text-sm font-semibold text-slate-700'>Purchase Orders</div>
-            <div className='space-y-2'>
-              {project.pos.length === 0 && <div className='text-sm text-slate-500'>None yet</div>}
-              {project.pos.map(po => (
-                <div key={po.id} className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
-                  <div>
-                    <div className='font-semibold text-slate-800'>{po.number}</div>
-                    {po.note && <div className='text-xs text-slate-500'>{po.note}</div>}
-                  </div>
-                  <div className='flex items-center gap-1'>
-                    <Button variant='outline' onClick={() => navigator.clipboard.writeText(po.number)} title='Copy purchase order'>
-                      <Copy size={16} />
-                    </Button>
-                    <Button
-                      variant='ghost'
-                      className='text-rose-600 hover:bg-rose-50'
-                      onClick={() => onDeletePO(po.id)}
-                      title={canEdit ? 'Delete purchase order' : 'Read-only access'}
-                      disabled={!canEdit}
-                    >
-                      <X size={16} />
-                    </Button>
+            <div className='mb-2 text-sm font-semibold text-slate-700'>FDS Document</div>
+            {hasFds ? (
+              <div className='space-y-3'>
+                <div className='rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
+                  <div className='flex flex-col gap-3'>
+                    <div>
+                      <div className='font-semibold text-slate-800'>{project.fds?.name}</div>
+                      {fdsUploadedAt && <div className='text-xs text-slate-500'>Uploaded {fdsUploadedAt}</div>}
+                    </div>
+                    <div className='overflow-hidden rounded-xl border border-slate-200/70 bg-slate-50'>
+                      {isPdfFds ? (
+                        <iframe src={project.fds?.dataUrl ?? ''} title='FDS preview' className='h-52 w-full border-0' />
+                      ) : (
+                        <div className='flex h-52 flex-col items-center justify-center gap-2 text-xs text-slate-500'>
+                          <FileText size={24} className='text-slate-400' />
+                          <span>Preview not available for this file type.</span>
+                        </div>
+                      )}
+                    </div>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <Button variant='outline' onClick={handleDownloadFds} title='Download FDS document'>
+                        <Download size={16} /> Download
+                      </Button>
+                      <Button
+                        variant='ghost'
+                        className='text-rose-600 hover:bg-rose-50'
+                        onClick={() => void handleRemoveFds()}
+                        title={canEdit ? 'Remove FDS document' : 'Read-only access'}
+                        disabled={!canEdit || isRemovingFds}
+                      >
+                        <Trash2 size={16} /> Remove
+                      </Button>
+                      {isRemovingFds && <span className='text-xs text-slate-500'>Removing…</span>}
+                    </div>
                   </div>
                 </div>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className='rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-sm text-slate-500 shadow-sm'>
+                No FDS uploaded yet.
+              </div>
+            )}
 
             <div className='mt-4 rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
-              <div className='mb-2 text-sm font-semibold text-slate-700'>Add Purchase Order</div>
-              <div className='grid gap-2 md:grid-cols-5'>
-                <div className='md:col-span-3'>
-                  <Label>PO Number</Label>
-                  <Input
-                    value={poForm.number}
-                    onChange={(e) => {
-                      setPoForm({ ...poForm, number: (e.target as HTMLInputElement).value })
-                      if (poError) setPoError(null)
-                    }}
-                    placeholder='PO-90001'
-                    disabled={!canEdit}
-                  />
-                </div>
-                <div className='md:col-span-2'>
-                  <Label>Optional note</Label>
-                  <Input
-                    value={poForm.note}
-                    onChange={(e) => setPoForm({ ...poForm, note: (e.target as HTMLInputElement).value })}
-                    placeholder='e.g. deposit'
-                    disabled={!canEdit}
-                  />
-                </div>
-              </div>
-              <div className='mt-2 space-y-2'>
+              <div className='mb-2 text-sm font-semibold text-slate-700'>Upload FDS</div>
+              <p className='text-xs text-slate-500'>Upload a PDF or Word document to keep it with this project.</p>
+              <input
+                ref={fileInputRef}
+                type='file'
+                accept='.pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                className='hidden'
+                onChange={handleFdsChange}
+              />
+              <div className='mt-3 flex flex-wrap items-center gap-2'>
                 <Button
-                  disabled={isAddingPo || !canEdit}
-                  onClick={() => void handleAddPO()}
-                  title={canEdit ? 'Add purchase order' : 'Read-only access'}
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={!canEdit || isUploadingFds}
+                  title={canEdit ? 'Upload FDS document' : 'Read-only access'}
                 >
-                  <Plus size={16} /> Add PO
+                  <Upload size={16} /> {hasFds ? 'Replace FDS' : 'Upload FDS'}
                 </Button>
-                {poError && (
-                  <p className='flex items-center gap-1 text-sm text-rose-600'>
-                    <AlertCircle size={14} /> {poError}
-                  </p>
-                )}
+                {isUploadingFds && <span className='text-xs text-slate-500'>Uploading…</span>}
               </div>
+              {fdsError && (
+                <p className='mt-2 flex items-center gap-1 text-sm text-rose-600'>
+                  <AlertCircle size={14} /> {fdsError}
+                </p>
+              )}
             </div>
           </div>
         </section>
