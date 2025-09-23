@@ -1,4 +1,4 @@
-import React, { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Plus,
   Trash2,
@@ -11,11 +11,9 @@ import {
   ChevronDown,
   MapPin,
   AlertCircle,
-  LogOut,
-  Users,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
-import type { AppRole, Customer, Project, WOType } from '../types'
+import type { Customer, Project, WOType } from '../types'
 import {
   listCustomers,
   createCustomer as createCustomerRecord,
@@ -29,15 +27,6 @@ import {
   deletePO as deletePORecord,
   updateProject as updateProjectRecord,
 } from '../lib/storage'
-import { isSupabaseConfigured } from '../lib/supabase'
-import { useSupabaseAuth } from '../lib/useSupabaseAuth'
-import {
-  fetchCurrentUserRoles,
-  fetchManagedUsers,
-  updateUserRole,
-  type ManagedUser,
-  getFriendlySupabaseError,
-} from '../lib/roles'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
@@ -52,45 +41,21 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
-  const [authEmail, setAuthEmail] = useState('')
-  const [authPassword, setAuthPassword] = useState('')
-  const [authMode, setAuthMode] = useState<'sign-in' | 'sign-up'>('sign-in')
-  const [authFormError, setAuthFormError] = useState<string | null>(null)
-  const [authNotice, setAuthNotice] = useState<string | null>(null)
-  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
-  const [isSigningOut, setIsSigningOut] = useState(false)
-  const [roles, setRoles] = useState<AppRole[]>([])
-  const [rolesStatus, setRolesStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle')
-  const [rolesError, setRolesError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [showAdminPanel, setShowAdminPanel] = useState(false)
-  const [managedUsers, setManagedUsers] = useState<ManagedUser[]>([])
-  const [isLoadingUsers, setIsLoadingUsers] = useState(false)
-  const [adminError, setAdminError] = useState<string | null>(null)
-  const [adminNotice, setAdminNotice] = useState<string | null>(null)
-  const [roleActionTarget, setRoleActionTarget] = useState<string | null>(null)
+  const storageLabel = 'Local browser storage'
+  const storageTitle = 'Data is stored locally in this browser for testing.'
+  const storageBadgeClass = 'border-slate-300 bg-white text-slate-700'
+  const storageNotice = 'Data is stored in your browser for testing only. Clearing your cache will remove it.'
 
-  const supabaseEnabled = isSupabaseConfigured()
-  const usingSupabase = supabaseEnabled
-  const storageLabel = supabaseEnabled ? 'Supabase' : 'Local browser storage'
-  const storageTitle = supabaseEnabled
-    ? 'Data is stored securely in Supabase for your account.'
-    : 'Data is stored locally in this browser for testing.'
-  const storageBadgeClass = supabaseEnabled
-    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-    : 'border-slate-300 bg-white text-slate-700'
-  const storageNotice = supabaseEnabled
-    ? null
-    : 'Data is stored in your browser for testing only. Clearing your cache will remove it.'
-  const {
-    status: authStatus,
-    user: authUser,
-    session: authSession,
-    error: authErrorMessage,
-    signIn,
-    signUp,
-    signOut,
-  } = useSupabaseAuth(supabaseEnabled)
+  const toErrorMessage = useCallback((error: unknown, fallback: string) => {
+    if (error instanceof Error && error.message) {
+      return error.message
+    }
+    if (typeof error === 'string' && error) {
+      return error
+    }
+    return fallback
+  }, [])
 
   // Search
   const [customerQuery, setCustomerQuery] = useState('')
@@ -116,16 +81,7 @@ export default function App() {
         setLoadError(null)
       } catch (error) {
         console.error('Failed to load customers', error)
-        const message = error instanceof Error ? error.message : ''
-        if (message === 'You must be signed in to access the database.') {
-          setDb([])
-          setLoadError(null)
-        } else {
-          const fallback = supabaseEnabled
-            ? 'Unable to load customers right now. Please try again.'
-            : 'Unable to load customers from local storage.'
-          setLoadError(message || fallback)
-        }
+        setLoadError(toErrorMessage(error, 'Unable to load customers from local storage.'))
       } finally {
         if (initial) {
           setIsLoading(false)
@@ -134,192 +90,19 @@ export default function App() {
         }
       }
     },
-    [supabaseEnabled],
+    [toErrorMessage],
   )
 
   useEffect(() => {
-    if (!supabaseEnabled) {
-      void refreshCustomers(true)
-      return
-    }
-
-    if (authStatus === 'signed-in') {
-      void refreshCustomers(true)
-    } else if (authStatus === 'signed-out' || authStatus === 'error') {
-      setDb([])
-      setSelectedCustomerId(null)
-      setIsLoading(false)
-      setIsSyncing(false)
-      setLoadError(null)
-    }
-  }, [supabaseEnabled, authStatus, refreshCustomers])
-
-  useEffect(() => {
-    if (authStatus === 'signed-in') {
-      setAuthFormError(null)
-      setAuthNotice(null)
-      setAuthPassword('')
-    }
-    if (authStatus === 'signed-out') {
-      setAuthMode('sign-in')
-    }
-  }, [authStatus])
-
-  useEffect(() => {
-    if (!supabaseEnabled) {
-      setRoles(['admin', 'editor', 'viewer'])
-      setRolesStatus('loaded')
-      setRolesError(null)
-      return
-    }
-
-    if (authStatus !== 'signed-in') {
-      setRoles([])
-      setRolesStatus('idle')
-      setRolesError(null)
-      setManagedUsers([])
-      setShowAdminPanel(false)
-      return
-    }
-
-    let cancelled = false
-    setRolesStatus('loading')
-    setRolesError(null)
-
-    fetchCurrentUserRoles()
-      .then(fetched => {
-        if (cancelled) return
-        const next: AppRole[] = fetched.length > 0 ? fetched : ['admin', 'editor', 'viewer']
-        setRoles(next)
-        setRolesStatus('loaded')
-        setRolesError(null)
-      })
-      .catch(error => {
-        if (cancelled) return
-        console.error('Failed to fetch roles', error)
-        setRoles(['admin', 'editor', 'viewer'])
-        setRolesStatus('error')
-        setRolesError(
-          error instanceof Error
-            ? getFriendlySupabaseError(error, 'Unable to load roles.', 'Not authorized to view roles.')
-            : 'Unable to load roles.',
-        )
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [supabaseEnabled, authStatus])
+    void refreshCustomers(true)
+  }, [refreshCustomers])
 
 
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
   const selectedCustomerAddressForMap = selectedCustomer?.address?.trim() || null
   const customerOptions = useMemo(() => db.map(c => c.name).sort(), [db])
-  const authUserLabel = useMemo(() => {
-    if (!authUser) return null
-    if (authUser.email) return authUser.email
-    return `User ${authUser.id.slice(0, 8)}`
-  }, [authUser])
-  const resolvedAuthError =
-    authErrorMessage ?? (authStatus === 'error' ? 'Unable to verify your session. Please sign in again.' : null)
-  const isRolesLoading = supabaseEnabled && rolesStatus === 'loading'
-  const rolesReady = !supabaseEnabled || rolesStatus === 'loaded' || rolesStatus === 'error'
-  const fallbackRoles: AppRole[] = ['admin', 'editor', 'viewer']
-  const resolvedRoles: AppRole[] = roles.length > 0 ? roles : fallbackRoles
-  const hasEditorRole = resolvedRoles.includes('editor') || resolvedRoles.includes('admin')
-  const canEdit = usingSupabase ? authStatus === 'signed-in' && hasEditorRole : true
-  const canManageUsers = usingSupabase && authStatus === 'signed-in' && resolvedRoles.includes('admin')
-  const isViewerOnly = usingSupabase && authStatus === 'signed-in' && !hasEditorRole && !isRolesLoading
-  const formatDateTime = useCallback((value: string | null) => {
-    if (!value) return '—'
-    const date = new Date(value)
-    if (Number.isNaN(date.getTime())) {
-      return value
-    }
-    return date.toLocaleString()
-  }, [])
+  const canEdit = true
 
-  const loadManagedUsers = useCallback(async () => {
-    if (!showAdminPanel) {
-      return
-    }
-
-    if (!canManageUsers || authStatus !== 'signed-in' || !authSession) {
-      setManagedUsers([])
-      return
-    }
-
-    setIsLoadingUsers(true)
-    setAdminError(null)
-    setAdminNotice(null)
-
-    try {
-      const users = await fetchManagedUsers(authSession)
-      setManagedUsers(users)
-    } catch (error) {
-      console.error('Failed to load users', error)
-      setAdminError(error instanceof Error ? error.message : 'Unable to load users.')
-    } finally {
-      setIsLoadingUsers(false)
-    }
-  }, [showAdminPanel, canManageUsers, authStatus, authSession])
-
-  const handleRoleUpdate = useCallback(
-    async (email: string, role: AppRole, action: 'grant' | 'revoke') => {
-      if (!authSession) {
-        setAdminError('No active session found.')
-        return
-      }
-
-      const targetEmail = email.trim()
-      if (!targetEmail) {
-        setAdminError('The selected user does not have an email address.')
-        return
-      }
-
-      const key = `${action}:${targetEmail.toLowerCase()}:${role}`
-      setRoleActionTarget(key)
-      setAdminError(null)
-      setAdminNotice(null)
-
-      try {
-        const { message } = await updateUserRole(authSession, { email: targetEmail, role, action })
-        setAdminNotice(message)
-        await loadManagedUsers()
-      } catch (error) {
-        console.error('Failed to update user role', error)
-        setAdminError(error instanceof Error ? error.message : 'Unable to update role.')
-      } finally {
-        setRoleActionTarget(null)
-      }
-    },
-    [authSession, loadManagedUsers],
-  )
-
-  useEffect(() => {
-    if (!canManageUsers) {
-      setShowAdminPanel(false)
-    }
-  }, [canManageUsers])
-
-  useEffect(() => {
-    if (!canEdit) {
-      setShowNewCustomer(false)
-    } else {
-      setActionError(null)
-    }
-  }, [canEdit])
-
-  useEffect(() => {
-    if (!showAdminPanel) {
-      setRoleActionTarget(null)
-      setAdminNotice(null)
-      return
-    }
-
-    setAdminNotice(null)
-    void loadManagedUsers()
-  }, [showAdminPanel, loadManagedUsers])
 
   const searchMatches = useMemo(() => {
     const matches: { kind: 'customer' | 'project' | 'wo'; label: string; customerId: string; projectId?: string }[] = []
@@ -354,71 +137,6 @@ export default function App() {
     () => !!(customerQuery.trim() || projectQuery.trim() || woQuery.trim()),
     [customerQuery, projectQuery, woQuery],
   )
-
-  async function handleAuthSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setAuthFormError(null)
-    setAuthNotice(null)
-
-    const email = authEmail.trim().toLowerCase()
-    const password = authPassword
-
-    if (!email || !password) {
-      setAuthFormError('Email and password are required.')
-      return
-    }
-
-    setAuthEmail(email)
-    setIsAuthSubmitting(true)
-
-    try {
-      if (authMode === 'sign-in') {
-        const result = await signIn(email, password)
-        if (result.error) {
-          setAuthFormError(result.error)
-        }
-      } else {
-        const result = await signUp(email, password)
-        if (result.error) {
-          setAuthFormError(result.error)
-        } else {
-          setAuthMode('sign-in')
-          setAuthNotice(
-            result.confirmationRequired
-              ? 'Check your email to confirm your account, then sign in.'
-              : 'Account created. Sign in to continue.',
-          )
-          if (!result.confirmationRequired) {
-            setAuthEmail('')
-            setAuthPassword('')
-          }
-        }
-      }
-    } catch (error) {
-      setAuthFormError(error instanceof Error ? error.message : 'Authentication failed. Please try again.')
-    } finally {
-      setIsAuthSubmitting(false)
-    }
-  }
-
-  const handleAuthModeToggle = useCallback(() => {
-    setAuthMode(prev => (prev === 'sign-in' ? 'sign-up' : 'sign-in'))
-    setAuthFormError(null)
-    setAuthNotice(null)
-  }, [])
-
-  const handleSignOut = useCallback(async () => {
-    setIsSigningOut(true)
-    try {
-      const { error } = await signOut()
-      if (error) {
-        console.error('Failed to sign out', error)
-        setLoadError('Unable to sign out right now. Please try again.')
-      }
-    } finally {
-      setIsSigningOut(false)
-    }
-  }, [signOut])
 
   // Helpers
   const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
@@ -464,11 +182,7 @@ export default function App() {
       setActionError(null)
     } catch (error) {
       console.error('Failed to update customer', error)
-      const message = getFriendlySupabaseError(
-        error,
-        'Failed to update customer.',
-        'Not authorized to update customers.',
-      )
+      const message = toErrorMessage(error, 'Failed to update customer.')
       setActionError(message)
       throw new Error(message)
     }
@@ -502,11 +216,7 @@ export default function App() {
       setActionError(null)
     } catch (error) {
       console.error('Failed to delete customer', error)
-      const message = getFriendlySupabaseError(
-        error,
-        'Failed to delete customer.',
-        'Not authorized to delete customers.',
-      )
+      const message = toErrorMessage(error, 'Failed to delete customer.')
       setActionError(message)
     }
   }
@@ -532,11 +242,7 @@ export default function App() {
       setActionError(null)
     } catch (error) {
       console.error('Failed to delete project', error)
-      const message = getFriendlySupabaseError(
-        error,
-        'Failed to delete project.',
-        'Not authorized to delete projects.',
-      )
+      const message = toErrorMessage(error, 'Failed to delete project.')
       setActionError(message)
     }
   }
@@ -563,11 +269,7 @@ export default function App() {
       setActionError(null)
     } catch (error) {
       console.error('Failed to delete work order', error)
-      const message = getFriendlySupabaseError(
-        error,
-        'Failed to delete work order.',
-        'Not authorized to delete work orders.',
-      )
+      const message = toErrorMessage(error, 'Failed to delete work order.')
       setActionError(message)
     }
   }
@@ -594,11 +296,7 @@ export default function App() {
       setActionError(null)
     } catch (error) {
       console.error('Failed to delete purchase order', error)
-      const message = getFriendlySupabaseError(
-        error,
-        'Failed to delete purchase order.',
-        'Not authorized to delete purchase orders.',
-      )
+      const message = toErrorMessage(error, 'Failed to delete purchase order.')
       setActionError(message)
     }
   }
@@ -627,11 +325,7 @@ export default function App() {
         setActionError(null)
       } catch (error) {
         console.error('Failed to update project note', error)
-        const message = getFriendlySupabaseError(
-          error,
-          'Failed to update project note.',
-          'Not authorized to update project notes.',
-        )
+        const message = toErrorMessage(error, 'Failed to update project note.')
         setActionError(message)
       }
     })()
@@ -671,11 +365,7 @@ export default function App() {
       return null
     } catch (error) {
       console.error('Failed to create work order', error)
-      const message = getFriendlySupabaseError(
-        error,
-        'Failed to create work order.',
-        'Not authorized to create work orders.',
-      )
+      const message = toErrorMessage(error, 'Failed to create work order.')
       setActionError(message)
       return message
     }
@@ -713,11 +403,7 @@ export default function App() {
       return null
     } catch (error) {
       console.error('Failed to create purchase order', error)
-      const message = getFriendlySupabaseError(
-        error,
-        'Failed to create purchase order.',
-        'Not authorized to create purchase orders.',
-      )
+      const message = toErrorMessage(error, 'Failed to create purchase order.')
       setActionError(message)
       return message
     }
@@ -745,11 +431,7 @@ export default function App() {
       return null
     } catch (error) {
       console.error('Failed to create project', error)
-      const message = getFriendlySupabaseError(
-        error,
-        'Failed to create project.',
-        'Not authorized to create projects.',
-      )
+      const message = toErrorMessage(error, 'Failed to create project.')
       setActionError(message)
       return message
     }
@@ -779,11 +461,7 @@ export default function App() {
       return null
     } catch (error) {
       console.error('Failed to create customer', error)
-      const message = getFriendlySupabaseError(
-        error,
-        'Failed to create customer.',
-        'Not authorized to create customers.',
-      )
+      const message = toErrorMessage(error, 'Failed to create customer.')
       setActionError(message)
       return message
     }
@@ -1194,106 +872,6 @@ export default function App() {
     )
   }
 
-  if (usingSupabase && authStatus === 'loading') {
-    return (
-      <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
-        <div className='mx-auto flex min-h-[60vh] max-w-6xl flex-col items-center justify-center gap-4 text-center text-slate-600'>
-          <span className='h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-sky-500' aria-hidden />
-          <p className='text-sm font-medium text-slate-500'>Checking your session…</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (usingSupabase && authStatus !== 'signed-in') {
-    return (
-      <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
-        <div className='mx-auto flex min-h-[60vh] max-w-md flex-col justify-center'>
-          <Card className='panel'>
-            <CardHeader>
-              <div className='flex flex-col gap-1'>
-                <h1 className='text-xl font-semibold text-slate-800'>Sign in to continue</h1>
-                <p className='text-sm text-slate-500'>Use your Supabase credentials to access CustomerProjectDB.</p>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className='mb-4 flex justify-between'>
-                <span className={`rounded-full border px-3 py-1 text-xs font-medium ${storageBadgeClass}`} title={storageTitle}>
-                  Storage: {storageLabel}
-                </span>
-              </div>
-              {resolvedAuthError && (
-                <div className='mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700'>
-                  {resolvedAuthError}
-                </div>
-              )}
-              {authFormError && (
-                <div className='mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700'>
-                  {authFormError}
-                </div>
-              )}
-              {authNotice && (
-                <div className='mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>
-                  {authNotice}
-                </div>
-              )}
-              <form onSubmit={handleAuthSubmit} className='grid gap-4'>
-                <div>
-                  <Label htmlFor='auth-email'>Email</Label>
-                  <Input
-                    id='auth-email'
-                    type='email'
-                    autoComplete='email'
-                    value={authEmail}
-                    onChange={event => setAuthEmail((event.target as HTMLInputElement).value)}
-                    disabled={isAuthSubmitting}
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor='auth-password'>Password</Label>
-                  <Input
-                    id='auth-password'
-                    type='password'
-                    autoComplete={authMode === 'sign-in' ? 'current-password' : 'new-password'}
-                    value={authPassword}
-                    onChange={event => setAuthPassword((event.target as HTMLInputElement).value)}
-                    disabled={isAuthSubmitting}
-                    required
-                  />
-                </div>
-                <Button type='submit' size='lg' disabled={isAuthSubmitting}>
-                  {isAuthSubmitting ? 'Working…' : authMode === 'sign-in' ? 'Sign In' : 'Create Account'}
-                </Button>
-              </form>
-              <div className='mt-4 text-center text-sm text-slate-500'>
-                {authMode === 'sign-in' ? (
-                  <button
-                    type='button'
-                    className='font-semibold text-sky-600 hover:underline'
-                    onClick={handleAuthModeToggle}
-                    disabled={isAuthSubmitting}
-                  >
-                    Need an account? Create one
-                  </button>
-                ) : (
-                  <button
-                    type='button'
-                    className='font-semibold text-sky-600 hover:underline'
-                    onClick={handleAuthModeToggle}
-                    disabled={isAuthSubmitting}
-                  >
-                    Already have an account? Sign in
-                  </button>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    )
-  }
-
   if (isLoading) {
     return (
       <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
@@ -1325,54 +903,18 @@ export default function App() {
             >
               Storage: {storageLabel}
             </span>
-            {usingSupabase && authUserLabel && (
-              <span className='max-w-[220px] truncate text-xs font-medium text-slate-500' title={authUserLabel}>
-                Signed in as {authUserLabel}
-              </span>
-            )}
-            {usingSupabase && isRolesLoading && (
-              <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
-                <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
-                Loading roles…
-              </span>
-            )}
-            {usingSupabase && rolesReady && !isRolesLoading && (
-              <span className='text-xs font-medium text-slate-500' title={`Roles: ${resolvedRoles.join(', ') || 'viewer'}`}>
-                Roles: {resolvedRoles.length > 0 ? resolvedRoles.join(', ') : 'viewer'}
-              </span>
-            )}
             {isSyncing && (
               <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
                 <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
                 Syncing…
               </span>
             )}
-            {usingSupabase && canManageUsers && (
-              <Button
-                variant='outline'
-                onClick={() => setShowAdminPanel(prev => !prev)}
-                disabled={isRolesLoading}
-                title={showAdminPanel ? 'Hide user management' : 'Manage user roles'}
-              >
-                {showAdminPanel ? 'Close Admin' : 'Manage Users'}
-              </Button>
-            )}
-            {usingSupabase && (
-              <Button
-                variant='ghost'
-                onClick={() => void handleSignOut()}
-                disabled={isSigningOut}
-                title='Sign out of Supabase'
-              >
-                <LogOut size={16} /> {isSigningOut ? 'Signing Out…' : 'Sign Out'}
-              </Button>
-            )}
             <Button
               onClick={() => {
                 setShowNewCustomer(true)
                 setNewCustomerError(null)
               }}
-              title={canEdit ? 'Create new customer' : 'Read-only access'}
+              title='Create new customer'
               disabled={!canEdit}
             >
               <Plus size={16} /> New Customer
@@ -1380,124 +922,16 @@ export default function App() {
           </div>
         </div>
 
-        {!usingSupabase && storageNotice && (
+        {storageNotice && (
           <div className='mb-6 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700'>
             {storageNotice}
           </div>
         )}
 
-        {usingSupabase && rolesError && (
-          <div className='mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800'>
-            Unable to load roles. {rolesError}
-          </div>
-        )}
-        {isViewerOnly && (
-          <div className='mb-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800'>
-            You have read-only access. Contact an administrator to request edit permissions.
-          </div>
-        )}
         {actionError && (
           <div className='mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
             {actionError}
           </div>
-        )}
-
-        {canManageUsers && showAdminPanel && (
-          <Card className='mb-6 panel'>
-            <CardHeader>
-              <div className='flex items-center justify-between gap-3'>
-                <div className='flex items-center gap-2'>
-                  <Users size={18} />
-                  <span className='font-medium'>User Management</span>
-                </div>
-                <Button variant='outline' onClick={() => void loadManagedUsers()} disabled={isLoadingUsers}>
-                  Refresh
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className='space-y-3'>
-                {adminError && (
-                  <div className='rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700'>{adminError}</div>
-                )}
-                {adminNotice && (
-                  <div className='rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700'>
-                    {adminNotice}
-                  </div>
-                )}
-                {isLoadingUsers ? (
-                  <div className='flex items-center gap-2 text-sm text-slate-500'>
-                    <span className='h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
-                    Loading users…
-                  </div>
-                ) : managedUsers.length === 0 ? (
-                  <div className='text-sm text-slate-500'>No users found.</div>
-                ) : (
-                  <div className='overflow-x-auto rounded-2xl border border-slate-200 bg-white/75'>
-                    <table className='min-w-full divide-y divide-slate-200 text-sm'>
-                      <thead className='bg-slate-50/70 text-left text-xs font-semibold uppercase tracking-wide text-slate-500'>
-                        <tr>
-                          <th className='px-3 py-2'>Email</th>
-                          <th className='px-3 py-2'>Roles</th>
-                          <th className='px-3 py-2'>Last sign-in</th>
-                          <th className='px-3 py-2 text-right'>Manage</th>
-                        </tr>
-                      </thead>
-                      <tbody className='divide-y divide-slate-200'>
-                        {managedUsers.map(user => {
-                          const email = user.email ?? '—'
-                          const rolesLabel = user.roles.length > 0 ? user.roles.join(', ') : 'None'
-                          return (
-                            <tr key={user.id} className='bg-white/80'>
-                              <td className='px-3 py-2 align-top text-slate-700'>{email}</td>
-                              <td className='px-3 py-2 align-top text-slate-600 capitalize'>{rolesLabel}</td>
-                              <td className='px-3 py-2 align-top text-slate-500'>{formatDateTime(user.lastSignInAt)}</td>
-                              <td className='px-3 py-2 align-top'>
-                                <div className='flex flex-wrap justify-end gap-2'>
-                                  {(['viewer', 'editor', 'admin'] as AppRole[]).map(role => {
-                                    const hasRole = user.roles.includes(role)
-                                    const prettyRole = role.charAt(0).toUpperCase() + role.slice(1)
-                                    const action = hasRole ? 'revoke' : 'grant'
-                                    const key = `${action}:${(user.email ?? '').toLowerCase()}:${role}`
-                                    const isPending = roleActionTarget === key
-                                    const disableForSelf = hasRole && role === 'admin' && authUser?.id === user.id
-                                    return (
-                                      <Button
-                                        key={role}
-                                        variant='outline'
-                                        className={`text-xs capitalize ${
-                                          hasRole ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : ''
-                                        }`}
-                                        onClick={() =>
-                                          void handleRoleUpdate(user.email ?? '', role, hasRole ? 'revoke' : 'grant')
-                                        }
-                                        disabled={!user.email || isLoadingUsers || isPending || disableForSelf}
-                                        title={
-                                          !user.email
-                                            ? 'Cannot modify roles without an email.'
-                                            : disableForSelf
-                                              ? 'You cannot remove your own admin role.'
-                                              : hasRole
-                                                ? `Revoke ${prettyRole}`
-                                                : `Grant ${prettyRole}`
-                                        }
-                                      >
-                                        {hasRole ? `Revoke ${prettyRole}` : `Grant ${prettyRole}`}
-                                      </Button>
-                                    )
-                                  })}
-                                </div>
-                              </td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
         )}
 
         <Card className='mb-6 panel'>
