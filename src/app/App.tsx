@@ -42,6 +42,7 @@ import ProjectPage from './ProjectPage'
 function AppContent() {
   const [db, setDb] = useState<Customer[]>([])
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [editingInfo, setEditingInfo] = useState<Record<string, boolean>>({})
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -145,8 +146,6 @@ function AppContent() {
   )
 
   const HomeView = () => {
-    const navigate = useNavigate()
-
     return (
       <>
         <Card className='mb-6 panel'>
@@ -195,9 +194,7 @@ function AppContent() {
                       key={`${m.kind}_${m.customerId}_${m.projectId ?? ''}_${m.label}`}
                       onClick={() => {
                         setSelectedCustomerId(m.customerId)
-                        if (m.projectId) {
-                          navigate(`/project/${m.projectId}`)
-                        }
+                        setSelectedProjectId(m.projectId ?? null)
                       }}
                       className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
                       title={
@@ -228,7 +225,15 @@ function AppContent() {
                 <div className='text-lg font-semibold'>Customer: {selectedCustomer.name}</div>
               </div>
               <div className='flex flex-wrap items-center gap-2'>
-                <Button variant='outline' onClick={() => setSelectedCustomerId(null)}>Back to Index</Button>
+                <Button
+                  variant='outline'
+                  onClick={() => {
+                    setSelectedCustomerId(null)
+                    setSelectedProjectId(null)
+                  }}
+                >
+                  Back to Index
+                </Button>
                 <Button
                   variant='ghost'
                   className='text-rose-600 hover:bg-rose-50'
@@ -325,7 +330,7 @@ function AppContent() {
                         <Button
                           onClick={() => {
                             setSelectedCustomerId(selectedCustomer.id)
-                            navigate(`/project/${project.id}`)
+                            setSelectedProjectId(project.id)
                           }}
                         >
                           <ChevronRight size={16} /> View project
@@ -378,73 +383,16 @@ function AppContent() {
     )
   }
 
-  const ProjectRoute = () => {
-    const { projectId } = useParams<{ projectId: string }>()
-    const navigate = useNavigate()
-
-    const projectData = useMemo(() => {
-      if (!projectId) return null
-      for (const customer of db) {
-        const project = customer.projects.find(p => p.id === projectId)
-        if (project) {
-          return { customer, project }
-        }
+  const selectedProjectData = useMemo(() => {
+    if (!selectedProjectId) return null
+    for (const customer of db) {
+      const project = customer.projects.find(p => p.id === selectedProjectId)
+      if (project) {
+        return { customer, project }
       }
-      return null
-    }, [db, projectId])
-
-    useEffect(() => {
-      if (projectData?.customer.id) {
-        setSelectedCustomerId(projectData.customer.id)
-      }
-    }, [projectData?.customer.id])
-
-    if (!projectId) {
-      return <Navigate to='/' replace />
     }
-
-    if (!projectData) {
-      return (
-        <Card className='panel'>
-          <CardHeader>
-            <div className='text-lg font-semibold'>Project not found</div>
-          </CardHeader>
-          <CardContent>
-            <p className='text-sm text-slate-600'>We couldn't find that project. It may have been deleted.</p>
-            <div className='mt-4'>
-              <Button onClick={() => navigate('/')}>Back to index</Button>
-            </div>
-          </CardContent>
-        </Card>
-      )
-    }
-
-    const { customer, project } = projectData
-
-    return (
-      <ProjectPage
-        customer={customer}
-        project={project}
-        canEdit={canEdit}
-        onUpdateProjectNote={(note) => updateProjectNote(customer.id, project.id, note)}
-        onAddWO={(data) => addWO(customer.id, project.id, data)}
-        onDeleteWO={(woId) => deleteWO(customer.id, project.id, woId)}
-        onAddPO={(data) => addPO(customer.id, project.id, data)}
-        onDeletePO={(poId) => deletePO(customer.id, project.id, poId)}
-        onAddFdsFile={(data) => addFdsFile(customer.id, project.id, data)}
-        onDeleteFdsFile={(fileId) => deleteFdsFile(customer.id, project.id, fileId)}
-        onAddTechnicalDrawing={(data) => addTechnicalDrawing(customer.id, project.id, data)}
-        onDeleteTechnicalDrawing={(fileId) => deleteTechnicalDrawing(customer.id, project.id, fileId)}
-        onAddSignOff={(data) => addSignOff(customer.id, project.id, data)}
-        onDeleteSignOff={(signOffId) => deleteSignOff(customer.id, project.id, signOffId)}
-        onDeleteProject={() => deleteProject(customer.id, project.id)}
-        onNavigateBack={() => {
-          setSelectedCustomerId(customer.id)
-          navigate('/')
-        }}
-      />
-    )
-  }
+    return null
+  }, [db, selectedProjectId])
 
   // Helpers
   const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
@@ -501,6 +449,9 @@ function AppContent() {
       setActionError('Not authorized to delete customers.')
       return
     }
+    const shouldClearProject = selectedProjectId
+      ? db.some(c => c.id === customerId && c.projects.some(p => p.id === selectedProjectId))
+      : false
     try {
       await deleteCustomerRecord(customerId)
       setDb(prev => prev.filter(c => c.id !== customerId))
@@ -511,6 +462,7 @@ function AppContent() {
         })
         return next
       })
+      if (shouldClearProject) setSelectedProjectId(null)
       if (selectedCustomerId === customerId) setSelectedCustomerId(null)
       setActionError(null)
     } catch (error) {
@@ -532,6 +484,7 @@ function AppContent() {
           c.id !== customerId ? c : { ...c, projects: c.projects.filter(p => p.id !== projectId) },
         ),
       )
+      setSelectedProjectId(prev => (prev === projectId ? null : prev))
       setActionError(null)
     } catch (error) {
       console.error('Failed to delete project', error)
@@ -718,6 +671,126 @@ function AppContent() {
   ): Promise<string | null> {
     if (!canEdit) {
       const message = 'Not authorized to create work orders.'
+      setActionError(message)
+      return message
+    }
+    const trimmed = data.number.trim()
+    if (!trimmed) return 'Enter a work order number.'
+    const normalized = trimmed.toUpperCase()
+    const finalNumber = normalized.startsWith('WO') ? normalized : `WO${normalized}`
+    if (woNumberExists(finalNumber)) return 'A work order with this number already exists.'
+    const note = data.note?.trim()
+    try {
+      const newWO = await createWORecord(projectId, { number: finalNumber, type: data.type, note })
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, wos: [...p.wos, newWO] },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to create work order', error)
+      const message = toErrorMessage(error, 'Failed to create work order.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function addPO(
+    customerId: string,
+    projectId: string,
+    data: { number: string; note?: string },
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to create purchase orders.'
+      setActionError(message)
+      return message
+    }
+    const trimmed = data.number.trim()
+    if (!trimmed) return 'Enter a purchase order number.'
+    if (poNumberExists(trimmed)) return 'A purchase order with this number already exists.'
+    const note = data.note?.trim()
+    try {
+      const newPO = await createPORecord(projectId, { number: trimmed, note })
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, pos: [...p.pos, newPO] },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to create purchase order', error)
+      const message = toErrorMessage(error, 'Failed to create purchase order.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function addFdsFile(
+    customerId: string,
+    projectId: string,
+    data: { name: string; url?: string; note?: string },
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to add FDS files.'
+      setActionError(message)
+      return message
+    }
+    const trimmedName = data.name.trim()
+    if (!trimmedName) return 'Enter a file name.'
+    const url = data.url?.trim()
+    const note = data.note?.trim()
+    try {
+      const file = await createFdsFileRecord(projectId, {
+        name: trimmedName,
+        url: url || undefined,
+        note: note || undefined,
+      })
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, fdsFiles: [...p.fdsFiles, file] },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to add FDS file', error)
+      const message = toErrorMessage(error, 'Failed to add FDS file.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function addTechnicalDrawing(
+    customerId: string,
+    projectId: string,
+    data: { name: string; url?: string; note?: string },
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to add technical drawings.'
       setActionError(message)
       return message
     }
@@ -1142,11 +1215,50 @@ function AppContent() {
           </div>
         )}
 
-        <Routes>
-          <Route path='/' element={<HomeView />} />
-          <Route path='/project/:projectId' element={<ProjectRoute />} />
-          <Route path='*' element={<Navigate to='/' replace />} />
-        </Routes>
+        {selectedProjectId ? (
+          selectedProjectData ? (
+            <ProjectPage
+              customer={selectedProjectData.customer}
+              project={selectedProjectData.project}
+              canEdit={canEdit}
+              onUpdateProjectNote={(note) =>
+                updateProjectNote(selectedProjectData.customer.id, selectedProjectData.project.id, note)
+              }
+              onAddWO={(data) => addWO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
+              onDeleteWO={(woId) => deleteWO(selectedProjectData.customer.id, selectedProjectData.project.id, woId)}
+              onAddPO={(data) => addPO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
+              onDeletePO={(poId) => deletePO(selectedProjectData.customer.id, selectedProjectData.project.id, poId)}
+              onAddFdsFile={(data) => addFdsFile(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
+              onDeleteFdsFile={(fileId) => deleteFdsFile(selectedProjectData.customer.id, selectedProjectData.project.id, fileId)}
+              onAddTechnicalDrawing={(data) =>
+                addTechnicalDrawing(selectedProjectData.customer.id, selectedProjectData.project.id, data)
+              }
+              onDeleteTechnicalDrawing={(fileId) =>
+                deleteTechnicalDrawing(selectedProjectData.customer.id, selectedProjectData.project.id, fileId)
+              }
+              onAddSignOff={(data) => addSignOff(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
+              onDeleteSignOff={(signOffId) =>
+                deleteSignOff(selectedProjectData.customer.id, selectedProjectData.project.id, signOffId)
+              }
+              onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
+              onNavigateBack={() => setSelectedProjectId(null)}
+            />
+          ) : (
+            <Card className='panel'>
+              <CardHeader>
+                <div className='text-lg font-semibold'>Project not found</div>
+              </CardHeader>
+              <CardContent>
+                <p className='text-sm text-slate-600'>We couldn't find that project. It may have been deleted.</p>
+                <div className='mt-4'>
+                  <Button onClick={() => setSelectedProjectId(null)}>Back to index</Button>
+                </div>
+              </CardContent>
+            </Card>
+          )
+        ) : (
+          <HomeView />
+        )}
       </div>
 
       {/* New Customer Modal */}
@@ -1341,9 +1453,5 @@ function AddProjectForm({ onAdd, disabled = false }: { onAdd: (num: string) => P
 }
 
 export default function App() {
-  return (
-    <BrowserRouter>
-      <AppContent />
-    </BrowserRouter>
-  )
+  return <AppContent />
 }
