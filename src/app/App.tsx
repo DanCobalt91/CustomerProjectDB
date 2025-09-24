@@ -971,10 +971,6 @@ function AppContent() {
               </div>
             </div>
           </CardContent>
-                </Card>
-              ))}
-            </div>
-          </CardContent>
         </Card>
       </div>
     )
