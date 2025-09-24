@@ -329,6 +329,7 @@ export default function ProjectPage({
             title='Copy project number'
           >
             <Copy size={16} />
+            <span className='sr-only'>Copy project number</span>
           </Button>
           <Button
             variant='ghost'
@@ -427,6 +428,7 @@ export default function ProjectPage({
                       title='Copy work order'
                     >
                       <Copy size={16} />
+                      <span className='sr-only'>Copy work order number</span>
                     </Button>
                     <Button
                       variant='ghost'

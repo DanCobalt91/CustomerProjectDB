@@ -546,7 +546,7 @@ function AppContent() {
         <Card className='panel'>
           <CardHeader>
             <div className='flex flex-col gap-3'>
-              <div className='flex flex-wrap items-start justify-between gap-3'>
+              <div className='flex flex-wrap items-start gap-3'>
                 <div className='space-y-1'>
                   <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Customer</div>
                   {isEditingCustomerName ? (
@@ -572,7 +572,7 @@ function AppContent() {
                     <div className='text-lg font-semibold text-slate-900'>Customer: {selectedCustomer.name}</div>
                   )}
                 </div>
-                <div className='flex flex-wrap items-center gap-2'>
+                <div className='flex flex-wrap items-center gap-2 self-start ml-auto'>
                   {isEditingCustomerName ? (
                     <>
                       <Button
@@ -608,7 +608,8 @@ function AppContent() {
                       title={canEdit ? 'Edit customer name' : 'Read-only access'}
                       disabled={!canEdit}
                     >
-                      <Pencil size={16} /> Edit Customer
+                      <Pencil size={16} />
+                      <span className='sr-only'>Edit customer</span>
                     </Button>
                   )}
                   <Button
@@ -623,7 +624,8 @@ function AppContent() {
                     title={canEdit ? 'Delete customer' : 'Read-only access'}
                     disabled={!canEdit}
                   >
-                    <Trash2 size={16} /> Delete Customer
+                    <Trash2 size={16} />
+                    <span className='sr-only'>Delete customer</span>
                   </Button>
                 </div>
               </div>
@@ -646,14 +648,25 @@ function AppContent() {
                     }}
                   />
                   {selectedCustomerAddressForMap ? (
-                    <a
-                      href={`https://www.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}`}
-                      target='_blank'
-                      rel='noreferrer'
-                      className='inline-flex items-center gap-2 text-sm font-medium text-sky-600 hover:text-sky-500'
-                    >
-                      <MapPin size={16} /> Open in Google Maps
-                    </a>
+                    <div className='space-y-3'>
+                      <a
+                        href={`https://www.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}`}
+                        target='_blank'
+                        rel='noreferrer'
+                        className='inline-flex items-center gap-2 text-sm font-medium text-sky-600 hover:text-sky-500'
+                      >
+                        <MapPin size={16} /> Open in Google Maps
+                      </a>
+                      <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
+                        <iframe
+                          title={`Map preview for ${selectedCustomer.name}`}
+                          src={`https://maps.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}&z=15&output=embed`}
+                          loading='lazy'
+                          className='h-40 w-full border-0'
+                          referrerPolicy='no-referrer-when-downgrade'
+                        />
+                      </div>
+                    </div>
                   ) : null}
                 </div>
               </div>
@@ -736,7 +749,8 @@ function AppContent() {
                                 title={canEdit ? 'Edit contact' : 'Read-only access'}
                                 disabled={!canEdit}
                               >
-                                <Pencil size={16} /> Edit Contact
+                                <Pencil size={16} />
+                                <span className='sr-only'>Edit contact</span>
                               </Button>
                               <Button
                                 variant='ghost'
@@ -897,77 +911,65 @@ function AppContent() {
                 <div className='mt-3 text-sm text-slate-500'>No projects yet.</div>
               )}
               <div className='mt-4 space-y-3'>
-                {selectedCustomer.projects.map(project => (
-                  <Card key={project.id} className='panel'>
-                    <CardHeader>
-                      <div className='flex flex-wrap items-center gap-2'>
-                        <div className='text-lg font-semibold text-slate-800'>Project: {project.number}</div>
-                        {project.note && (
-                          <span className='rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700'>Note</span>
-                        )}
-                      </div>
-                      <div className='flex flex-wrap items-center gap-2'>
-                        <Button
-                          variant='outline'
-                          onClick={() => navigator.clipboard.writeText(stripPrefix(project.number, /^P[-\s]?(.+)$/i))}
-                          title='Copy project number'
-                        >
-                          <Copy size={16} />
-                        </Button>
-                        <Button
-                          onClick={() => {
-                            setSelectedCustomerId(selectedCustomer.id)
-                            setSelectedProjectId(project.id)
-                            setActivePage('projects')
-                          }}
-                        >
-                          <ChevronRight size={16} /> View project
-                        </Button>
-                        <Button
-                          variant='ghost'
-                          className='text-rose-600 hover:bg-rose-50'
-                          onClick={() => {
-                            const confirmed = window.confirm('Delete this project and all associated records?')
-                            if (!confirmed) return
-                            void deleteProject(selectedCustomer.id, project.id)
-                          }}
-                          title={canEdit ? 'Delete project' : 'Read-only access'}
-                          disabled={!canEdit}
-                        >
-                          <Trash2 size={16} />
-                        </Button>
-                      </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
-                        {[
-                          {
-                            label: 'Status',
-                            value: formatProjectStatus(project.status, project.activeSubStatus),
-                          },
-                          { label: 'Work Orders', value: project.wos.length },
-                          {
-                            label: 'Project Files',
-                            value: PROJECT_FILE_CATEGORIES.reduce(
-                              (count, category) => (project.documents?.[category] ? count + 1 : count),
-                              0,
-                            ),
-                          },
-                        ].map(item => (
-                          <div key={item.label} className='rounded-xl border border-slate-200 bg-white/80 p-3'>
-                            <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{item.label}</div>
-                            <div className='text-lg font-semibold text-slate-800'>{item.value}</div>
+                {selectedCustomer.projects.map(project => {
+                  const projectNote = project.note?.trim()
+                  const statusBucket = resolveProjectStatusBucket(project)
+                  const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
+                  const statusLabel = formatProjectStatus(project.status, project.activeSubStatus)
+                  return (
+                    <Card key={project.id} className='panel'>
+                      <CardHeader className='flex-col items-start gap-4 border-b-0 sm:flex-row sm:items-center sm:gap-3'>
+                        <div className='flex flex-col gap-2'>
+                          <div className='flex flex-wrap items-center gap-2 text-lg font-semibold text-slate-800'>
+                            <span>Project: {project.number}</span>
+                            <span
+                              className='rounded-full border px-3 py-1 text-xs font-semibold'
+                              style={{
+                                color: statusMeta.color,
+                                backgroundColor: `${statusMeta.color}1a`,
+                                borderColor: `${statusMeta.color}33`,
+                              }}
+                            >
+                              {statusLabel}
+                            </span>
                           </div>
-                        ))}
-                      </div>
-                      {project.note && (
-                        <div className='mt-3 rounded-xl border border-slate-200 bg-white/80 p-3 text-sm text-slate-700'>
-                          <span className='font-semibold text-slate-900'>Note:</span> {project.note}
+                          {projectNote ? <p className='text-sm text-slate-500'>{projectNote}</p> : null}
                         </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                ))}
+                        <div className='flex flex-wrap items-center gap-2 sm:ml-auto'>
+                          <Button
+                            variant='outline'
+                            onClick={() => navigator.clipboard.writeText(stripPrefix(project.number, /^P[-\s]?(.+)$/i))}
+                            title='Copy project number'
+                          >
+                            <Copy size={16} />
+                          </Button>
+                          <Button
+                            onClick={() => {
+                              setSelectedCustomerId(selectedCustomer.id)
+                              setSelectedProjectId(project.id)
+                              setActivePage('projects')
+                            }}
+                          >
+                            <ChevronRight size={16} /> View project
+                          </Button>
+                          <Button
+                            variant='ghost'
+                            className='text-rose-600 hover:bg-rose-50'
+                            onClick={() => {
+                              const confirmed = window.confirm('Delete this project and all associated records?')
+                              if (!confirmed) return
+                              void deleteProject(selectedCustomer.id, project.id)
+                            }}
+                            title={canEdit ? 'Delete project' : 'Read-only access'}
+                            disabled={!canEdit}
+                          >
+                            <Trash2 size={16} />
+                          </Button>
+                        </div>
+                      </CardHeader>
+                    </Card>
+                  )
+                })}
               </div>
             </div>
           </CardContent>
@@ -2097,6 +2099,8 @@ function AppContent() {
     }, [canEdit, isEditing, value])
 
     const hasValue = !!value && value.trim().length > 0
+    const accessibleCopyLabel = copyTitle || `Copy ${label.toLowerCase()}`
+    const accessibleEditLabel = `Edit ${label.toLowerCase()}`
 
     const handleSave = async () => {
       const trimmed = val.trim()
@@ -2116,7 +2120,7 @@ function AppContent() {
     return (
       <div className='flex flex-col gap-1'>
         <Label>{label}</Label>
-        <div className='flex items-center gap-2'>
+        <div className='flex flex-wrap items-center gap-2'>
           {isEditing ? (
             <>
               <Input
@@ -2127,6 +2131,7 @@ function AppContent() {
                 }}
                 placeholder={placeholder}
                 disabled={!canEdit}
+                className='flex-1 min-w-0'
               />
               <Button onClick={handleSave} title='Save' disabled={isSaving}>
                 <Save size={16} /> Save
@@ -2145,29 +2150,31 @@ function AppContent() {
             </>
           ) : (
             <>
-              <div className='min-h-[38px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm'>
+              <div className='min-h-[38px] flex-1 min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm'>
                 {hasValue ? (
-                  <span className='text-slate-800'>{value}</span>
+                  <span className='block break-words whitespace-pre-wrap text-slate-800'>{value}</span>
                 ) : (
-                  <span className='text-slate-400'>{placeholder || 'Not set'}</span>
+                  <span className='block text-slate-400'>{placeholder || 'Not set'}</span>
                 )}
               </div>
               {copyable && hasValue ? (
                 <Button
                   variant='outline'
                   onClick={() => value && navigator.clipboard.writeText(value)}
-                  title={copyTitle || `Copy ${label.toLowerCase()}`}
+                  title={accessibleCopyLabel}
                 >
-                  <Copy size={16} /> Copy
+                  <Copy size={16} />
+                  <span className='sr-only'>{accessibleCopyLabel}</span>
                 </Button>
               ) : null}
               <Button
                 variant='outline'
                 onClick={() => setIsEditing(true)}
-                title={canEdit ? 'Edit' : 'Read-only access'}
+                title={canEdit ? accessibleEditLabel : 'Read-only access'}
                 disabled={!canEdit}
               >
-                <Pencil size={16} /> Edit
+                <Pencil size={16} />
+                <span className='sr-only'>{accessibleEditLabel}</span>
               </Button>
             </>
           )}
@@ -2197,8 +2204,8 @@ function AppContent() {
     return (
       <div className='flex flex-col gap-1'>
         <Label>{label}</Label>
-        <div className='flex items-center gap-2'>
-          <div className='min-h-[38px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+        <div className='flex flex-wrap items-center gap-2'>
+          <div className='min-h-[38px] flex-1 min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
             {hasValue ? (
               <span className='block break-words whitespace-pre-wrap text-slate-800'>{value}</span>
             ) : (
@@ -2211,7 +2218,8 @@ function AppContent() {
               onClick={() => value && navigator.clipboard.writeText(value)}
               title={copyTitle}
             >
-              <Copy size={16} /> Copy
+              <Copy size={16} />
+              <span className='sr-only'>{copyTitle}</span>
             </Button>
           ) : null}
         </div>
