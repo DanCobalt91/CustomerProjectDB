@@ -41,12 +41,36 @@ export type ProjectStatusLogEntry = {
   changedBy: string;
 };
 
-export type ProjectSignOff = {
+export type CustomerSignOffDecision = 'option1' | 'option2' | 'option3';
+
+export const CUSTOMER_SIGN_OFF_DECISIONS: CustomerSignOffDecision[] = ['option1', 'option2', 'option3'];
+
+export type CustomerSignOffSignaturePoint = { x: number; y: number };
+
+export type CustomerSignOffSignatureStroke = CustomerSignOffSignaturePoint[];
+
+export type CustomerSignOffSignatureDimensions = { width: number; height: number };
+
+export type ProjectCustomerSignOff = {
   id: string;
-  category: ProjectFileCategory;
-  signedAt: string;
-  signedBy: string;
-  note?: string;
+  type: 'upload' | 'generated';
+  completedAt: string;
+  file: ProjectFile;
+  signedByName?: string;
+  signedByPosition?: string;
+  decision?: CustomerSignOffDecision;
+  snags?: string[];
+  signatureDataUrl?: string;
+};
+
+export type CustomerSignOffSubmission = {
+  name: string;
+  position: string;
+  decision: CustomerSignOffDecision;
+  snags: string[];
+  signatureDataUrl: string;
+  signaturePaths: CustomerSignOffSignatureStroke[];
+  signatureDimensions: CustomerSignOffSignatureDimensions;
 };
 
 export type Project = {
@@ -58,7 +82,7 @@ export type Project = {
   wos: WO[];
   documents?: ProjectDocuments;
   statusHistory?: ProjectStatusLogEntry[];
-  signOffs?: ProjectSignOff[];
+  customerSignOff?: ProjectCustomerSignOff;
 };
 
 export type CustomerContact = {
