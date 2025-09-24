@@ -247,7 +247,7 @@ function AppContent() {
 
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
   const selectedCustomerAddressForMap = selectedCustomer?.address?.trim() || null
-  const customerOptions = useMemo(() => db.map(c => c.name).sort(), [db])
+  const sortedCustomers = useMemo(() => [...db].sort((a, b) => a.name.localeCompare(b.name)), [db])
   const canEdit = true
 
 
@@ -362,31 +362,44 @@ function AppContent() {
     [customerQuery, projectQuery, woQuery],
   )
 
+  const handleClearSearch = useCallback(() => {
+    setCustomerQuery('')
+    setProjectQuery('')
+    setWoQuery('')
+    setSelectedCustomerId(null)
+    setSelectedProjectId(null)
+  }, [setCustomerQuery, setProjectQuery, setWoQuery, setSelectedCustomerId, setSelectedProjectId])
+
+  const canClearSearch = hasSearchInput || selectedCustomerId !== null || selectedProjectId !== null
+
   const CustomersPage = () => {
     return (
       <>
         <Card className='mb-6 panel'>
-          <CardHeader>
+          <CardHeader className='flex-col items-start justify-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
             <div className='flex items-center gap-2'>
               <Search size={18} />
               <div className='font-medium'>Index Search</div>
             </div>
+            <Button
+              variant='ghost'
+              onClick={handleClearSearch}
+              disabled={!canClearSearch}
+              className='text-slate-600 hover:text-slate-800 disabled:text-slate-400'
+            >
+              <X size={16} /> Clear
+            </Button>
           </CardHeader>
           <CardContent>
             <div className='grid gap-3 md:grid-cols-3'>
               <div>
                 <Label>Customer</Label>
                 <Input
-                  list='customer-list'
                   value={customerQuery}
                   onChange={(e) => setCustomerQuery((e.target as HTMLInputElement).value)}
                   placeholder='Start typing a name…'
+                  autoComplete='off'
                 />
-                <datalist id='customer-list'>
-                  {customerOptions.map(name => (
-                    <option key={name} value={name} />
-                  ))}
-                </datalist>
               </div>
               <div>
                 <Label>Project Number</Label>
@@ -432,6 +445,70 @@ function AppContent() {
                 )}
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className='mb-6 panel'>
+          <CardHeader className='flex-col items-start justify-start gap-1 sm:flex-row sm:items-center sm:justify-between'>
+            <div className='text-lg font-semibold text-slate-900'>Customers</div>
+            <div className='text-sm text-slate-500 sm:ml-auto'>
+              {customerCount === 1 ? '1 customer listed' : `${customerCount} customers listed`}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {sortedCustomers.length === 0 ? (
+              <p className='text-sm text-slate-500'>Add a customer to see it listed here.</p>
+            ) : (
+              <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
+                {sortedCustomers.map(customer => {
+                  const projectCount = customer.projects.length
+                  const workOrderCount = customer.projects.reduce(
+                    (count, project) => count + project.wos.length,
+                    0,
+                  )
+                  const isSelected = selectedCustomerId === customer.id
+                  const baseClasses =
+                    'flex w-full flex-col gap-3 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                  const selectionClasses = isSelected
+                    ? 'border-indigo-500 bg-indigo-50/80 shadow-md'
+                    : 'hover:-translate-y-0.5 hover:shadow-lg'
+
+                  return (
+                    <button
+                      type='button'
+                      key={customer.id}
+                      onClick={() => {
+                        setSelectedCustomerId(customer.id)
+                        setSelectedProjectId(null)
+                      }}
+                      className={`${baseClasses} ${selectionClasses}`}
+                      aria-pressed={isSelected}
+                      title='View customer details'
+                    >
+                      <div className='flex items-start justify-between gap-3'>
+                        <div>
+                          <div className='text-base font-semibold text-slate-900'>{customer.name}</div>
+                          {customer.address ? (
+                            <div className='mt-1 text-sm text-slate-500'>{customer.address}</div>
+                          ) : null}
+                        </div>
+                        <ChevronRight size={18} className='text-slate-400' aria-hidden />
+                      </div>
+                      <div className='grid gap-2 sm:grid-cols-2'>
+                        <div className='rounded-xl border border-slate-200 bg-white/80 p-3'>
+                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Projects</div>
+                          <div className='text-lg font-semibold text-slate-900'>{projectCount}</div>
+                        </div>
+                        <div className='rounded-xl border border-slate-200 bg-white/80 p-3'>
+                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Work Orders</div>
+                          <div className='text-lg font-semibold text-slate-900'>{workOrderCount}</div>
+                        </div>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </CardContent>
         </Card>
 
