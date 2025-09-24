@@ -19,7 +19,9 @@ import type {
   ProjectActiveSubStatus,
   ProjectFile,
   ProjectFileCategory,
+  ProjectSignOff,
   ProjectStatus,
+  ProjectStatusLogEntry,
   WOType,
 } from '../types'
 import {
@@ -38,6 +40,7 @@ import {
   deleteWO as deleteWORecord,
   updateProject as updateProjectRecord,
 } from '../lib/storage'
+import { createId } from '../lib/id'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
@@ -143,6 +146,8 @@ const PROJECT_STATUS_BUCKET_META: Record<
     color: '#94a3b8',
   },
 }
+
+const CURRENT_USER_NAME = 'Demo User'
 
 function resolveProjectStatusBucket(project: Project): ProjectStatusBucket {
   if (project.status === 'Complete') {
@@ -1214,15 +1219,17 @@ function AppContent() {
           customer={selectedProjectData.customer}
           project={selectedProjectData.project}
           canEdit={canEdit}
+          currentUser={CURRENT_USER_NAME}
           onUpdateProjectNote={(note) =>
             updateProjectNote(selectedProjectData.customer.id, selectedProjectData.project.id, note)
           }
-          onUpdateProjectStatus={(status, activeSubStatus) =>
+          onUpdateProjectStatus={(status, activeSubStatus, context) =>
             updateProjectStatus(
               selectedProjectData.customer.id,
               selectedProjectData.project.id,
               status,
               activeSubStatus,
+              context,
             )
           }
           onAddWO={(data) => addWO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
@@ -1230,8 +1237,19 @@ function AppContent() {
           onUploadDocument={(category, file) =>
             uploadProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category, file)
           }
-          onRemoveDocument={(category) =>
-            removeProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category)
+          onRemoveDocument={(category, fileId) =>
+            removeProjectDocument(
+              selectedProjectData.customer.id,
+              selectedProjectData.project.id,
+              category,
+              fileId,
+            )
+          }
+          onAddSignOff={(data) =>
+            addProjectSignOff(selectedProjectData.customer.id, selectedProjectData.project.id, data)
+          }
+          onRemoveSignOff={(signOffId) =>
+            removeProjectSignOff(selectedProjectData.customer.id, selectedProjectData.project.id, signOffId)
           }
           onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
           onNavigateBack={() => setSelectedProjectId(null)}
@@ -1661,13 +1679,26 @@ function AppContent() {
     try {
       const dataUrl = await readFileAsDataUrl(file)
       const payload: ProjectFile = {
+        id: createId(),
         name: file.name,
         type: file.type || guessMimeTypeFromName(file.name),
         dataUrl,
         uploadedAt: new Date().toISOString(),
       }
 
-      await updateProjectRecord(projectId, { documents: { [category]: payload } })
+      const existingProject = db
+        .find(customer => customer.id === customerId)
+        ?.projects.find(project => project.id === projectId)
+      if (!existingProject) {
+        const message = 'Project not found.'
+        setActionError(message)
+        return message
+      }
+
+      const existingDocuments = existingProject.documents ?? {}
+      const updatedFiles = [...(existingDocuments[category] ?? []), payload]
+
+      await updateProjectRecord(projectId, { documents: { [category]: updatedFiles } })
       setDb(prev =>
         prev.map(c =>
           c.id !== customerId
@@ -1679,7 +1710,7 @@ function AppContent() {
                     return p
                   }
                   const nextDocuments = { ...(p.documents ?? {}) }
-                  nextDocuments[category] = payload
+                  nextDocuments[category] = updatedFiles
                   return { ...p, documents: nextDocuments }
                 }),
               },
@@ -1699,6 +1730,7 @@ function AppContent() {
     customerId: string,
     projectId: string,
     category: ProjectFileCategory,
+    fileId: string,
   ): Promise<string | null> {
     if (!canEdit) {
       const message = 'Not authorized to remove project documents.'
@@ -1707,7 +1739,25 @@ function AppContent() {
     }
 
     try {
-      await updateProjectRecord(projectId, { documents: { [category]: null } })
+      const existingProject = db
+        .find(customer => customer.id === customerId)
+        ?.projects.find(project => project.id === projectId)
+      if (!existingProject) {
+        const message = 'Project not found.'
+        setActionError(message)
+        return message
+      }
+
+      const existingDocuments = existingProject.documents ?? {}
+      const currentFiles = existingDocuments[category] ?? []
+      if (!currentFiles.some(file => file.id === fileId)) {
+        return 'File not found.'
+      }
+
+      const updatedFiles = currentFiles.filter(file => file.id !== fileId)
+      await updateProjectRecord(projectId, {
+        documents: { [category]: updatedFiles.length > 0 ? updatedFiles : null },
+      })
       setDb(prev =>
         prev.map(c =>
           c.id !== customerId
@@ -1718,12 +1768,16 @@ function AppContent() {
                   if (p.id !== projectId) {
                     return p
                   }
-                  if (!p.documents) {
-                    return p
+                  const nextDocuments = { ...(p.documents ?? {}) }
+                  const nextFiles = (nextDocuments[category] ?? []).filter(file => file.id !== fileId)
+                  if (nextFiles.length > 0) {
+                    nextDocuments[category] = nextFiles
+                  } else {
+                    delete nextDocuments[category]
                   }
-                  const nextDocuments = { ...p.documents }
-                  delete nextDocuments[category]
-                  const hasRemaining = PROJECT_FILE_CATEGORIES.some(key => !!nextDocuments[key])
+                  const hasRemaining = PROJECT_FILE_CATEGORIES.some(key =>
+                    (nextDocuments[key]?.length ?? 0) > 0,
+                  )
                   return { ...p, documents: hasRemaining ? nextDocuments : undefined }
                 }),
               },
@@ -1734,6 +1788,119 @@ function AppContent() {
     } catch (error) {
       console.error('Failed to remove project document', error)
       const message = toErrorMessage(error, 'Failed to remove project document.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function addProjectSignOff(
+    customerId: string,
+    projectId: string,
+    data: { category: ProjectFileCategory; signedBy: string; note?: string },
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to record sign offs.'
+      setActionError(message)
+      return message
+    }
+
+    const signedBy = data.signedBy.trim()
+    if (!signedBy) {
+      return 'Enter a name for the sign off.'
+    }
+
+    const existingProject = db
+      .find(customer => customer.id === customerId)
+      ?.projects.find(project => project.id === projectId)
+    if (!existingProject) {
+      const message = 'Project not found.'
+      setActionError(message)
+      return message
+    }
+
+    const payload: ProjectSignOff = {
+      id: createId(),
+      category: data.category,
+      signedBy,
+      signedAt: new Date().toISOString(),
+      note: data.note?.trim() ? data.note.trim() : undefined,
+    }
+    const nextSignOffs = [...(existingProject.signOffs ?? []), payload]
+
+    try {
+      await updateProjectRecord(projectId, { signOffs: nextSignOffs })
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId ? p : { ...p, signOffs: nextSignOffs },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to add project sign off', error)
+      const message = toErrorMessage(error, 'Failed to add sign off.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function removeProjectSignOff(
+    customerId: string,
+    projectId: string,
+    signOffId: string,
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to remove sign offs.'
+      setActionError(message)
+      return message
+    }
+
+    const existingProject = db
+      .find(customer => customer.id === customerId)
+      ?.projects.find(project => project.id === projectId)
+    if (!existingProject) {
+      const message = 'Project not found.'
+      setActionError(message)
+      return message
+    }
+
+    const currentSignOffs = existingProject.signOffs ?? []
+    if (!currentSignOffs.some(entry => entry.id === signOffId)) {
+      return 'Sign off not found.'
+    }
+
+    const updatedSignOffs = currentSignOffs.filter(entry => entry.id !== signOffId)
+
+    try {
+      await updateProjectRecord(projectId, {
+        signOffs: updatedSignOffs.length > 0 ? updatedSignOffs : null,
+      })
+      setDb(prev =>
+        prev.map(c =>
+          c.id !== customerId
+            ? c
+            : {
+                ...c,
+                projects: c.projects.map(p =>
+                  p.id !== projectId
+                    ? p
+                    : { ...p, signOffs: updatedSignOffs.length > 0 ? updatedSignOffs : undefined },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to remove project sign off', error)
+      const message = toErrorMessage(error, 'Failed to remove sign off.')
       setActionError(message)
       return message
     }
@@ -1957,6 +2124,7 @@ function AppContent() {
     projectId: string,
     status: ProjectStatus,
     activeSubStatus?: ProjectActiveSubStatus,
+    context?: { changedBy?: string },
   ) {
     if (!canEdit) {
       setActionError('Not authorized to update project status.')
@@ -1967,6 +2135,11 @@ function AppContent() {
       .find(customer => customer.id === customerId)
       ?.projects.find(project => project.id === projectId)
 
+    if (!existingProject) {
+      setActionError('Project not found.')
+      return
+    }
+
     const normalizedActiveSubStatus =
       status === 'Active'
         ? activeSubStatus ?? existingProject?.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
@@ -1976,6 +2149,16 @@ function AppContent() {
       status === 'Active'
         ? normalizedActiveSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
         : undefined
+
+    const changedBy = context?.changedBy?.trim() || CURRENT_USER_NAME
+    const historyEntry: ProjectStatusLogEntry = {
+      id: createId(),
+      status,
+      activeSubStatus: nextActiveSubStatus,
+      changedAt: new Date().toISOString(),
+      changedBy,
+    }
+    const nextHistory = [...(existingProject.statusHistory ?? []), historyEntry]
 
     setDb(prev =>
       prev.map(c =>
@@ -1990,6 +2173,7 @@ function AppContent() {
                       ...p,
                       status,
                       activeSubStatus: nextActiveSubStatus,
+                      statusHistory: nextHistory,
                     },
               ),
             },
@@ -2001,6 +2185,7 @@ function AppContent() {
         await updateProjectRecord(projectId, {
           status,
           activeSubStatus: status === 'Active' ? nextActiveSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS : null,
+          statusHistory: nextHistory,
         })
         setActionError(null)
       } catch (error) {
