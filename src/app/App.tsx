@@ -11,6 +11,7 @@ import {
   ChevronDown,
   AlertCircle,
   ArrowLeft,
+  Menu,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type {
@@ -104,6 +105,7 @@ type ProjectStatusBucket =
   | 'active_design'
   | 'active_build'
   | 'active_install'
+  | 'active_install_snagging'
   | 'complete'
 
 const PROJECT_STATUS_BUCKETS: ProjectStatusBucket[] = [
@@ -111,6 +113,7 @@ const PROJECT_STATUS_BUCKETS: ProjectStatusBucket[] = [
   'active_design',
   'active_build',
   'active_install',
+  'active_install_snagging',
   'complete',
 ]
 
@@ -119,28 +122,34 @@ const PROJECT_STATUS_BUCKET_META: Record<
   { label: string; description: string; colorClass: string; color: string }
 > = {
   active_fds: {
-    label: 'Active — FDS',
+    label: 'FDS',
     description: 'Projects currently in the front-end design stage.',
     colorClass: 'bg-indigo-500',
     color: '#6366f1',
   },
   active_design: {
-    label: 'Active — Design',
+    label: 'Design',
     description: 'Projects progressing through design activities.',
     colorClass: 'bg-sky-500',
     color: '#0ea5e9',
   },
   active_build: {
-    label: 'Active — Build',
+    label: 'Build',
     description: 'Projects moving through build execution.',
     colorClass: 'bg-emerald-500',
     color: '#10b981',
   },
   active_install: {
-    label: 'Active — Install',
+    label: 'Install',
     description: 'Projects carrying out installation work.',
     colorClass: 'bg-amber-500',
     color: '#f59e0b',
+  },
+  active_install_snagging: {
+    label: 'Install (Snagging)',
+    description: 'Projects addressing outstanding snags during install.',
+    colorClass: 'bg-rose-500',
+    color: '#f43f5e',
   },
   complete: {
     label: 'Complete',
@@ -164,6 +173,8 @@ function resolveProjectStatusBucket(project: Project): ProjectStatusBucket {
       return 'active_build'
     case 'Install':
       return 'active_install'
+    case 'Install (Snagging)':
+      return 'active_install_snagging'
     default:
       return 'active_fds'
   }
@@ -174,6 +185,7 @@ function AppContent() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [activePage, setActivePage] = useState<'home' | 'customers' | 'projects'>('home')
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -431,6 +443,7 @@ function AppContent() {
       active_design: 0,
       active_build: 0,
       active_install: 0,
+      active_install_snagging: 0,
       complete: 0,
     }
     db.forEach(customer => {
@@ -472,7 +485,8 @@ function AppContent() {
       projectStatusBucketCounts.active_fds +
       projectStatusBucketCounts.active_design +
       projectStatusBucketCounts.active_build +
-      projectStatusBucketCounts.active_install,
+      projectStatusBucketCounts.active_install +
+      projectStatusBucketCounts.active_install_snagging,
     [projectStatusBucketCounts],
   )
 
@@ -1253,6 +1267,10 @@ function AppContent() {
           onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
           onNavigateBack={() => setSelectedProjectId(null)}
           onReturnToIndex={() => setSelectedProjectId(null)}
+          onNavigateToCustomers={() => {
+            setSelectedProjectId(null)
+            setActivePage('customers')
+          }}
         />
       </div>
     )
@@ -1795,7 +1813,10 @@ function AppContent() {
     customerId: string,
     projectId: string,
     signOff: ProjectCustomerSignOff,
-    options: { markComplete?: boolean; changedBy?: string } = {},
+    options: {
+      nextStatus?: { status: ProjectStatus; activeSubStatus?: ProjectActiveSubStatus }
+      changedBy?: string
+    } = {},
   ): Promise<string | null> {
     if (!canEdit) {
       const message = 'Not authorized to record customer sign offs.'
@@ -1812,11 +1833,32 @@ function AppContent() {
       return message
     }
 
-    const shouldMarkComplete = options.markComplete ?? false
-    const needsStatusUpdate = shouldMarkComplete && existingProject.status !== 'Complete'
-    const statusUpdate = needsStatusUpdate
-      ? buildStatusUpdate(existingProject, 'Complete', undefined, options.changedBy)
-      : null
+    const desiredStatus = options.nextStatus
+    let statusUpdate: ReturnType<typeof buildStatusUpdate> | null = null
+
+    if (desiredStatus) {
+      const currentStatus = existingProject.status
+      const currentStage =
+        currentStatus === 'Active'
+          ? existingProject.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+          : undefined
+      const targetStatus = desiredStatus.status
+      const targetStage =
+        targetStatus === 'Active'
+          ? desiredStatus.activeSubStatus ?? currentStage ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+          : undefined
+      const isSameStatus = currentStatus === targetStatus
+      const isSameStage = targetStatus === 'Active' ? currentStage === targetStage : true
+
+      if (!isSameStatus || !isSameStage) {
+        statusUpdate = buildStatusUpdate(
+          existingProject,
+          targetStatus,
+          desiredStatus.activeSubStatus,
+          options.changedBy,
+        )
+      }
+    }
 
     setDb(prev =>
       prev.map(entry =>
@@ -1892,7 +1934,9 @@ function AppContent() {
         completedAt,
         file: filePayload,
       }
-      return await saveCustomerSignOff(customerId, projectId, signOffPayload, { markComplete: true })
+      return await saveCustomerSignOff(customerId, projectId, signOffPayload, {
+        nextStatus: { status: 'Complete' },
+      })
     } catch (error) {
       console.error('Failed to upload customer sign off', error)
       const message = toErrorMessage(error, 'Failed to upload customer sign off.')
@@ -1956,7 +2000,14 @@ function AppContent() {
         signatureDataUrl: submission.signatureDataUrl,
       }
 
-      return await saveCustomerSignOff(customerId, projectId, signOffPayload, { markComplete: true })
+      const nextStatus =
+        submission.decision === 'option1'
+          ? { status: 'Complete' as ProjectStatus }
+          : { status: 'Active' as ProjectStatus, activeSubStatus: 'Install (Snagging)' as ProjectActiveSubStatus }
+
+      return await saveCustomerSignOff(customerId, projectId, signOffPayload, {
+        nextStatus,
+      })
     } catch (error) {
       console.error('Failed to generate customer sign off', error)
       const message = toErrorMessage(error, 'Failed to generate customer sign off.')
@@ -2485,6 +2536,7 @@ function AppContent() {
       : renderProjectsSidebar()
 
   const handleNavigate = (page: 'home' | 'customers' | 'projects') => {
+    setIsSidebarOpen(false)
     setActivePage(page)
     if (page !== 'projects') {
       setSelectedProjectId(null)
@@ -2514,48 +2566,63 @@ function AppContent() {
       ? 'Select a customer from the index to review their details and contacts.'
       : 'Select a project from the index to manage its lifecycle and documents.'
 
+  const sidebarPanels = (
+    <>
+      <Card className='panel'>
+        <CardHeader>
+          <div>
+            <h1 className='text-2xl font-semibold tracking-tight text-slate-900'>CustomerProjectDB</h1>
+            <p className='mt-1 text-sm text-slate-500'>Keep track of customers, projects, and their work orders.</p>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <nav className='flex flex-col gap-1'>
+            {(['home', 'customers', 'projects'] as const).map(page => {
+              const isActive = resolvedPage === page
+              const label = page === 'home' ? 'Home' : page === 'customers' ? 'Customers' : 'Projects'
+              return (
+                <button
+                  key={page}
+                  type='button'
+                  onClick={() => handleNavigate(page)}
+                  className={`flex items-center justify-between rounded-xl px-4 py-2 text-sm font-medium transition ${
+                    isActive
+                      ? 'bg-slate-900 text-white shadow'
+                      : 'text-slate-600 hover:bg-white hover:text-slate-800'
+                  }`}
+                >
+                  <span>{label}</span>
+                  {isActive ? <ChevronRight size={16} className='text-white/80' /> : null}
+                </button>
+              )
+            })}
+          </nav>
+        </CardContent>
+      </Card>
+      {sidebarContent}
+    </>
+  )
+
   return (
     <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
       <div className='mx-auto flex max-w-6xl gap-6'>
-        <aside className='w-72 shrink-0'>
-          <div className='sticky top-6 flex flex-col gap-6'>
-            <Card className='panel'>
-              <CardHeader>
-                <div>
-                  <h1 className='text-2xl font-semibold tracking-tight text-slate-900'>CustomerProjectDB</h1>
-                  <p className='mt-1 text-sm text-slate-500'>Keep track of customers, projects, and their work orders.</p>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <nav className='flex flex-col gap-1'>
-                  {(['home', 'customers', 'projects'] as const).map(page => {
-                    const isActive = resolvedPage === page
-                    const label = page === 'home' ? 'Home' : page === 'customers' ? 'Customers' : 'Projects'
-                    return (
-                      <button
-                        key={page}
-                        type='button'
-                        onClick={() => handleNavigate(page)}
-                        className={`flex items-center justify-between rounded-xl px-4 py-2 text-sm font-medium transition ${
-                          isActive
-                            ? 'bg-slate-900 text-white shadow'
-                            : 'text-slate-600 hover:bg-white hover:text-slate-800'
-                        }`}
-                      >
-                        <span>{label}</span>
-                        {isActive ? <ChevronRight size={16} className='text-white/80' /> : null}
-                      </button>
-                    )
-                  })}
-                </nav>
-              </CardContent>
-            </Card>
-
-            {sidebarContent}
-          </div>
-        </aside>
+        <div className='hidden w-72 shrink-0 md:block'>
+          <div className='sticky top-6 flex flex-col gap-6'>{sidebarPanels}</div>
+        </div>
 
         <main className='min-w-0 flex-1'>
+          <div className='mb-4 flex items-center md:hidden'>
+            <Button
+              variant='outline'
+              onClick={() => setIsSidebarOpen(true)}
+              className='gap-2 rounded-full px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm'
+              title='Open navigation menu'
+            >
+              <Menu size={18} />
+              <span>Menu</span>
+            </Button>
+          </div>
+
           {loadError && (
             <div className='mb-6 flex items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
               <span>{loadError}</span>
@@ -2636,6 +2703,44 @@ function AppContent() {
             : renderProjectsPage()}
         </main>
       </div>
+
+      <AnimatePresence>
+        {isSidebarOpen && (
+          <>
+            <motion.button
+              type='button'
+              className='fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm md:hidden'
+              onClick={() => setIsSidebarOpen(false)}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+            />
+            <motion.aside
+              className='fixed inset-y-0 left-0 z-50 w-72 md:hidden'
+              initial={{ x: '-100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '-100%' }}
+              transition={{ type: 'spring', stiffness: 320, damping: 30 }}
+            >
+              <div className='flex h-full flex-col gap-4 overflow-y-auto bg-gradient-to-b from-white/95 to-[#f3f6ff]/95 p-4 shadow-xl'>
+                <div className='flex items-center justify-between'>
+                  <span className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Navigation</span>
+                  <Button
+                    variant='ghost'
+                    onClick={() => setIsSidebarOpen(false)}
+                    className='-mr-2 rounded-full px-2 py-2'
+                    title='Close menu'
+                  >
+                    <X size={16} />
+                    <span className='sr-only'>Close menu</span>
+                  </Button>
+                </div>
+                {sidebarPanels}
+              </div>
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
 
       {/* New Customer Modal */}
       <AnimatePresence>

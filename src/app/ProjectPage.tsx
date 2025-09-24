@@ -15,6 +15,7 @@ import {
   Upload,
   X,
 } from 'lucide-react'
+import { AnimatePresence, motion } from 'framer-motion'
 import type {
   Customer,
   Project,
@@ -60,6 +61,7 @@ export type ProjectPageProps = {
   onDeleteProject: () => void
   onNavigateBack: () => void
   onReturnToIndex: () => void
+  onNavigateToCustomers: () => void
 }
 
 const PROJECT_FILE_METADATA: Record<ProjectFileCategory, { label: string; description: string }> = {
@@ -113,6 +115,10 @@ const ACTIVE_STATUS_STYLES: Record<
     selectClass: 'bg-amber-50 text-amber-900 border-amber-200',
     indicatorClass: 'bg-amber-500',
   },
+  'Install (Snagging)': {
+    selectClass: 'bg-orange-50 text-orange-900 border-orange-200',
+    indicatorClass: 'bg-orange-500',
+  },
 }
 
 const STATUS_SELECTIONS: Array<{
@@ -127,7 +133,7 @@ const STATUS_SELECTIONS: Array<{
     key: `Active:${stage}`,
     status: 'Active' as ProjectStatus,
     activeSubStatus: stage,
-    label: `Active — ${stage}`,
+    label: stage,
     selectClass: ACTIVE_STATUS_STYLES[stage].selectClass,
     indicatorClass: ACTIVE_STATUS_STYLES[stage].indicatorClass,
   })),
@@ -192,13 +198,14 @@ export default function ProjectPage({
   onDeleteProject,
   onNavigateBack,
   onReturnToIndex,
+  onNavigateToCustomers,
 }: ProjectPageProps) {
   const [statusDraft, setStatusDraft] = useState<ProjectStatus>(project.status)
   const [activeSubStatusDraft, setActiveSubStatusDraft] = useState<ProjectActiveSubStatus>(
     project.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
   )
   const [noteDraft, setNoteDraft] = useState(project.note ?? '')
-  const [isEditingNote, setIsEditingNote] = useState(false)
+  const [isNoteDialogOpen, setIsNoteDialogOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<ProjectTab>('files')
   const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
   const [woError, setWoError] = useState<string | null>(null)
@@ -277,11 +284,23 @@ export default function ProjectPage({
     setHasSignature(false)
   }, [])
 
+  const openNoteDialog = () => {
+    if (!canEdit) {
+      return
+    }
+    setNoteDraft(project.note ?? '')
+    setIsNoteDialogOpen(true)
+  }
+
+  const closeNoteDialog = () => {
+    setIsNoteDialogOpen(false)
+  }
+
   useEffect(() => {
     setStatusDraft(project.status)
     setActiveSubStatusDraft(project.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS)
     setNoteDraft(project.note ?? '')
-    setIsEditingNote(false)
+    setIsNoteDialogOpen(false)
     setWoForm({ number: '', type: 'Build', note: '' })
     setWoError(null)
     setFileErrors({ fds: null, electrical: null, mechanical: null })
@@ -300,10 +319,10 @@ export default function ProjectPage({
   }, [project.id, resetSignature])
 
   useEffect(() => {
-    if (!isEditingNote) {
+    if (!isNoteDialogOpen) {
       setNoteDraft(project.note ?? '')
     }
-  }, [project.note, isEditingNote])
+  }, [project.note, isNoteDialogOpen])
 
   useEffect(() => {
     setStatusDraft(project.status)
@@ -1184,185 +1203,155 @@ export default function ProjectPage({
   )
 
   return (
-    <Card className='panel'>
-      <CardHeader className='space-y-5'>
-        <div className='flex flex-col gap-4 md:flex-row md:items-start md:justify-between'>
-          <div className='flex flex-col gap-3'>
-            <div className='flex flex-wrap items-center gap-2'>
-              <Button variant='outline' onClick={onNavigateBack}>
-                <ArrowLeft size={16} /> Back to {customer.name}
-              </Button>
+    <>
+      <Card className='panel'>
+        <CardHeader className='space-y-5'>
+          <div className='flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
+            <div className='flex flex-col gap-4'>
+              <div className='flex flex-wrap items-center gap-3'>
+                <Button variant='outline' onClick={onNavigateBack}>
+                  <ArrowLeft size={16} /> Back to {customer.name}
+                </Button>
+                <nav className='flex flex-wrap items-center gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500'>
+                  <button
+                    type='button'
+                    onClick={onNavigateToCustomers}
+                    className='inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-slate-600 transition hover:text-slate-900'
+                  >
+                    Customers
+                  </button>
+                  <ChevronRight size={12} className='text-slate-400' />
+                  <span className='text-slate-800'>{customer.name}</span>
+                  <ChevronRight size={12} className='text-slate-400' />
+                  <button
+                    type='button'
+                    onClick={onReturnToIndex}
+                    className='inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-slate-600 transition hover:text-slate-900'
+                  >
+                    Projects
+                  </button>
+                  <ChevronRight size={12} className='text-slate-400' />
+                  <span className='text-slate-800'>{project.number}</span>
+                </nav>
+              </div>
+              <div>
+                <div className='text-3xl font-semibold tracking-tight text-slate-900'>{project.number}</div>
+                <div className='mt-1 text-base text-slate-500'>{customer.name}</div>
+              </div>
             </div>
-            <nav className='flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500'>
-              <button
-                type='button'
-                onClick={onReturnToIndex}
-                className='inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-slate-600 transition hover:text-slate-900'
-              >
-                Projects
-              </button>
-              <ChevronRight size={12} className='text-slate-400' />
-              <span className='text-slate-800'>{project.number}</span>
-            </nav>
-          </div>
-          <div className='flex flex-wrap items-center gap-2'>
-            <div className='flex flex-col items-stretch gap-2 text-right'>
-              <Label className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Status</Label>
-              <div className='flex items-center justify-end gap-2'>
-                <span
-                  className={`h-2.5 w-2.5 rounded-full ${
-                    statusSelectionOption?.indicatorClass ?? 'bg-slate-300'
-                  }`}
-                />
-                <select
-                  className={`rounded-xl border px-3 py-2 text-sm font-medium shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed ${
-                    statusSelectionOption?.selectClass ?? 'border-slate-200 bg-white text-slate-800'
-                  }`}
-                  value={statusSelectionValue}
-                  onChange={(event) => handleStatusSelectionChange(event.target.value)}
+            <div className='flex flex-col items-end gap-3'>
+              <div className='flex items-center gap-2'>
+                <Button
+                  variant='outline'
+                  onClick={() => navigator.clipboard.writeText(stripPrefix(project.number, /^P[-\s]?(.+)$/i))}
+                  title='Copy project number'
+                  className='rounded-full px-2 py-2'
+                >
+                  <Copy size={16} />
+                  <span className='sr-only'>Copy project number</span>
+                </Button>
+                <Button
+                  variant='outline'
+                  onClick={openNoteDialog}
+                  className='rounded-full px-2 py-2'
+                  title={canEdit ? 'Edit project note' : 'Read-only access'}
                   disabled={!canEdit}
                 >
-                  {STATUS_SELECTIONS.map(option => (
-                    <option key={option.key} value={option.key}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              {latestStatusEntry && (
-                <div className='flex items-center justify-end gap-1 text-xs text-slate-500'>
-                  <Clock size={12} />
-                  <span>
-                    Updated {formatTimestamp(latestStatusEntry.changedAt) ?? 'recently'} by{' '}
-                    {latestStatusEntry.changedBy}
-                  </span>
-                </div>
-              )}
-            </div>
-            <Button
-              variant='outline'
-              onClick={() => navigator.clipboard.writeText(stripPrefix(project.number, /^P[-\s]?(.+)$/i))}
-              title='Copy project number'
-            >
-              <Copy size={16} />
-              <span className='sr-only'>Copy project number</span>
-            </Button>
-            <Button
-              variant='outline'
-              onClick={() => {
-                if (isEditingNote) {
-                  setIsEditingNote(false)
-                  setNoteDraft(project.note ?? '')
-                } else {
-                  setIsEditingNote(true)
-                  setNoteDraft(project.note ?? '')
-                }
-              }}
-              title={canEdit ? 'Edit project note' : 'Read-only access'}
-              disabled={!canEdit}
-            >
-              {isEditingNote ? (
-                <>
-                  <X size={16} /> Cancel edit
-                </>
-              ) : (
-                <>
-                  <Pencil size={16} /> Edit note
-                </>
-              )}
-            </Button>
-            <Button
-              variant='ghost'
-              className='text-rose-600 hover:bg-rose-50'
-              onClick={() => {
-                const confirmed = window.confirm('Delete this project and all associated records?')
-                if (!confirmed) return
-                onDeleteProject()
-              }}
-              title={canEdit ? 'Delete project' : 'Read-only access'}
-              disabled={!canEdit}
-            >
-              <Trash2 size={16} />
-            </Button>
-          </div>
-        </div>
-
-        <div className='space-y-3'>
-          <div className='text-lg font-semibold text-slate-800'>{project.number}</div>
-          <div className='rounded-2xl border border-slate-200 bg-white/90 p-4'>
-            {isEditingNote ? (
-              <>
-                <textarea
-                  className='w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                  rows={3}
-                  value={noteDraft}
-                  onChange={(event) => setNoteDraft(event.target.value)}
-                  placeholder='Add a note about this project (optional)…'
+                  <Pencil size={16} />
+                  <span className='sr-only'>Edit project note</span>
+                </Button>
+                <Button
+                  variant='ghost'
+                  className='rounded-full px-2 py-2 text-rose-600 hover:bg-rose-50'
+                  onClick={() => {
+                    const confirmed = window.confirm('Delete this project and all associated records?')
+                    if (!confirmed) return
+                    onDeleteProject()
+                  }}
+                  title={canEdit ? 'Delete project' : 'Read-only access'}
                   disabled={!canEdit}
-                />
-                <div className='mt-3 flex flex-wrap items-center gap-2'>
-                  <Button
-                    onClick={() => {
-                      onUpdateProjectNote(noteDraft)
-                      setIsEditingNote(false)
-                    }}
+                >
+                  <Trash2 size={16} />
+                  <span className='sr-only'>Delete project</span>
+                </Button>
+              </div>
+              <div className='flex flex-col items-end gap-2 text-right'>
+                <span className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Status</span>
+                <div className='flex items-center gap-2'>
+                  <span
+                    className={`h-2.5 w-2.5 rounded-full ${
+                      statusSelectionOption?.indicatorClass ?? 'bg-slate-300'
+                    }`}
+                  />
+                  <select
+                    className={`rounded-xl border px-3 py-2 text-sm font-medium shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed ${
+                      statusSelectionOption?.selectClass ?? 'border-slate-200 bg-white text-slate-800'
+                    }`}
+                    value={statusSelectionValue}
+                    onChange={(event) => handleStatusSelectionChange(event.target.value)}
                     disabled={!canEdit}
                   >
-                    Save note
-                  </Button>
-                  <Button
-                    variant='ghost'
-                    onClick={() => {
-                      setNoteDraft(project.note ?? '')
-                      setIsEditingNote(false)
-                    }}
-                  >
-                    <X size={16} /> Cancel
-                  </Button>
+                    {STATUS_SELECTIONS.map(option => (
+                      <option key={option.key} value={option.key}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              </>
-            ) : (
+                {latestStatusEntry && (
+                  <div className='flex items-center gap-1 text-xs text-slate-500'>
+                    <Clock size={12} />
+                    <span>
+                      Updated {formatTimestamp(latestStatusEntry.changedAt) ?? 'recently'} by {latestStatusEntry.changedBy}
+                    </span>
+                  </div>
+                )}
+                {statusHistory.length > 1 && (
+                  <button
+                    type='button'
+                    className='flex items-center gap-1 text-xs font-medium text-slate-600 transition hover:text-slate-800'
+                    onClick={() => setShowStatusHistory(prev => !prev)}
+                  >
+                    <ChevronDown
+                      size={14}
+                      className={`transition-transform ${showStatusHistory ? 'rotate-180' : ''}`}
+                    />
+                    <span>{showStatusHistory ? 'Hide status history' : 'View status history'}</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className='space-y-3'>
+            <div className='rounded-2xl border border-slate-200 bg-white/90 p-4'>
+              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Project note</div>
               <p
-                className={
-                  project.note
-                    ? 'whitespace-pre-wrap text-sm text-slate-700'
-                    : 'text-sm italic text-slate-400'
-                }
+                className={`mt-2 ${
+                  project.note ? 'whitespace-pre-wrap text-sm text-slate-700' : 'text-sm italic text-slate-400'
+                }`}
               >
                 {project.note ? project.note : 'No note added yet.'}
               </p>
-            )}
+            </div>
           </div>
-          {statusHistory.length > 1 && (
-            <div>
-              <button
-                type='button'
-                className='flex items-center gap-2 text-xs font-medium text-slate-600 transition hover:text-slate-800'
-                onClick={() => setShowStatusHistory(prev => !prev)}
-              >
-                <ChevronDown
-                  size={14}
-                  className={`transition-transform ${showStatusHistory ? 'rotate-180' : ''}`}
-                />
-                <span>View status history</span>
-              </button>
-              {showStatusHistory && (
-                <ul className='mt-2 space-y-1 text-xs text-slate-500'>
-                  {statusHistory.map(entry => (
-                    <li key={entry.id} className='flex items-start gap-2'>
-                      <Clock size={12} className='mt-0.5 text-slate-400' />
-                      <span>
-                        {formatTimestamp(entry.changedAt) ?? 'Unknown time'} — {entry.changedBy} set to{' '}
-                        {formatProjectStatus(entry.status, entry.activeSubStatus)}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+          {showStatusHistory && statusHistory.length > 1 && (
+            <div className='rounded-2xl border border-slate-200 bg-white/80 p-4'>
+              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Status history</div>
+              <ul className='mt-2 space-y-1 text-xs text-slate-500'>
+                {statusHistory.map(entry => (
+                  <li key={entry.id} className='flex items-start gap-2'>
+                    <Clock size={12} className='mt-0.5 text-slate-400' />
+                    <span>
+                      {formatTimestamp(entry.changedAt) ?? 'Unknown time'} — {entry.changedBy} set to{' '}
+                      {formatProjectStatus(entry.status, entry.activeSubStatus)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
-        </div>
-      </CardHeader>
+        </CardHeader>
       <CardContent className='space-y-6'>
         <div className='flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2'>
           {PROJECT_TABS.map(tab => {
@@ -1391,6 +1380,63 @@ export default function ProjectPage({
 
         <div className='pt-2'>{activeTab === 'files' ? renderProjectFiles() : renderWorkOrders()}</div>
       </CardContent>
-    </Card>
+      </Card>
+      <AnimatePresence>
+        {isNoteDialogOpen && (
+          <motion.div
+            className='fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4'
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={closeNoteDialog}
+          >
+            <motion.div
+              className='w-full max-w-lg'
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <Card className='panel'>
+                <CardHeader className='flex items-center justify-between'>
+                  <div className='flex items-center gap-2'>
+                    <Pencil size={18} />
+                    <span className='font-medium'>Edit project note</span>
+                  </div>
+                  <Button variant='ghost' onClick={closeNoteDialog} title='Close'>
+                    <X size={16} />
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  <Label>Project note</Label>
+                  <textarea
+                    className='mt-2 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                    rows={4}
+                    value={noteDraft}
+                    onChange={(event) => setNoteDraft((event.target as HTMLTextAreaElement).value)}
+                    placeholder='Add a note about this project (optional)…'
+                    disabled={!canEdit}
+                  />
+                  <div className='mt-4 flex justify-end gap-2'>
+                    <Button variant='ghost' onClick={closeNoteDialog}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        onUpdateProjectNote(noteDraft)
+                        closeNoteDialog()
+                      }}
+                      disabled={!canEdit}
+                    >
+                      Save note
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </>
   )
 }
