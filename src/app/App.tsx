@@ -8,9 +8,7 @@ import {
   X,
   Search,
   ChevronRight,
-  ChevronDown,
   AlertCircle,
-  ArrowLeft,
   Menu,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -224,8 +222,6 @@ function AppContent() {
   const [showNewContactForm, setShowNewContactForm] = useState(false)
   const [newContact, setNewContact] = useState({ name: '', position: '', phone: '', email: '' })
   const [contactError, setContactError] = useState<string | null>(null)
-  const [customerListCollapsed, setCustomerListCollapsed] = useState(false)
-  const [projectListCollapsed, setProjectListCollapsed] = useState(false)
   const [showCustomerEditor, setShowCustomerEditor] = useState(false)
   const [customerEditorDraft, setCustomerEditorDraft] = useState({ name: '', address: '' })
   const [customerEditorError, setCustomerEditorError] = useState<string | null>(null)
@@ -335,17 +331,6 @@ function AppContent() {
       return selectedCustomer.contacts[0]?.id ?? null
     })
   }, [selectedCustomer])
-
-
-  useEffect(() => {
-    setCustomerListCollapsed(!!selectedCustomer)
-  }, [selectedCustomer?.id])
-
-  useEffect(() => {
-    setProjectListCollapsed(!!selectedProjectId)
-  }, [selectedProjectId])
-
-
 
   const customerMatches = useMemo(() => {
     const query = customerQuery.trim().toLowerCase()
@@ -577,71 +562,50 @@ function AppContent() {
   const renderCustomersPage = () => {
     const customerListCard = (
       <Card className='panel h-fit'>
-        <CardHeader className='flex-col gap-2'>
-          <div className='flex items-start justify-between gap-3'>
-            <div>
-              <div className='text-lg font-semibold text-slate-900'>Customers</div>
-              <div className='text-sm text-slate-500'>
-                {customerCount === 1 ? '1 customer listed' : `${customerCount} customers listed`}
-              </div>
-            </div>
-            {hasCustomers ? (
-              <button
-                type='button'
-                onClick={() => setCustomerListCollapsed(prev => !prev)}
-                className='flex items-center gap-1 rounded-full border border-slate-200/70 bg-white/80 px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-800'
-                aria-expanded={!customerListCollapsed}
-              >
-                {customerListCollapsed ? 'Show list' : 'Hide list'}
-                <ChevronDown
-                  size={14}
-                  className={`transition-transform ${customerListCollapsed ? '' : 'rotate-180'}`}
-                  aria-hidden
-                />
-              </button>
-            ) : null}
+        <CardHeader className='flex-col gap-1'>
+          <div className='text-lg font-semibold text-slate-900'>Customers</div>
+          <div className='text-sm text-slate-500'>
+            {customerCount === 1 ? '1 customer listed' : `${customerCount} customers listed`}
           </div>
         </CardHeader>
-        {!customerListCollapsed && (
-          <CardContent>
-            {sortedCustomers.length === 0 ? (
-              <p className='text-sm text-slate-500'>Add a customer to see it listed here.</p>
-            ) : (
-              <div className='space-y-1.5'>
-                {sortedCustomers.map(customer => {
-                  const isSelected = selectedCustomerId === customer.id
-                  const baseClasses =
-                    'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
-                  const selectionClasses = isSelected
-                    ? 'border-indigo-500 bg-indigo-50/80 text-slate-900 shadow-md'
-                    : 'hover:border-slate-300 hover:bg-white'
+        <CardContent>
+          {sortedCustomers.length === 0 ? (
+            <p className='text-sm text-slate-500'>Add a customer to see it listed here.</p>
+          ) : (
+            <div className='space-y-1.5'>
+              {sortedCustomers.map(customer => {
+                const isSelected = selectedCustomerId === customer.id
+                const baseClasses =
+                  'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                const selectionClasses = isSelected
+                  ? 'border-indigo-500 bg-indigo-50/80 text-slate-900 shadow-md'
+                  : 'hover:border-slate-300 hover:bg-white'
 
-                  return (
-                    <button
-                      type='button'
-                      key={customer.id}
-                      onClick={() => {
-                        setSelectedCustomerId(customer.id)
-                        setSelectedProjectId(null)
-                      }}
-                      className={`${baseClasses} ${selectionClasses}`}
-                      aria-pressed={isSelected}
-                      title='View customer details'
-                    >
-                      <div className='flex flex-1 flex-col overflow-hidden text-left'>
-                        <span className='truncate text-sm font-semibold text-slate-900'>{customer.name}</span>
-                        <span className='truncate text-xs text-slate-500'>
-                          {customer.address ? customer.address : 'No address on file.'}
-                        </span>
-                      </div>
-                      <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </CardContent>
-        )}
+                return (
+                  <button
+                    type='button'
+                    key={customer.id}
+                    onClick={() => {
+                      setSelectedCustomerId(customer.id)
+                      setSelectedProjectId(null)
+                    }}
+                    className={`${baseClasses} ${selectionClasses}`}
+                    aria-pressed={isSelected}
+                    title='View customer details'
+                  >
+                    <div className='flex flex-1 flex-col overflow-hidden text-left'>
+                      <span className='truncate text-sm font-semibold text-slate-900'>{customer.name}</span>
+                      <span className='truncate text-xs text-slate-500'>
+                        {customer.address ? customer.address : 'No address on file.'}
+                      </span>
+                    </div>
+                    <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
       </Card>
     )
 
@@ -672,34 +636,38 @@ function AppContent() {
       <div className='space-y-6'>
         {customerListCard}
         <Card className='panel'>
-          <CardHeader>
-            <div className='flex flex-col gap-3'>
-              <div className='flex flex-wrap items-start gap-3'>
-                <div className='space-y-1'>
-                  <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Customer</div>
-                  <div className='text-lg font-semibold text-slate-900'>Customer: {selectedCustomer.name}</div>
-                </div>
-                <div className='ml-auto flex flex-wrap items-center gap-2'>
-                  <Button
-                    variant='outline'
-                    onClick={() => setSelectedCustomerId(null)}
-                    title='Return to customer index'
+          <CardHeader className='space-y-4'>
+            <div className='flex flex-col gap-4'>
+              <div className='flex flex-wrap items-center justify-between gap-3'>
+                <nav className='flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500'>
+                  <button
+                    type='button'
+                    onClick={() => {
+                      setSelectedCustomerId(null)
+                      setSelectedProjectId(null)
+                    }}
+                    className='inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-slate-600 transition hover:text-slate-900'
+                    title='Back to customers'
                   >
-                    <ArrowLeft size={16} />
-                    Return to index
-                  </Button>
+                    Customers
+                  </button>
+                  <ChevronRight size={12} className='text-slate-400' aria-hidden />
+                  <span className='text-slate-800 font-semibold'>{selectedCustomer.name}</span>
+                </nav>
+                <div className='flex items-center gap-2'>
                   <Button
                     variant='outline'
                     onClick={openCustomerEditor}
                     title={canEdit ? 'Edit customer details' : 'Read-only access'}
                     disabled={!canEdit}
+                    className='rounded-full px-2 py-2'
                   >
                     <Pencil size={16} />
-                    Edit details
+                    <span className='sr-only'>Edit customer</span>
                   </Button>
                   <Button
                     variant='ghost'
-                    className='text-rose-600 hover:bg-rose-50'
+                    className='rounded-full px-2 py-2 text-rose-600 hover:bg-rose-50'
                     onClick={() => {
                       if (!selectedCustomer) return
                       const confirmed = window.confirm(
@@ -716,26 +684,31 @@ function AppContent() {
                   </Button>
                 </div>
               </div>
+              <div>
+                <div className='text-3xl font-semibold tracking-tight text-slate-900'>{selectedCustomer.name}</div>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
-            <div className='grid gap-6 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]'>
-              <div className='relative rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
-                <div className='text-sm font-semibold text-slate-700'>Address</div>
-                {selectedCustomer.address ? (
-                  <Button
-                    variant='outline'
-                    onClick={() =>
-                      selectedCustomer.address && navigator.clipboard.writeText(selectedCustomer.address)
-                    }
-                    className='absolute right-5 top-5'
-                    title='Copy address'
-                  >
-                    <Copy size={16} />
-                    <span className='sr-only'>Copy address</span>
-                  </Button>
-                ) : null}
-                <div className='mt-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+            <div className='grid gap-6 lg:grid-cols-2'>
+              <div className='flex flex-col gap-4 rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
+                <div className='flex items-start justify-between gap-2'>
+                  <div className='text-sm font-semibold text-slate-700'>Address</div>
+                  {selectedCustomer.address ? (
+                    <Button
+                      variant='outline'
+                      onClick={() =>
+                        selectedCustomer.address && navigator.clipboard.writeText(selectedCustomer.address)
+                      }
+                      className='rounded-full px-2 py-2'
+                      title='Copy address'
+                    >
+                      <Copy size={16} />
+                      <span className='sr-only'>Copy address</span>
+                    </Button>
+                  ) : null}
+                </div>
+                <div className='rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
                   {selectedCustomer.address ? (
                     <span className='block whitespace-pre-wrap break-words text-slate-800'>
                       {selectedCustomer.address}
@@ -745,7 +718,7 @@ function AppContent() {
                   )}
                 </div>
                 {selectedCustomerAddressForMap ? (
-                  <div className='mt-3 overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
+                  <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
                     <iframe
                       title={`Map preview for ${selectedCustomer.name}`}
                       src={`https://maps.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}&z=15&output=embed`}
@@ -756,7 +729,7 @@ function AppContent() {
                   </div>
                 ) : null}
               </div>
-              <div className='space-y-4'>
+              <div className='flex flex-col gap-4'>
                 <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
                   <div className='flex flex-wrap items-center justify-between gap-2'>
                     <div className='text-sm font-semibold text-slate-700'>Contacts</div>
@@ -1063,33 +1036,13 @@ function AppContent() {
 
     const projectListCard = (
       <Card className='panel h-fit'>
-        <CardHeader className='flex-col gap-2'>
-          <div className='flex items-start justify-between gap-3'>
-            <div>
-              <div className='text-lg font-semibold text-slate-900'>Projects</div>
-              <div className='text-sm text-slate-500'>
-                {totalProjectsCount === 1 ? '1 project listed' : `${totalProjectsCount} projects listed`}
-              </div>
-            </div>
-            {totalProjectsCount > 0 ? (
-              <button
-                type='button'
-                onClick={() => setProjectListCollapsed(prev => !prev)}
-                className='flex items-center gap-1 rounded-full border border-slate-200/70 bg-white/80 px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-800'
-                aria-expanded={!projectListCollapsed}
-              >
-                {projectListCollapsed ? 'Show list' : 'Hide list'}
-                <ChevronDown
-                  size={14}
-                  className={`transition-transform ${projectListCollapsed ? '' : 'rotate-180'}`}
-                  aria-hidden
-                />
-              </button>
-            ) : null}
+        <CardHeader className='flex-col gap-1'>
+          <div className='text-lg font-semibold text-slate-900'>Projects</div>
+          <div className='text-sm text-slate-500'>
+            {totalProjectsCount === 1 ? '1 project listed' : `${totalProjectsCount} projects listed`}
           </div>
         </CardHeader>
-        {!projectListCollapsed && (
-          <CardContent className='space-y-4'>
+        <CardContent className='space-y-4'>
             <div>
               <div className='flex items-center justify-between gap-2'>
                 <div className='text-sm font-semibold text-slate-700'>Active projects</div>
@@ -1178,8 +1131,7 @@ function AppContent() {
                 </div>
               )}
             </div>
-          </CardContent>
-        )}
+        </CardContent>
       </Card>
     )
 
@@ -1265,7 +1217,11 @@ function AppContent() {
             removeCustomerSignOff(selectedProjectData.customer.id, selectedProjectData.project.id)
           }
           onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
-          onNavigateBack={() => setSelectedProjectId(null)}
+          onNavigateToCustomer={() => {
+            setActivePage('customers')
+            setSelectedProjectId(null)
+            setSelectedCustomerId(selectedProjectData.customer.id)
+          }}
           onReturnToIndex={() => setSelectedProjectId(null)}
           onNavigateToCustomers={() => {
             setSelectedProjectId(null)
