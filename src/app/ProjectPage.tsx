@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, PointerEvent as ReactPointerEvent } from 'react'
 import {
   AlertCircle,
-  ArrowLeft,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -59,7 +58,7 @@ export type ProjectPageProps = {
   onGenerateCustomerSignOff: (submission: CustomerSignOffSubmission) => Promise<string | null>
   onRemoveCustomerSignOff: () => Promise<string | null>
   onDeleteProject: () => void
-  onNavigateBack: () => void
+  onNavigateToCustomer: () => void
   onReturnToIndex: () => void
   onNavigateToCustomers: () => void
 }
@@ -196,7 +195,7 @@ export default function ProjectPage({
   onGenerateCustomerSignOff,
   onRemoveCustomerSignOff,
   onDeleteProject,
-  onNavigateBack,
+  onNavigateToCustomer,
   onReturnToIndex,
   onNavigateToCustomers,
 }: ProjectPageProps) {
@@ -1207,12 +1206,9 @@ export default function ProjectPage({
       <Card className='panel'>
         <CardHeader className='space-y-5'>
           <div className='flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
-            <div className='flex flex-col gap-4'>
-              <div className='flex flex-wrap items-center gap-3'>
-                <Button variant='outline' onClick={onNavigateBack}>
-                  <ArrowLeft size={16} /> Back to {customer.name}
-                </Button>
-                <nav className='flex flex-wrap items-center gap-1 text-xs font-semibold uppercase tracking-wide text-slate-500'>
+            <div className='flex flex-col gap-4 lg:max-w-2xl'>
+              <div className='flex flex-wrap items-center justify-between gap-3'>
+                <nav className='flex flex-wrap items-center gap-2 text-xs font-medium text-slate-500'>
                   <button
                     type='button'
                     onClick={onNavigateToCustomers}
@@ -1220,9 +1216,15 @@ export default function ProjectPage({
                   >
                     Customers
                   </button>
-                  <ChevronRight size={12} className='text-slate-400' />
-                  <span className='text-slate-800'>{customer.name}</span>
-                  <ChevronRight size={12} className='text-slate-400' />
+                  <ChevronRight size={12} className='text-slate-400' aria-hidden />
+                  <button
+                    type='button'
+                    onClick={onNavigateToCustomer}
+                    className='inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-slate-600 transition hover:text-slate-900'
+                  >
+                    {customer.name}
+                  </button>
+                  <ChevronRight size={12} className='text-slate-400' aria-hidden />
                   <button
                     type='button'
                     onClick={onReturnToIndex}
@@ -1230,109 +1232,92 @@ export default function ProjectPage({
                   >
                     Projects
                   </button>
-                  <ChevronRight size={12} className='text-slate-400' />
-                  <span className='text-slate-800'>{project.number}</span>
+                  <ChevronRight size={12} className='text-slate-400' aria-hidden />
+                  <span className='text-slate-800 font-semibold'>{project.number}</span>
                 </nav>
+                <div className='flex items-center gap-2'>
+                  <Button
+                    variant='outline'
+                    onClick={openNoteDialog}
+                    className='rounded-full px-2 py-2'
+                    title={canEdit ? 'Edit project note' : 'Read-only access'}
+                    disabled={!canEdit}
+                  >
+                    <Pencil size={16} />
+                    <span className='sr-only'>Edit project note</span>
+                  </Button>
+                  <Button
+                    variant='ghost'
+                    className='rounded-full px-2 py-2 text-rose-600 hover:bg-rose-50'
+                    onClick={() => {
+                      const confirmed = window.confirm('Delete this project and all associated records?')
+                      if (!confirmed) return
+                      onDeleteProject()
+                    }}
+                    title={canEdit ? 'Delete project' : 'Read-only access'}
+                    disabled={!canEdit}
+                  >
+                    <Trash2 size={16} />
+                    <span className='sr-only'>Delete project</span>
+                  </Button>
+                </div>
               </div>
               <div>
                 <div className='text-3xl font-semibold tracking-tight text-slate-900'>{project.number}</div>
                 <div className='mt-1 text-base text-slate-500'>{customer.name}</div>
-              </div>
-            </div>
-            <div className='flex flex-col items-end gap-3'>
-              <div className='flex items-center gap-2'>
-                <Button
-                  variant='outline'
-                  onClick={() => navigator.clipboard.writeText(stripPrefix(project.number, /^P[-\s]?(.+)$/i))}
-                  title='Copy project number'
-                  className='rounded-full px-2 py-2'
-                >
-                  <Copy size={16} />
-                  <span className='sr-only'>Copy project number</span>
-                </Button>
-                <Button
-                  variant='outline'
-                  onClick={openNoteDialog}
-                  className='rounded-full px-2 py-2'
-                  title={canEdit ? 'Edit project note' : 'Read-only access'}
-                  disabled={!canEdit}
-                >
-                  <Pencil size={16} />
-                  <span className='sr-only'>Edit project note</span>
-                </Button>
-                <Button
-                  variant='ghost'
-                  className='rounded-full px-2 py-2 text-rose-600 hover:bg-rose-50'
-                  onClick={() => {
-                    const confirmed = window.confirm('Delete this project and all associated records?')
-                    if (!confirmed) return
-                    onDeleteProject()
-                  }}
-                  title={canEdit ? 'Delete project' : 'Read-only access'}
-                  disabled={!canEdit}
-                >
-                  <Trash2 size={16} />
-                  <span className='sr-only'>Delete project</span>
-                </Button>
-              </div>
-              <div className='flex flex-col items-end gap-2 text-right'>
-                <span className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Status</span>
-                <div className='flex items-center gap-2'>
-                  <span
-                    className={`h-2.5 w-2.5 rounded-full ${
-                      statusSelectionOption?.indicatorClass ?? 'bg-slate-300'
-                    }`}
-                  />
-                  <select
-                    className={`rounded-xl border px-3 py-2 text-sm font-medium shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed ${
-                      statusSelectionOption?.selectClass ?? 'border-slate-200 bg-white text-slate-800'
-                    }`}
-                    value={statusSelectionValue}
-                    onChange={(event) => handleStatusSelectionChange(event.target.value)}
-                    disabled={!canEdit}
-                  >
-                    {STATUS_SELECTIONS.map(option => (
-                      <option key={option.key} value={option.key}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
+                <div className='mt-2 text-sm text-slate-600'>
+                  {project.note ? (
+                    <span className='whitespace-pre-wrap'>{project.note}</span>
+                  ) : (
+                    <span className='italic text-slate-400'>No project note added.</span>
+                  )}
                 </div>
-                {latestStatusEntry && (
-                  <div className='flex items-center gap-1 text-xs text-slate-500'>
-                    <Clock size={12} />
-                    <span>
-                      Updated {formatTimestamp(latestStatusEntry.changedAt) ?? 'recently'} by {latestStatusEntry.changedBy}
-                    </span>
-                  </div>
-                )}
-                {statusHistory.length > 1 && (
-                  <button
-                    type='button'
-                    className='flex items-center gap-1 text-xs font-medium text-slate-600 transition hover:text-slate-800'
-                    onClick={() => setShowStatusHistory(prev => !prev)}
-                  >
-                    <ChevronDown
-                      size={14}
-                      className={`transition-transform ${showStatusHistory ? 'rotate-180' : ''}`}
-                    />
-                    <span>{showStatusHistory ? 'Hide status history' : 'View status history'}</span>
-                  </button>
-                )}
               </div>
             </div>
-          </div>
-
-          <div className='space-y-3'>
-            <div className='rounded-2xl border border-slate-200 bg-white/90 p-4'>
-              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Project note</div>
-              <p
-                className={`mt-2 ${
-                  project.note ? 'whitespace-pre-wrap text-sm text-slate-700' : 'text-sm italic text-slate-400'
-                }`}
-              >
-                {project.note ? project.note : 'No note added yet.'}
-              </p>
+            <div className='flex flex-col items-end gap-2 text-right'>
+              <span className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Status</span>
+              <div className='flex items-center gap-2'>
+                <span
+                  className={`h-2.5 w-2.5 rounded-full ${
+                    statusSelectionOption?.indicatorClass ?? 'bg-slate-300'
+                  }`}
+                />
+                <select
+                  className={`rounded-xl border px-3 py-2 text-sm font-medium shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed ${
+                    statusSelectionOption?.selectClass ?? 'border-slate-200 bg-white text-slate-800'
+                  }`}
+                  value={statusSelectionValue}
+                  onChange={(event) => handleStatusSelectionChange(event.target.value)}
+                  disabled={!canEdit}
+                >
+                  {STATUS_SELECTIONS.map(option => (
+                    <option key={option.key} value={option.key}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {latestStatusEntry && (
+                <div className='inline-flex items-center gap-1 text-xs text-slate-500'>
+                  <Clock size={12} className='text-slate-400' />
+                  <span>
+                    Updated {formatTimestamp(latestStatusEntry.changedAt) ?? 'recently'} by {latestStatusEntry.changedBy}
+                  </span>
+                </div>
+              )}
+              {statusHistory.length > 1 && (
+                <button
+                  type='button'
+                  className='flex items-center gap-1 text-xs font-medium text-slate-600 transition hover:text-slate-800'
+                  onClick={() => setShowStatusHistory(prev => !prev)}
+                >
+                  <ChevronDown
+                    size={14}
+                    className={`transition-transform ${showStatusHistory ? 'rotate-180' : ''}`}
+                  />
+                  <span>{showStatusHistory ? 'Hide status history' : 'View status history'}</span>
+                </button>
+              )}
             </div>
           </div>
           {showStatusHistory && statusHistory.length > 1 && (
