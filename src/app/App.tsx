@@ -42,6 +42,7 @@ import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import ProjectPage from './ProjectPage'
+import PieChart from '../components/ui/PieChart'
 
 const PROJECT_FILE_MIME_BY_EXTENSION: Record<string, string> = {
   pdf: 'application/pdf',
@@ -108,32 +109,37 @@ const PROJECT_STATUS_BUCKETS: ProjectStatusBucket[] = [
 
 const PROJECT_STATUS_BUCKET_META: Record<
   ProjectStatusBucket,
-  { label: string; description: string; colorClass: string }
+  { label: string; description: string; colorClass: string; color: string }
 > = {
   active_fds: {
     label: 'Active — FDS',
     description: 'Projects currently in the front-end design stage.',
     colorClass: 'bg-indigo-500',
+    color: '#6366f1',
   },
   active_design: {
     label: 'Active — Design',
     description: 'Projects progressing through design activities.',
     colorClass: 'bg-sky-500',
+    color: '#0ea5e9',
   },
   active_build: {
     label: 'Active — Build',
     description: 'Projects moving through build execution.',
     colorClass: 'bg-emerald-500',
+    color: '#10b981',
   },
   active_install: {
     label: 'Active — Install',
     description: 'Projects carrying out installation work.',
     colorClass: 'bg-amber-500',
+    color: '#f59e0b',
   },
   complete: {
     label: 'Complete',
     description: 'Projects that have been marked as complete.',
     colorClass: 'bg-slate-400',
+    color: '#94a3b8',
   },
 }
 
@@ -197,6 +203,13 @@ function AppContent() {
   const [showNewContactForm, setShowNewContactForm] = useState(false)
   const [newContact, setNewContact] = useState({ name: '', position: '', phone: '', email: '' })
   const [contactError, setContactError] = useState<string | null>(null)
+
+  // Create project (modal)
+  const [showNewProject, setShowNewProject] = useState(false)
+  const [newProjectCustomerId, setNewProjectCustomerId] = useState<string>('')
+  const [newProjectNumber, setNewProjectNumber] = useState('')
+  const [newProjectError, setNewProjectError] = useState<string | null>(null)
+  const [isCreatingProject, setIsCreatingProject] = useState(false)
   const [contactEditor, setContactEditor] = useState<{
     customerId: string
     contactId: string
@@ -247,6 +260,7 @@ function AppContent() {
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
   const selectedCustomerAddressForMap = selectedCustomer?.address?.trim() || null
   const sortedCustomers = useMemo(() => [...db].sort((a, b) => a.name.localeCompare(b.name)), [db])
+  const hasCustomers = sortedCustomers.length > 0
   const canEdit = true
 
 
@@ -434,6 +448,47 @@ function AppContent() {
   }, [setProjectSearchQuery, setSelectedCustomerId, setSelectedProjectId])
 
   const canClearProjectSearch = hasProjectSearch || selectedProjectId !== null || selectedCustomerId !== null
+
+  async function handleCreateProject() {
+    if (!hasCustomers) {
+      setNewProjectError('Add a customer before creating a project.')
+      return
+    }
+
+    const trimmedNumber = newProjectNumber.trim()
+    if (!trimmedNumber) {
+      setNewProjectError('Enter a project number.')
+      return
+    }
+
+    const customerId = newProjectCustomerId || sortedCustomers[0]?.id
+    if (!customerId) {
+      setNewProjectError('Select a customer for this project.')
+      return
+    }
+
+    if (customerId !== newProjectCustomerId) {
+      setNewProjectCustomerId(customerId)
+    }
+
+    setIsCreatingProject(true)
+    try {
+      const result = await addProject(customerId, trimmedNumber)
+      if (typeof result === 'string') {
+        setNewProjectError(result)
+        return
+      }
+
+      setShowNewProject(false)
+      setNewProjectNumber('')
+      setNewProjectError(null)
+      setSelectedCustomerId(result.customerId)
+      setSelectedProjectId(result.projectId)
+      setActivePage('projects')
+    } finally {
+      setIsCreatingProject(false)
+    }
+  }
 
   const renderCustomersPage = () => {
     if (!selectedCustomer) {
@@ -903,14 +958,14 @@ function AppContent() {
           {sortedCustomers.length === 0 ? (
             <p className='text-sm text-slate-500'>Add a customer to see it listed here.</p>
           ) : (
-            <div className='space-y-2'>
+            <div className='space-y-1.5'>
               {sortedCustomers.map(customer => {
                 const isSelected = selectedCustomerId === customer.id
                 const baseClasses =
-                  'flex w-full flex-col gap-2 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                  'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
                 const selectionClasses = isSelected
-                  ? 'border-indigo-500 bg-indigo-50/80 shadow-md'
-                  : 'hover:-translate-y-0.5 hover:shadow-lg'
+                  ? 'border-indigo-500 bg-indigo-50/80 text-slate-900 shadow-md'
+                  : 'hover:border-slate-300 hover:bg-white'
 
                 return (
                   <button
@@ -924,15 +979,13 @@ function AppContent() {
                     aria-pressed={isSelected}
                     title='View customer details'
                   >
-                    <div className='flex items-start justify-between gap-3'>
-                      <div>
-                        <div className='text-base font-semibold text-slate-900'>{customer.name}</div>
-                        <div className='mt-1 text-sm text-slate-500'>
-                          {customer.address ? customer.address : 'No address on file.'}
-                        </div>
-                      </div>
-                      <ChevronRight size={18} className='text-slate-400' aria-hidden />
+                    <div className='flex flex-1 flex-col overflow-hidden text-left'>
+                      <span className='truncate text-sm font-semibold text-slate-900'>{customer.name}</span>
+                      <span className='truncate text-xs text-slate-500'>
+                        {customer.address ? customer.address : 'No address on file.'}
+                      </span>
                     </div>
+                    <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
                   </button>
                 )
               })}
@@ -989,15 +1042,15 @@ function AppContent() {
                         setSelectedProjectId(match.projectId)
                         setActivePage('projects')
                       }}
-                      className='flex w-full items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
+                      className='flex w-full items-center justify-between rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition hover:border-slate-300 hover:bg-white'
                       title='Open project details'
                     >
-                      <div>
-                        <div className='text-sm font-semibold text-slate-800'>{match.projectNumber}</div>
-                        <div className='text-xs text-slate-500'>{match.customerName}</div>
-                        <div className='text-xs text-slate-500'>{match.statusLabel}</div>
+                      <div className='flex flex-col gap-0.5 text-left'>
+                        <span className='text-sm font-semibold text-slate-800'>{match.projectNumber}</span>
+                        <span className='text-xs text-slate-500'>{match.customerName}</span>
+                        <span className='text-xs text-slate-500'>{match.statusLabel}</span>
                       </div>
-                      <ChevronRight size={18} />
+                      <ChevronRight size={16} />
                     </button>
                   ))
                 )}
@@ -1017,14 +1070,14 @@ function AppContent() {
             {activeProjects.length === 0 ? (
               <p className='text-sm text-slate-500'>Add a project to see it listed here.</p>
             ) : (
-              <div className='space-y-2'>
+              <div className='space-y-1.5'>
                 {activeProjects.map(project => {
                   const isSelected = selectedProjectId === project.projectId
                   const baseClasses =
-                    'flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                    'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
                   const selectionClasses = isSelected
-                    ? 'border-indigo-500 bg-indigo-50/80 shadow-md'
-                    : 'hover:-translate-y-0.5 hover:shadow-lg'
+                    ? 'border-indigo-500 bg-indigo-50/80 text-slate-900 shadow-md'
+                    : 'hover:border-slate-300 hover:bg-white'
 
                   return (
                     <button
@@ -1039,12 +1092,12 @@ function AppContent() {
                       aria-pressed={isSelected}
                       title='View project details'
                     >
-                      <div>
-                        <div className='text-base font-semibold text-slate-900'>{project.projectNumber}</div>
-                        <div className='mt-1 text-sm text-slate-600'>{project.customerName}</div>
-                        <div className='mt-2 text-xs font-medium text-slate-500'>{project.statusLabel}</div>
+                      <div className='flex flex-1 flex-col overflow-hidden text-left'>
+                        <span className='truncate text-sm font-semibold text-slate-900'>{project.projectNumber}</span>
+                        <span className='truncate text-xs text-slate-600'>{project.customerName}</span>
+                        <span className='truncate text-xs font-medium text-slate-500'>{project.statusLabel}</span>
                       </div>
-                      <ChevronRight size={18} className='text-slate-400' aria-hidden />
+                      <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
                     </button>
                   )
                 })}
@@ -1066,14 +1119,14 @@ function AppContent() {
             {completedProjects.length === 0 ? (
               <p className='text-sm text-slate-500'>Completed projects will appear here.</p>
             ) : (
-              <div className='space-y-2'>
+              <div className='space-y-1.5'>
                 {completedProjects.map(project => {
                   const isSelected = selectedProjectId === project.projectId
                   const baseClasses =
-                    'flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                    'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
                   const selectionClasses = isSelected
-                    ? 'border-slate-400 bg-slate-50/80 shadow-md'
-                    : 'hover:-translate-y-0.5 hover:shadow-lg'
+                    ? 'border-slate-400 bg-slate-50/80 text-slate-900 shadow-md'
+                    : 'hover:border-slate-300 hover:bg-white'
 
                   return (
                     <button
@@ -1088,12 +1141,12 @@ function AppContent() {
                       aria-pressed={isSelected}
                       title='View project details'
                     >
-                      <div>
-                        <div className='text-base font-semibold text-slate-900'>{project.projectNumber}</div>
-                        <div className='mt-1 text-sm text-slate-600'>{project.customerName}</div>
-                        <div className='mt-2 text-xs font-medium text-slate-500'>{project.statusLabel}</div>
+                      <div className='flex flex-1 flex-col overflow-hidden text-left'>
+                        <span className='truncate text-sm font-semibold text-slate-900'>{project.projectNumber}</span>
+                        <span className='truncate text-xs text-slate-600'>{project.customerName}</span>
+                        <span className='truncate text-xs font-medium text-slate-500'>{project.statusLabel}</span>
                       </div>
-                      <ChevronRight size={18} className='text-slate-400' aria-hidden />
+                      <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
                     </button>
                   )
                 })}
@@ -1157,8 +1210,10 @@ function AppContent() {
 
   const renderDashboardView = () => {
     const averageWorkOrders = totalProjects > 0 ? totalWorkOrders / totalProjects : 0
-    const maxStatusCount = projectStatusData.reduce((max, item) => (item.count > max ? item.count : max), 0)
-    const barDenominator = maxStatusCount > 0 ? maxStatusCount : 1
+    const pieChartData = projectStatusData.map(status => ({ value: status.count, color: status.color }))
+    const pieAriaLabel = projectStatusData
+      .map(status => `${status.label}: ${status.count} ${status.count === 1 ? 'project' : 'projects'}`)
+      .join('; ')
 
     return (
       <div className='space-y-6'>
@@ -1209,23 +1264,46 @@ function AppContent() {
             {totalProjects === 0 ? (
               <p className='text-sm text-slate-500'>Add a project to see status details.</p>
             ) : (
-              <div className='space-y-4'>
-                {projectStatusData.map(status => (
-                  <div key={status.key}>
-                    <div className='flex items-center gap-3'>
-                      <div className={`h-2.5 w-2.5 rounded-full ${status.colorClass}`} aria-hidden />
-                      <div className='flex-1 text-sm font-medium text-slate-700'>{status.label}</div>
-                      <div className='text-sm font-semibold text-slate-900'>{status.count}</div>
-                    </div>
-                    <div className='mt-2 h-2 rounded-full bg-slate-200/80'>
+              <div className='flex flex-col gap-6 lg:flex-row lg:items-center'>
+                <div className='flex justify-center lg:flex-1'>
+                  <PieChart
+                    data={pieChartData}
+                    size={240}
+                    thickness={80}
+                    ariaLabel={`Project status distribution. ${pieAriaLabel}`}
+                    centerContent={
+                      <div className='px-4 text-center'>
+                        <div className='text-2xl font-semibold text-slate-900'>{totalProjects}</div>
+                        <div className='text-xs font-medium uppercase tracking-wide text-slate-500'>Projects</div>
+                      </div>
+                    }
+                  />
+                </div>
+                <div className='flex-1 space-y-3'>
+                  {projectStatusData.map(status => {
+                    const percentage = totalProjects > 0 ? Math.round((status.count / totalProjects) * 100) : 0
+                    return (
                       <div
-                        className={`h-full rounded-full ${status.colorClass}`}
-                        style={{ width: `${(status.count / barDenominator) * 100}%` }}
-                      />
-                    </div>
-                    <p className='mt-2 text-xs text-slate-500'>{status.description}</p>
-                  </div>
-                ))}
+                        key={status.key}
+                        className='rounded-xl border border-slate-200 bg-white/70 px-3 py-3 shadow-sm'
+                      >
+                        <div className='flex items-start justify-between gap-3'>
+                          <div>
+                            <div className='flex items-center gap-2 text-sm font-semibold text-slate-800'>
+                              <span className={`h-2.5 w-2.5 rounded-full ${status.colorClass}`} aria-hidden />
+                              {status.label}
+                            </div>
+                            <p className='mt-1 text-xs text-slate-500'>{status.description}</p>
+                          </div>
+                          <div className='text-right'>
+                            <div className='text-sm font-semibold text-slate-900'>{status.count}</div>
+                            <div className='text-xs text-slate-500'>{percentage}%</div>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             )}
           </CardContent>
@@ -1722,7 +1800,10 @@ function AppContent() {
     }
   }
 
-  async function addProject(customerId: string, projectNumber: string): Promise<string | null> {
+  async function addProject(
+    customerId: string,
+    projectNumber: string,
+  ): Promise<{ projectId: string; customerId: string } | string> {
     if (!canEdit) {
       const message = 'Not authorized to create projects.'
       setActionError(message)
@@ -1741,7 +1822,7 @@ function AppContent() {
         ),
       )
       setActionError(null)
-      return null
+      return { projectId: project.id, customerId }
     } catch (error) {
       console.error('Failed to create project', error)
       const message = toErrorMessage(error, 'Failed to create project.')
@@ -1973,9 +2054,15 @@ function AppContent() {
     setActivePage(page)
     if (page !== 'projects') {
       setSelectedProjectId(null)
+      setShowNewProject(false)
+      setNewProjectNumber('')
+      setNewProjectError(null)
+      setIsCreatingProject(false)
     }
     if (page !== 'customers') {
       setShowNewCustomer(false)
+      setNewCustomerError(null)
+      setIsCreatingCustomer(false)
     }
   }
 
@@ -1995,9 +2082,9 @@ function AppContent() {
 
   return (
     <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
-      <div className='mx-auto flex max-w-6xl flex-col gap-6 lg:flex-row'>
-        <aside className='w-full lg:w-80 lg:flex-shrink-0'>
-          <div className='flex flex-col gap-6 lg:sticky lg:top-6'>
+      <div className='mx-auto flex max-w-6xl gap-6'>
+        <aside className='w-72 shrink-0'>
+          <div className='sticky top-6 flex flex-col gap-6'>
             <Card className='panel'>
               <CardHeader>
                 <div>
@@ -2034,7 +2121,7 @@ function AppContent() {
           </div>
         </aside>
 
-        <main className='flex-1'>
+        <main className='min-w-0 flex-1'>
           {loadError && (
             <div className='mb-6 flex items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
               <span>{loadError}</span>
@@ -2072,6 +2159,25 @@ function AppContent() {
                   disabled={!canEdit}
                 >
                   <Plus size={16} /> New Customer
+                </Button>
+              )}
+              {resolvedPage === 'projects' && (
+                <Button
+                  onClick={() => {
+                    setShowNewProject(true)
+                    setNewProjectError(null)
+                    setNewProjectNumber('')
+                    const fallbackCustomerId = sortedCustomers[0]?.id ?? ''
+                    const validSelectedCustomerId =
+                      selectedCustomerId && db.some(customer => customer.id === selectedCustomerId)
+                        ? selectedCustomerId
+                        : null
+                    setNewProjectCustomerId(validSelectedCustomerId ?? fallbackCustomerId)
+                  }}
+                  title={hasCustomers ? 'Create new project' : 'Add a customer before creating projects'}
+                  disabled={!canEdit || !hasCustomers}
+                >
+                  <Plus size={16} /> New Project
                 </Button>
               )}
             </div>
@@ -2244,6 +2350,108 @@ function AppContent() {
         )}
       </AnimatePresence>
 
+      {/* New Project Modal */}
+      <AnimatePresence>
+        {showNewProject && (
+          <motion.div
+            className='fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4'
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <Card className='w-full max-w-xl panel'>
+              <CardHeader>
+                <div className='flex items-center gap-2'><Plus size={18} /> <span className='font-medium'>Create New Project</span></div>
+                <Button
+                  variant='ghost'
+                  onClick={() => {
+                    setShowNewProject(false)
+                    setNewProjectError(null)
+                    setNewProjectNumber('')
+                    setIsCreatingProject(false)
+                  }}
+                  title='Close'
+                >
+                  <X size={16} />
+                </Button>
+              </CardHeader>
+              <CardContent>
+                {hasCustomers ? (
+                  <div className='space-y-4'>
+                    <div>
+                      <Label htmlFor='new-project-customer'>Customer</Label>
+                      <select
+                        id='new-project-customer'
+                        className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2'
+                        value={newProjectCustomerId}
+                        onChange={(e) => {
+                          setNewProjectCustomerId((e.target as HTMLSelectElement).value)
+                          if (newProjectError) setNewProjectError(null)
+                        }}
+                        disabled={isCreatingProject || !canEdit}
+                      >
+                        {sortedCustomers.map(customer => (
+                          <option key={customer.id} value={customer.id}>
+                            {customer.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label htmlFor='new-project-number'>Project Number</Label>
+                      <div className='mt-1 flex'>
+                        <span className='flex items-center rounded-l-2xl border border-r-0 border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm font-semibold text-slate-500'>P</span>
+                        <Input
+                          id='new-project-number'
+                          className='rounded-l-none border-l-0'
+                          value={newProjectNumber}
+                          onChange={(e) => {
+                            setNewProjectNumber((e.target as HTMLInputElement).value)
+                            if (newProjectError) setNewProjectError(null)
+                          }}
+                          placeholder='e.g. 2040'
+                          disabled={isCreatingProject || !canEdit}
+                        />
+                      </div>
+                    </div>
+                    {newProjectError && (
+                      <p className='flex items-center gap-1 text-sm text-rose-600'>
+                        <AlertCircle size={14} /> {newProjectError}
+                      </p>
+                    )}
+                    <div className='flex justify-end gap-2'>
+                      <Button
+                        variant='outline'
+                        onClick={() => {
+                          setShowNewProject(false)
+                          setNewProjectError(null)
+                          setNewProjectNumber('')
+                          setIsCreatingProject(false)
+                        }}
+                        disabled={isCreatingProject}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          void handleCreateProject()
+                        }}
+                        disabled={isCreatingProject || !canEdit}
+                        title={canEdit ? 'Create project' : 'Read-only access'}
+                      >
+                        <Plus size={16} /> Create Project
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <p className='text-sm text-slate-600'>Add a customer before creating a project.</p>
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Edit Contact Modal */}
       <AnimatePresence>
         {contactEditor && (
@@ -2343,7 +2551,13 @@ function AppContent() {
   )
 }
 
-function AddProjectForm({ onAdd, disabled = false }: { onAdd: (num: string) => Promise<string | null>; disabled?: boolean }) {
+function AddProjectForm({
+  onAdd,
+  disabled = false,
+}: {
+  onAdd: (num: string) => Promise<{ projectId: string; customerId: string } | string>
+  disabled?: boolean
+}) {
   const [val, setVal] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
@@ -2362,7 +2576,7 @@ function AddProjectForm({ onAdd, disabled = false }: { onAdd: (num: string) => P
     setIsSaving(true)
     try {
       const result = await onAdd(trimmed)
-      if (result) {
+      if (typeof result === 'string') {
         setError(result)
         return
       }
