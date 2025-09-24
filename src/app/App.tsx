@@ -203,6 +203,12 @@ function AppContent() {
   const [showNewContactForm, setShowNewContactForm] = useState(false)
   const [newContact, setNewContact] = useState({ name: '', position: '', phone: '', email: '' })
   const [contactError, setContactError] = useState<string | null>(null)
+  const [isEditingCustomerName, setIsEditingCustomerName] = useState(false)
+  const [customerNameDraft, setCustomerNameDraft] = useState('')
+  const [customerNameError, setCustomerNameError] = useState<string | null>(null)
+  const [isSavingCustomerName, setIsSavingCustomerName] = useState(false)
+  const [activeContactId, setActiveContactId] = useState<string | null>(null)
+  const [showInlineProjectForm, setShowInlineProjectForm] = useState(false)
 
   // Create project (modal)
   const [showNewProject, setShowNewProject] = useState(false)
@@ -268,6 +274,11 @@ function AppContent() {
     setShowNewContactForm(false)
     setNewContact({ name: '', position: '', phone: '', email: '' })
     setContactError(null)
+    setIsEditingCustomerName(false)
+    setCustomerNameDraft(selectedCustomer?.name ?? '')
+    setCustomerNameError(null)
+    setIsSavingCustomerName(false)
+    setShowInlineProjectForm(false)
     closeContactEditor()
   }, [selectedCustomer?.id, closeContactEditor])
 
@@ -285,6 +296,25 @@ function AppContent() {
       closeContactEditor()
     }
   }, [db, contactEditor, closeContactEditor])
+
+  useEffect(() => {
+    if (!isEditingCustomerName) {
+      setCustomerNameDraft(selectedCustomer?.name ?? '')
+    }
+  }, [selectedCustomer?.name, isEditingCustomerName])
+
+  useEffect(() => {
+    if (!selectedCustomer || selectedCustomer.contacts.length === 0) {
+      setActiveContactId(null)
+      return
+    }
+    setActiveContactId(prev => {
+      if (prev && selectedCustomer.contacts.some(contact => contact.id === prev)) {
+        return prev
+      }
+      return selectedCustomer.contacts[0]?.id ?? null
+    })
+  }, [selectedCustomer])
 
 
 
@@ -504,324 +534,441 @@ function AppContent() {
       )
     }
 
+    const hasContacts = selectedCustomer.contacts.length > 0
+    const activeContact =
+      hasContacts
+        ? selectedCustomer.contacts.find(contact => contact.id === activeContactId) ??
+          selectedCustomer.contacts[0]
+        : null
+
     return (
       <div className='space-y-6'>
         <Card className='panel'>
           <CardHeader>
-            <div className='flex items-center gap-2'>
-              <div className='text-lg font-semibold'>Customer: {selectedCustomer.name}</div>
-            </div>
-            <div className='flex flex-wrap items-center gap-2'>
-              <Button
-                variant='outline'
-                onClick={() => {
-                  setSelectedCustomerId(null)
-                  setSelectedProjectId(null)
-                }}
-              >
-                Back to Index
-              </Button>
-              <Button
-                variant='ghost'
-                className='text-rose-600 hover:bg-rose-50'
-                onClick={() => {
-                  if (!selectedCustomer) return
-                  const confirmed = window.confirm('Delete this customer and all associated projects, purchase orders, and work orders?')
-                  if (!confirmed) return
-                  void deleteCustomer(selectedCustomer.id)
-                }}
-                title={canEdit ? 'Delete customer' : 'Read-only access'}
-                disabled={!canEdit}
-              >
-                <Trash2 size={16} /> Delete Customer
-              </Button>
+            <div className='flex flex-col gap-3'>
+              <div className='flex flex-wrap items-start justify-between gap-3'>
+                <div className='space-y-1'>
+                  <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Customer</div>
+                  {isEditingCustomerName ? (
+                    <div className='flex flex-col gap-2'>
+                      <Label htmlFor='customer-name'>Customer Name</Label>
+                      <Input
+                        id='customer-name'
+                        value={customerNameDraft}
+                        onChange={(e) => {
+                          setCustomerNameDraft((e.target as HTMLInputElement).value)
+                          if (customerNameError) setCustomerNameError(null)
+                        }}
+                        placeholder='Enter customer name'
+                        disabled={!canEdit || isSavingCustomerName}
+                      />
+                      {customerNameError && (
+                        <p className='flex items-center gap-1 text-xs text-rose-600'>
+                          <AlertCircle size={14} /> {customerNameError}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className='text-lg font-semibold text-slate-900'>Customer: {selectedCustomer.name}</div>
+                  )}
+                </div>
+                <div className='flex flex-wrap items-center gap-2'>
+                  {isEditingCustomerName ? (
+                    <>
+                      <Button
+                        onClick={() => {
+                          void handleSaveCustomerName()
+                        }}
+                        disabled={isSavingCustomerName || !canEdit}
+                        title={canEdit ? 'Save customer name' : 'Read-only access'}
+                      >
+                        <Save size={16} /> Save
+                      </Button>
+                      <Button
+                        variant='ghost'
+                        onClick={() => {
+                          setIsEditingCustomerName(false)
+                          setCustomerNameDraft(selectedCustomer.name)
+                          setCustomerNameError(null)
+                        }}
+                        disabled={isSavingCustomerName}
+                        title='Cancel editing'
+                      >
+                        <X size={16} /> Cancel
+                      </Button>
+                    </>
+                  ) : (
+                    <Button
+                      variant='outline'
+                      onClick={() => {
+                        setIsEditingCustomerName(true)
+                        setCustomerNameDraft(selectedCustomer.name)
+                        setCustomerNameError(null)
+                      }}
+                      title={canEdit ? 'Edit customer name' : 'Read-only access'}
+                      disabled={!canEdit}
+                    >
+                      <Pencil size={16} /> Edit Customer
+                    </Button>
+                  )}
+                  <Button
+                    variant='ghost'
+                    className='text-rose-600 hover:bg-rose-50'
+                    onClick={() => {
+                      if (!selectedCustomer) return
+                      const confirmed = window.confirm('Delete this customer and all associated projects, purchase orders, and work orders?')
+                      if (!confirmed) return
+                      void deleteCustomer(selectedCustomer.id)
+                    }}
+                    title={canEdit ? 'Delete customer' : 'Read-only access'}
+                    disabled={!canEdit}
+                  >
+                    <Trash2 size={16} /> Delete Customer
+                  </Button>
+                </div>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
-            <div className='grid gap-4 md:grid-cols-2'>
-              <div className='md:col-span-2 space-y-2'>
-                <EditableField
-                  label='Address'
-                  value={selectedCustomer.address}
-                  placeholder='Add address'
-                  copyable
-                  copyTitle='Copy address'
-                  onSave={async (value) => {
-                    const trimmed = value.trim()
-                    await saveCustomerDetails(selectedCustomer.id, { address: trimmed ? trimmed : null })
-                  }}
-                />
-                {selectedCustomerAddressForMap ? (
-                  <a
-                    href={`https://www.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}`}
-                    target='_blank'
-                    rel='noreferrer'
-                    className='inline-flex items-center gap-2 text-sm font-medium text-sky-600 hover:text-sky-500'
-                  >
-                    <MapPin size={16} /> Open in Google Maps
-                  </a>
-                ) : null}
+            <div className='grid gap-6 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]'>
+              <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
+                <div className='text-sm font-semibold text-slate-700'>Address</div>
+                <div className='mt-3 space-y-3'>
+                  <EditableField
+                    label='Address'
+                    value={selectedCustomer.address}
+                    placeholder='Add address'
+                    copyable
+                    copyTitle='Copy address'
+                    onSave={async (value) => {
+                      const trimmed = value.trim()
+                      await saveCustomerDetails(selectedCustomer.id, { address: trimmed ? trimmed : null })
+                    }}
+                  />
+                  {selectedCustomerAddressForMap ? (
+                    <a
+                      href={`https://www.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}`}
+                      target='_blank'
+                      rel='noreferrer'
+                      className='inline-flex items-center gap-2 text-sm font-medium text-sky-600 hover:text-sky-500'
+                    >
+                      <MapPin size={16} /> Open in Google Maps
+                    </a>
+                  ) : null}
+                </div>
+              </div>
+              <div className='space-y-4'>
+                <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
+                  <div className='flex flex-wrap items-center justify-between gap-2'>
+                    <div className='text-sm font-semibold text-slate-700'>Contacts</div>
+                    <Button
+                      variant='outline'
+                      onClick={() => {
+                        setShowNewContactForm(prev => !prev)
+                        setContactError(null)
+                      }}
+                      title={canEdit ? (showNewContactForm ? 'Cancel adding contact' : 'Add contact') : 'Read-only access'}
+                      disabled={!canEdit}
+                    >
+                      {showNewContactForm ? (
+                        <>
+                          <X size={16} /> Cancel
+                        </>
+                      ) : (
+                        <>
+                          <Plus size={16} /> Add Contact
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  {hasContacts ? (
+                    <>
+                      {selectedCustomer.contacts.length > 1 && (
+                        <div className='mt-4 flex flex-wrap items-center gap-2'>
+                          {selectedCustomer.contacts.map((contact, index) => {
+                            const label = contact.name?.trim() || `Contact ${index + 1}`
+                            const isActive = contact.id === (activeContact?.id ?? null)
+                            return (
+                              <button
+                                key={contact.id}
+                                type='button'
+                                onClick={() => setActiveContactId(contact.id)}
+                                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                                  isActive
+                                    ? 'bg-slate-900 text-white shadow'
+                                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                                }`}
+                                aria-pressed={isActive}
+                              >
+                                {label}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      )}
+                      {activeContact && (
+                        <div className='mt-4 rounded-2xl border border-slate-200/70 bg-white/90 p-4 shadow-sm'>
+                          <div className='flex flex-wrap items-center justify-between gap-2'>
+                            <div>
+                              <div className='text-sm font-semibold text-slate-800'>
+                                {activeContact.name?.trim() || 'Contact'}
+                              </div>
+                              {activeContact.position ? (
+                                <div className='text-xs text-slate-500'>{activeContact.position}</div>
+                              ) : null}
+                            </div>
+                            <div className='flex flex-wrap items-center gap-2'>
+                              <Button
+                                variant='outline'
+                                onClick={() => {
+                                  if (!selectedCustomer || !activeContact) return
+                                  setContactEditor({
+                                    customerId: selectedCustomer.id,
+                                    contactId: activeContact.id,
+                                    name: activeContact.name ?? '',
+                                    position: activeContact.position ?? '',
+                                    phone: activeContact.phone ?? '',
+                                    email: activeContact.email ?? '',
+                                  })
+                                  setContactEditorError(null)
+                                  setIsSavingContactEdit(false)
+                                }}
+                                title={canEdit ? 'Edit contact' : 'Read-only access'}
+                                disabled={!canEdit}
+                              >
+                                <Pencil size={16} /> Edit Contact
+                              </Button>
+                              <Button
+                                variant='ghost'
+                                className='text-rose-600 hover:bg-rose-50'
+                                onClick={() => removeContact(selectedCustomer, activeContact.id)}
+                                title={canEdit ? 'Remove contact' : 'Read-only access'}
+                                disabled={!canEdit}
+                              >
+                                <Trash2 size={16} /> Remove
+                              </Button>
+                            </div>
+                          </div>
+                          <div className='mt-4 grid gap-3 md:grid-cols-2'>
+                            <ContactInfoField
+                              label='Name'
+                              value={activeContact.name}
+                              placeholder='Not provided'
+                              copyTitle='Copy contact name'
+                            />
+                            <ContactInfoField
+                              label='Position'
+                              value={activeContact.position}
+                              placeholder='Not provided'
+                              copyTitle='Copy contact position'
+                            />
+                            <ContactInfoField
+                              label='Phone'
+                              value={activeContact.phone}
+                              placeholder='Not provided'
+                              copyTitle='Copy phone number'
+                            />
+                            <ContactInfoField
+                              label='Email'
+                              value={activeContact.email}
+                              placeholder='Not provided'
+                              copyTitle='Copy email address'
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    !showNewContactForm && (
+                      <p className='mt-4 text-sm text-slate-500'>No contacts yet.</p>
+                    )
+                  )}
+                </div>
+                {showNewContactForm && (
+                  <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
+                    <div className='text-sm font-semibold text-slate-700'>New Contact</div>
+                    <div className='mt-3 grid gap-3 md:grid-cols-2'>
+                      <div>
+                        <Label>Name</Label>
+                        <Input
+                          value={newContact.name}
+                          onChange={(e) => setNewContact({ ...newContact, name: (e.target as HTMLInputElement).value })}
+                          placeholder='Jane Doe'
+                          disabled={!canEdit}
+                        />
+                      </div>
+                      <div>
+                        <Label>Position</Label>
+                        <Input
+                          value={newContact.position}
+                          onChange={(e) => setNewContact({ ...newContact, position: (e.target as HTMLInputElement).value })}
+                          placeholder='Project Manager'
+                          disabled={!canEdit}
+                        />
+                      </div>
+                      <div>
+                        <Label>Phone</Label>
+                        <Input
+                          value={newContact.phone}
+                          onChange={(e) => setNewContact({ ...newContact, phone: (e.target as HTMLInputElement).value })}
+                          placeholder='555-123-4567'
+                          disabled={!canEdit}
+                        />
+                      </div>
+                      <div>
+                        <Label>Email</Label>
+                        <Input
+                          value={newContact.email}
+                          onChange={(e) => setNewContact({ ...newContact, email: (e.target as HTMLInputElement).value })}
+                          placeholder='name@example.com'
+                          disabled={!canEdit}
+                        />
+                      </div>
+                    </div>
+                    <div className='mt-3 flex flex-wrap items-center gap-2'>
+                      <Button
+                        onClick={async () => {
+                          if (!selectedCustomer) return
+                          const result = await addContact(selectedCustomer, newContact)
+                          if (result) {
+                            setContactError(result)
+                          } else {
+                            setNewContact({ name: '', position: '', phone: '', email: '' })
+                            setContactError(null)
+                            setShowNewContactForm(false)
+                          }
+                        }}
+                        disabled={!canEdit}
+                        title={canEdit ? 'Save contact' : 'Read-only access'}
+                      >
+                        <Save size={16} /> Save Contact
+                      </Button>
+                      <Button
+                        variant='ghost'
+                        onClick={() => {
+                          setShowNewContactForm(false)
+                          setNewContact({ name: '', position: '', phone: '', email: '' })
+                          setContactError(null)
+                        }}
+                      >
+                        <X size={16} /> Cancel
+                      </Button>
+                      {contactError && (
+                        <p className='text-sm text-rose-600'>{contactError}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
-            <div className='mt-6 space-y-3'>
+            <div className='mt-8'>
               <div className='flex flex-wrap items-center justify-between gap-2'>
-                <div className='text-sm font-semibold text-slate-700'>Contacts</div>
+                <div className='text-sm font-semibold text-slate-700'>Projects</div>
                 <Button
                   variant='outline'
                   onClick={() => {
-                    setShowNewContactForm(prev => !prev)
-                    setContactError(null)
+                    setShowInlineProjectForm(prev => !prev)
                   }}
-                  title={canEdit ? (showNewContactForm ? 'Cancel adding contact' : 'Add contact') : 'Read-only access'}
+                  title={canEdit ? (showInlineProjectForm ? 'Cancel adding project' : 'Add project') : 'Read-only access'}
                   disabled={!canEdit}
                 >
-                  {showNewContactForm ? (
+                  {showInlineProjectForm ? (
                     <>
                       <X size={16} /> Cancel
                     </>
                   ) : (
                     <>
-                      <Plus size={16} /> Add Contact
+                      <Plus size={16} /> Add Project
                     </>
                   )}
                 </Button>
               </div>
-
-              {selectedCustomer.contacts.length === 0 && !showNewContactForm && (
-                <div className='text-sm text-slate-500'>No contacts yet.</div>
+              {showInlineProjectForm && (
+                <div className='mt-4'>
+                  <AddProjectForm
+                    onAdd={(num) => addProject(selectedCustomer.id, num)}
+                    disabled={!canEdit}
+                    onAdded={() => setShowInlineProjectForm(false)}
+                  />
+                </div>
               )}
-
-              {selectedCustomer.contacts.map((contact, index) => {
-                return (
-                  <div key={contact.id} className='rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm'>
-                    <div className='flex flex-wrap items-center justify-between gap-2'>
-                      <div>
-                        <div className='text-sm font-semibold text-slate-800'>
-                          {contact.name?.trim() || `Contact ${index + 1}`}
-                        </div>
-                        {contact.position ? (
-                          <div className='text-xs text-slate-500'>{contact.position}</div>
-                        ) : null}
+              {selectedCustomer.projects.length === 0 && (
+                <div className='mt-3 text-sm text-slate-500'>No projects yet.</div>
+              )}
+              <div className='mt-4 space-y-3'>
+                {selectedCustomer.projects.map(project => (
+                  <Card key={project.id} className='panel'>
+                    <CardHeader>
+                      <div className='flex flex-wrap items-center gap-2'>
+                        <div className='text-lg font-semibold text-slate-800'>Project: {project.number}</div>
+                        {project.note && (
+                          <span className='rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700'>Note</span>
+                        )}
                       </div>
                       <div className='flex flex-wrap items-center gap-2'>
                         <Button
                           variant='outline'
-                          onClick={() => {
-                            if (!selectedCustomer) return
-                            setContactEditor({
-                              customerId: selectedCustomer.id,
-                              contactId: contact.id,
-                              name: contact.name ?? '',
-                              position: contact.position ?? '',
-                              phone: contact.phone ?? '',
-                              email: contact.email ?? '',
-                            })
-                            setContactEditorError(null)
-                            setIsSavingContactEdit(false)
-                          }}
-                          title={canEdit ? 'Edit contact' : 'Read-only access'}
-                          disabled={!canEdit}
+                          onClick={() => navigator.clipboard.writeText(stripPrefix(project.number, /^P[-\s]?(.+)$/i))}
+                          title='Copy project number'
                         >
-                          <Pencil size={16} /> Edit Contact
+                          <Copy size={16} />
+                        </Button>
+                        <Button
+                          onClick={() => {
+                            setSelectedCustomerId(selectedCustomer.id)
+                            setSelectedProjectId(project.id)
+                            setActivePage('projects')
+                          }}
+                        >
+                          <ChevronRight size={16} /> View project
                         </Button>
                         <Button
                           variant='ghost'
                           className='text-rose-600 hover:bg-rose-50'
-                          onClick={() => removeContact(selectedCustomer, contact.id)}
-                          title={canEdit ? 'Remove contact' : 'Read-only access'}
+                          onClick={() => {
+                            const confirmed = window.confirm('Delete this project and all associated records?')
+                            if (!confirmed) return
+                            void deleteProject(selectedCustomer.id, project.id)
+                          }}
+                          title={canEdit ? 'Delete project' : 'Read-only access'}
                           disabled={!canEdit}
                         >
-                          <Trash2 size={16} /> Remove
+                          <Trash2 size={16} />
                         </Button>
                       </div>
-                    </div>
-                    <div className='mt-3 grid gap-3 md:grid-cols-2'>
-                      <ContactInfoField
-                        label='Name'
-                        value={contact.name}
-                        placeholder='Not provided'
-                        copyTitle='Copy contact name'
-                      />
-                      <ContactInfoField
-                        label='Position'
-                        value={contact.position}
-                        placeholder='Not provided'
-                        copyTitle='Copy contact position'
-                      />
-                      <ContactInfoField
-                        label='Phone'
-                        value={contact.phone}
-                        placeholder='Not provided'
-                        copyTitle='Copy phone number'
-                      />
-                      <ContactInfoField
-                        label='Email'
-                        value={contact.email}
-                        placeholder='Not provided'
-                        copyTitle='Copy email address'
-                      />
-                    </div>
-                  </div>
-                )
-              })}
-
-              {showNewContactForm && (
-                <div className='rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
-                  <div className='text-sm font-semibold text-slate-700'>New Contact</div>
-                  <div className='mt-3 grid gap-3 md:grid-cols-2'>
-                    <div>
-                      <Label>Name</Label>
-                      <Input
-                        value={newContact.name}
-                        onChange={(e) => setNewContact({ ...newContact, name: (e.target as HTMLInputElement).value })}
-                        placeholder='Jane Doe'
-                        disabled={!canEdit}
-                      />
-                    </div>
-                    <div>
-                      <Label>Position</Label>
-                      <Input
-                        value={newContact.position}
-                        onChange={(e) => setNewContact({ ...newContact, position: (e.target as HTMLInputElement).value })}
-                        placeholder='Project Manager'
-                        disabled={!canEdit}
-                      />
-                    </div>
-                    <div>
-                      <Label>Phone</Label>
-                      <Input
-                        value={newContact.phone}
-                        onChange={(e) => setNewContact({ ...newContact, phone: (e.target as HTMLInputElement).value })}
-                        placeholder='555-123-4567'
-                        disabled={!canEdit}
-                      />
-                    </div>
-                    <div>
-                      <Label>Email</Label>
-                      <Input
-                        value={newContact.email}
-                        onChange={(e) => setNewContact({ ...newContact, email: (e.target as HTMLInputElement).value })}
-                        placeholder='name@example.com'
-                        disabled={!canEdit}
-                      />
-                    </div>
-                  </div>
-                  <div className='mt-3 flex flex-wrap items-center gap-2'>
-                    <Button
-                      onClick={async () => {
-                        if (!selectedCustomer) return
-                        const result = await addContact(selectedCustomer, newContact)
-                        if (result) {
-                          setContactError(result)
-                        } else {
-                          setNewContact({ name: '', position: '', phone: '', email: '' })
-                          setContactError(null)
-                          setShowNewContactForm(false)
-                        }
-                      }}
-                      disabled={!canEdit}
-                      title={canEdit ? 'Save contact' : 'Read-only access'}
-                    >
-                      <Save size={16} /> Save Contact
-                    </Button>
-                    <Button
-                      variant='ghost'
-                      onClick={() => {
-                        setShowNewContactForm(false)
-                        setNewContact({ name: '', position: '', phone: '', email: '' })
-                        setContactError(null)
-                      }}
-                    >
-                      <X size={16} /> Cancel
-                    </Button>
-                    {contactError && (
-                      <p className='text-sm text-rose-600'>{contactError}</p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className='mt-6 rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm'>
-              <div className='mb-2 text-sm font-semibold text-slate-700'>Add Project</div>
-              <AddProjectForm onAdd={(num) => addProject(selectedCustomer.id, num)} disabled={!canEdit} />
-            </div>
-
-            <div className='mt-6'>
-              <div className='mb-2 text-sm font-semibold text-slate-700'>Projects</div>
-              {selectedCustomer.projects.length === 0 && <div className='text-sm text-slate-500'>No projects yet.</div>}
-              {selectedCustomer.projects.map(project => (
-                <Card key={project.id} className='mb-3 panel'>
-                  <CardHeader>
-                    <div className='flex flex-wrap items-center gap-2'>
-                      <div className='text-lg font-semibold text-slate-800'>Project: {project.number}</div>
-                      {project.note && (
-                        <span className='rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700'>Note</span>
-                      )}
-                    </div>
-                    <div className='flex flex-wrap items-center gap-2'>
-                      <Button
-                        variant='outline'
-                        onClick={() => navigator.clipboard.writeText(stripPrefix(project.number, /^P[-\s]?(.+)$/i))}
-                        title='Copy project number'
-                      >
-                        <Copy size={16} />
-                      </Button>
-                      <Button
-                        onClick={() => {
-                          setSelectedCustomerId(selectedCustomer.id)
-                          setSelectedProjectId(project.id)
-                          setActivePage('projects')
-                        }}
-                      >
-                        <ChevronRight size={16} /> View project
-                      </Button>
-                      <Button
-                        variant='ghost'
-                        className='text-rose-600 hover:bg-rose-50'
-                        onClick={() => {
-                          const confirmed = window.confirm('Delete this project and all associated records?')
-                          if (!confirmed) return
-                          void deleteProject(selectedCustomer.id, project.id)
-                        }}
-                        title={canEdit ? 'Delete project' : 'Read-only access'}
-                        disabled={!canEdit}
-                      >
-                        <Trash2 size={16} />
-                      </Button>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
-                      {[
-                        {
-                          label: 'Status',
-                          value: formatProjectStatus(project.status, project.activeSubStatus),
-                        },
-                        { label: 'Work Orders', value: project.wos.length },
-                        {
-                          label: 'Project Files',
-                          value: PROJECT_FILE_CATEGORIES.reduce(
-                            (count, category) => (project.documents?.[category] ? count + 1 : count),
-                            0,
-                          ),
-                        },
-                      ].map(item => (
-                        <div key={item.label} className='rounded-xl border border-slate-200 bg-white/80 p-3'>
-                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{item.label}</div>
-                          <div className='text-lg font-semibold text-slate-800'>{item.value}</div>
-                        </div>
-                      ))}
-                    </div>
-                    {project.note && (
-                      <div className='mt-3 rounded-xl border border-slate-200 bg-white/80 p-3 text-sm text-slate-700'>
-                        <span className='font-semibold text-slate-900'>Note:</span> {project.note}
+                    </CardHeader>
+                    <CardContent>
+                      <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
+                        {[
+                          {
+                            label: 'Status',
+                            value: formatProjectStatus(project.status, project.activeSubStatus),
+                          },
+                          { label: 'Work Orders', value: project.wos.length },
+                          {
+                            label: 'Project Files',
+                            value: PROJECT_FILE_CATEGORIES.reduce(
+                              (count, category) => (project.documents?.[category] ? count + 1 : count),
+                              0,
+                            ),
+                          },
+                        ].map(item => (
+                          <div key={item.label} className='rounded-xl border border-slate-200 bg-white/80 p-3'>
+                            <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{item.label}</div>
+                            <div className='text-lg font-semibold text-slate-800'>{item.value}</div>
+                          </div>
+                        ))}
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
+                      {project.note && (
+                        <div className='mt-3 rounded-xl border border-slate-200 bg-white/80 p-3 text-sm text-slate-700'>
+                          <span className='font-semibold text-slate-900'>Note:</span> {project.note}
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -1561,7 +1708,12 @@ function AppContent() {
     ]
 
     try {
-      await saveCustomerDetails(customer.id, { contacts: payload }, 'Failed to add contact.')
+      const saved = await saveCustomerDetails(customer.id, { contacts: payload }, 'Failed to add contact.')
+      const createdContact = saved.contacts.find(contact => !customer.contacts.some(existing => existing.id === contact.id))
+      const nextActive = createdContact ?? saved.contacts[0]
+      if (nextActive) {
+        setActiveContactId(nextActive.id)
+      }
       return null
     } catch (error) {
       return error instanceof Error ? error.message : 'Failed to add contact.'
@@ -1637,6 +1789,43 @@ function AppContent() {
       }
     } catch {
       // error handled in saveCustomerDetails
+    }
+  }
+
+  async function handleSaveCustomerName() {
+    if (!selectedCustomer) {
+      return
+    }
+    if (!canEdit) {
+      setCustomerNameError('You have read-only access.')
+      return
+    }
+    const trimmed = customerNameDraft.trim()
+    if (!trimmed) {
+      setCustomerNameError('Customer name is required.')
+      return
+    }
+    if (customerNameExists(trimmed, selectedCustomer.id)) {
+      setCustomerNameError('A customer with this name already exists.')
+      return
+    }
+    if (trimmed === selectedCustomer.name.trim()) {
+      setIsEditingCustomerName(false)
+      setCustomerNameError(null)
+      setCustomerNameDraft(selectedCustomer.name)
+      return
+    }
+
+    setIsSavingCustomerName(true)
+    setCustomerNameError(null)
+    try {
+      await saveCustomerDetails(selectedCustomer.id, { name: trimmed })
+      setIsEditingCustomerName(false)
+      setCustomerNameDraft(trimmed)
+    } catch (error) {
+      setCustomerNameError(error instanceof Error ? error.message : 'Failed to update customer.')
+    } finally {
+      setIsSavingCustomerName(false)
     }
   }
 
@@ -2554,9 +2743,11 @@ function AppContent() {
 function AddProjectForm({
   onAdd,
   disabled = false,
+  onAdded,
 }: {
   onAdd: (num: string) => Promise<{ projectId: string; customerId: string } | string>
   disabled?: boolean
+  onAdded?: () => void
 }) {
   const [val, setVal] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -2582,6 +2773,7 @@ function AddProjectForm({
       }
       setVal('')
       setError(null)
+      onAdded?.()
     } finally {
       setIsSaving(false)
     }
