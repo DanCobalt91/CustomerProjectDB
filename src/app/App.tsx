@@ -630,7 +630,8 @@ function AppContent() {
 
     if (!selectedCustomer) {
       return (
-        <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]'>
+        <div className='space-y-6'>
+          {customerListCard}
           <Card className='panel'>
             <CardHeader>
               <div className='text-lg font-semibold text-slate-900'>Customer details</div>
@@ -639,7 +640,6 @@ function AppContent() {
               <p className='text-sm text-slate-600'>Select a customer from the list to view their information.</p>
             </CardContent>
           </Card>
-          {customerListCard}
         </div>
       )
     }
@@ -652,7 +652,8 @@ function AppContent() {
         : null
 
     return (
-      <div className='grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]'>
+      <div className='space-y-6'>
+        {customerListCard}
         <Card className='panel'>
           <CardHeader>
             <div className='flex flex-col gap-3'>
@@ -1048,7 +1049,6 @@ function AppContent() {
             </div>
           </CardContent>
         </Card>
-        {customerListCard}
       </div>
     )
   }
@@ -1180,7 +1180,8 @@ function AppContent() {
 
     if (!selectedProjectId) {
       return (
-        <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]'>
+        <div className='space-y-6'>
+          {projectListCard}
           <Card className='panel'>
             <CardHeader>
               <div className='text-lg font-semibold text-slate-900'>Project details</div>
@@ -1189,14 +1190,14 @@ function AppContent() {
               <p className='text-sm text-slate-600'>Select a project from the list to review its documents and work orders.</p>
             </CardContent>
           </Card>
-          {projectListCard}
         </div>
       )
     }
 
     if (!selectedProjectData) {
       return (
-        <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]'>
+        <div className='space-y-6'>
+          {projectListCard}
           <Card className='panel'>
             <CardHeader>
               <div className='text-lg font-semibold'>Project not found</div>
@@ -1208,13 +1209,13 @@ function AppContent() {
               </div>
             </CardContent>
           </Card>
-          {projectListCard}
         </div>
       )
     }
 
     return (
-      <div className='grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]'>
+      <div className='space-y-6'>
+        {projectListCard}
         <ProjectPage
           customer={selectedProjectData.customer}
           project={selectedProjectData.project}
@@ -1255,7 +1256,6 @@ function AppContent() {
           onNavigateBack={() => setSelectedProjectId(null)}
           onReturnToIndex={() => setSelectedProjectId(null)}
         />
-        {projectListCard}
       </div>
     )
   }
