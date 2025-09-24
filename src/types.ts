@@ -24,13 +24,30 @@ export const DEFAULT_PROJECT_STATUS: ProjectStatus = 'Active';
 export const DEFAULT_PROJECT_ACTIVE_SUB_STATUS: ProjectActiveSubStatus = 'FDS';
 
 export type ProjectFile = {
+  id: string;
   name: string;
   type: string;
   dataUrl: string;
   uploadedAt: string;
 };
 
-export type ProjectDocuments = Partial<Record<ProjectFileCategory, ProjectFile>>;
+export type ProjectDocuments = Partial<Record<ProjectFileCategory, ProjectFile[]>>;
+
+export type ProjectStatusLogEntry = {
+  id: string;
+  status: ProjectStatus;
+  activeSubStatus?: ProjectActiveSubStatus;
+  changedAt: string;
+  changedBy: string;
+};
+
+export type ProjectSignOff = {
+  id: string;
+  category: ProjectFileCategory;
+  signedAt: string;
+  signedBy: string;
+  note?: string;
+};
 
 export type Project = {
   id: string;
@@ -40,6 +57,8 @@ export type Project = {
   note?: string; // ⬅️ new
   wos: WO[];
   documents?: ProjectDocuments;
+  statusHistory?: ProjectStatusLogEntry[];
+  signOffs?: ProjectSignOff[];
 };
 
 export type CustomerContact = {
