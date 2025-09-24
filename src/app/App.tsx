@@ -158,7 +158,7 @@ function AppContent() {
   const [db, setDb] = useState<Customer[]>([])
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
-  const [activePage, setActivePage] = useState<'home' | 'customers'>('home')
+  const [activePage, setActivePage] = useState<'home' | 'customers' | 'projects'>('home')
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -181,8 +181,7 @@ function AppContent() {
 
   // Search
   const [customerQuery, setCustomerQuery] = useState('')
-  const [projectQuery, setProjectQuery] = useState('')
-  const [woQuery, setWoQuery] = useState('')
+  const [projectSearchQuery, setProjectSearchQuery] = useState('')
 
   // Create customer (modal)
   const [newCust, setNewCust] = useState({
@@ -275,34 +274,93 @@ function AppContent() {
 
 
 
-  const searchMatches = useMemo(() => {
-    const matches: { kind: 'customer' | 'project' | 'wo'; label: string; customerId: string; projectId?: string }[] = []
-    const cq = customerQuery.trim().toLowerCase()
-    if (cq) {
-      db.forEach(c => {
-        if (c.name.toLowerCase().includes(cq)) matches.push({ kind: 'customer', label: `${c.name}`, customerId: c.id })
-      })
+  const customerMatches = useMemo(() => {
+    const query = customerQuery.trim().toLowerCase()
+    if (!query) {
+      return []
     }
-    const pq = projectQuery.trim().toLowerCase()
-    if (pq) {
-      db.forEach(c =>
-        c.projects.forEach(p => {
-          if (p.number.toLowerCase().includes(pq)) matches.push({ kind: 'project', label: `${p.number}  —  ${c.name}`, customerId: c.id, projectId: p.id })
-        })
-      )
-    }
-    const wq = woQuery.trim().toLowerCase()
-    if (wq) {
-      db.forEach(c =>
-        c.projects.forEach(p =>
-          p.wos.forEach(w => {
-            if (w.number.toLowerCase().includes(wq)) matches.push({ kind: 'wo', label: `${w.number} (${w.type})  —  ${c.name}`, customerId: c.id, projectId: p.id })
-          })
-        )
-      )
-    }
+    const matches: Array<{ id: string; name: string; address?: string | null }> = []
+    db.forEach(customer => {
+      const nameMatch = customer.name.toLowerCase().includes(query)
+      const addressMatch = customer.address ? customer.address.toLowerCase().includes(query) : false
+      if (nameMatch || addressMatch) {
+        matches.push({ id: customer.id, name: customer.name, address: customer.address })
+      }
+    })
     return matches.slice(0, 25)
-  }, [db, customerQuery, projectQuery, woQuery])
+  }, [db, customerQuery])
+
+  const projectMatches = useMemo(() => {
+    const query = projectSearchQuery.trim().toLowerCase()
+    if (!query) {
+      return []
+    }
+    const matches: Array<{
+      customerId: string
+      projectId: string
+      projectNumber: string
+      customerName: string
+      statusLabel: string
+    }> = []
+    db.forEach(customer => {
+      customer.projects.forEach(project => {
+        const normalizedNumber = project.number.toLowerCase()
+        const normalizedCustomer = customer.name.toLowerCase()
+        if (normalizedNumber.includes(query) || normalizedCustomer.includes(query)) {
+          matches.push({
+            customerId: customer.id,
+            projectId: project.id,
+            projectNumber: project.number,
+            customerName: customer.name,
+            statusLabel: formatProjectStatus(project.status, project.activeSubStatus),
+          })
+        }
+      })
+    })
+    return matches.slice(0, 25)
+  }, [db, projectSearchQuery])
+
+  const projectLists = useMemo(() => {
+    const active: Array<{
+      customerId: string
+      projectId: string
+      projectNumber: string
+      customerName: string
+      statusLabel: string
+    }> = []
+    const completed: Array<{
+      customerId: string
+      projectId: string
+      projectNumber: string
+      customerName: string
+      statusLabel: string
+    }> = []
+
+    db.forEach(customer => {
+      customer.projects.forEach(project => {
+        const entry = {
+          customerId: customer.id,
+          projectId: project.id,
+          projectNumber: project.number,
+          customerName: customer.name,
+          statusLabel: formatProjectStatus(project.status, project.activeSubStatus),
+        }
+        if (project.status === 'Active') {
+          active.push(entry)
+        } else {
+          completed.push(entry)
+        }
+      })
+    })
+
+    const sorter = (a: { projectNumber: string }, b: { projectNumber: string }) =>
+      a.projectNumber.localeCompare(b.projectNumber, undefined, { numeric: true, sensitivity: 'base' })
+
+    active.sort(sorter)
+    completed.sort(sorter)
+
+    return { active, completed }
+  }, [db])
 
   const customerCount = db.length
 
@@ -357,87 +415,77 @@ function AppContent() {
     [db],
   )
 
-  const hasSearchInput = useMemo(
-    () => !!(customerQuery.trim() || projectQuery.trim() || woQuery.trim()),
-    [customerQuery, projectQuery, woQuery],
-  )
+  const hasCustomerSearch = customerQuery.trim().length > 0
 
-  const handleClearSearch = useCallback(() => {
+  const handleClearCustomerSearch = useCallback(() => {
     setCustomerQuery('')
-    setProjectQuery('')
-    setWoQuery('')
     setSelectedCustomerId(null)
     setSelectedProjectId(null)
-  }, [setCustomerQuery, setProjectQuery, setWoQuery, setSelectedCustomerId, setSelectedProjectId])
+  }, [setCustomerQuery, setSelectedCustomerId, setSelectedProjectId])
 
-  const canClearSearch = hasSearchInput || selectedCustomerId !== null || selectedProjectId !== null
+  const canClearCustomerSearch = hasCustomerSearch || selectedCustomerId !== null || selectedProjectId !== null
 
-  const CustomersPage = () => {
+  const hasProjectSearch = projectSearchQuery.trim().length > 0
+
+  const handleClearProjectSearch = useCallback(() => {
+    setProjectSearchQuery('')
+    setSelectedProjectId(null)
+    setSelectedCustomerId(null)
+  }, [setProjectSearchQuery, setSelectedCustomerId, setSelectedProjectId])
+
+  const canClearProjectSearch = hasProjectSearch || selectedProjectId !== null || selectedCustomerId !== null
+
+  const renderCustomersPage = () => {
     return (
       <>
         <Card className='mb-6 panel'>
           <CardHeader className='flex-col items-start justify-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
             <div className='flex items-center gap-2'>
               <Search size={18} />
-              <div className='font-medium'>Index Search</div>
+              <div className='font-medium'>Customer Search</div>
             </div>
             <Button
               variant='ghost'
-              onClick={handleClearSearch}
-              disabled={!canClearSearch}
+              onClick={handleClearCustomerSearch}
+              disabled={!canClearCustomerSearch}
               className='text-slate-600 hover:text-slate-800 disabled:text-slate-400'
             >
               <X size={16} /> Clear
             </Button>
           </CardHeader>
           <CardContent>
-            <div className='grid gap-3 md:grid-cols-3'>
-              <div>
-                <Label>Customer</Label>
-                <Input
-                  value={customerQuery}
-                  onChange={(e) => setCustomerQuery((e.target as HTMLInputElement).value)}
-                  placeholder='Start typing a name…'
-                  autoComplete='off'
-                />
-              </div>
-              <div>
-                <Label>Project Number</Label>
-                <Input value={projectQuery} onChange={(e) => setProjectQuery((e.target as HTMLInputElement).value)} placeholder='e.g. P1403' />
-              </div>
-              <div>
-                <Label>Work Order Number</Label>
-                <Input value={woQuery} onChange={(e) => setWoQuery((e.target as HTMLInputElement).value)} placeholder='e.g. WO804322' />
-              </div>
+            <div className='max-w-md'>
+              <Label htmlFor='customer-search'>Customer</Label>
+              <Input
+                id='customer-search'
+                value={customerQuery}
+                onChange={(e) => setCustomerQuery((e.target as HTMLInputElement).value)}
+                placeholder='Search by customer name or address…'
+                autoComplete='off'
+              />
             </div>
 
             <div className='mt-4'>
               <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
               <div className='mt-2 grid gap-2 md:grid-cols-2'>
-                {!hasSearchInput ? (
-                  <div className='text-sm text-slate-500'>Start typing above to find a customer, project, or work order.</div>
-                ) : searchMatches.length === 0 ? (
-                  <div className='text-sm text-slate-500'>No matches found.</div>
+                {!hasCustomerSearch ? (
+                  <div className='text-sm text-slate-500'>Start typing above to find a customer.</div>
+                ) : customerMatches.length === 0 ? (
+                  <div className='text-sm text-slate-500'>No customers found.</div>
                 ) : (
-                  searchMatches.map(m => (
+                  customerMatches.map(match => (
                     <button
-                      key={`${m.kind}_${m.customerId}_${m.projectId ?? ''}_${m.label}`}
+                      key={match.id}
                       onClick={() => {
-                        setSelectedCustomerId(m.customerId)
-                        setSelectedProjectId(m.projectId ?? null)
+                        setSelectedCustomerId(match.id)
+                        setSelectedProjectId(null)
                       }}
                       className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
-                      title={
-                        m.kind === 'customer'
-                          ? 'Open customer'
-                          : m.kind === 'project'
-                          ? 'Open project details'
-                          : 'Open work order in project'
-                      }
+                      title='Open customer'
                     >
                       <div>
-                        <div className='text-sm font-semibold text-slate-800'>{m.label}</div>
-                        <div className='text-xs font-medium text-slate-500'>{m.kind.toUpperCase()}</div>
+                        <div className='text-sm font-semibold text-slate-800'>{match.name}</div>
+                        {match.address ? <div className='text-xs text-slate-500'>{match.address}</div> : null}
                       </div>
                       <ChevronRight size={18} />
                     </button>
@@ -461,14 +509,9 @@ function AppContent() {
             ) : (
               <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
                 {sortedCustomers.map(customer => {
-                  const projectCount = customer.projects.length
-                  const workOrderCount = customer.projects.reduce(
-                    (count, project) => count + project.wos.length,
-                    0,
-                  )
                   const isSelected = selectedCustomerId === customer.id
                   const baseClasses =
-                    'flex w-full flex-col gap-3 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                    'flex w-full flex-col gap-2 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
                   const selectionClasses = isSelected
                     ? 'border-indigo-500 bg-indigo-50/80 shadow-md'
                     : 'hover:-translate-y-0.5 hover:shadow-lg'
@@ -488,21 +531,11 @@ function AppContent() {
                       <div className='flex items-start justify-between gap-3'>
                         <div>
                           <div className='text-base font-semibold text-slate-900'>{customer.name}</div>
-                          {customer.address ? (
-                            <div className='mt-1 text-sm text-slate-500'>{customer.address}</div>
-                          ) : null}
+                          <div className='mt-1 text-sm text-slate-500'>
+                            {customer.address ? customer.address : 'No address on file.'}
+                          </div>
                         </div>
                         <ChevronRight size={18} className='text-slate-400' aria-hidden />
-                      </div>
-                      <div className='grid gap-2 sm:grid-cols-2'>
-                        <div className='rounded-xl border border-slate-200 bg-white/80 p-3'>
-                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Projects</div>
-                          <div className='text-lg font-semibold text-slate-900'>{projectCount}</div>
-                        </div>
-                        <div className='rounded-xl border border-slate-200 bg-white/80 p-3'>
-                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Work Orders</div>
-                          <div className='text-lg font-semibold text-slate-900'>{workOrderCount}</div>
-                        </div>
                       </div>
                     </button>
                   )
@@ -838,7 +871,172 @@ function AppContent() {
     )
   }
 
-  const DashboardView = () => {
+  const renderProjectsPage = () => {
+    const { active: activeProjects, completed: completedProjects } = projectLists
+
+    return (
+      <>
+        <Card className='mb-6 panel'>
+          <CardHeader className='flex-col items-start justify-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
+            <div className='flex items-center gap-2'>
+              <Search size={18} />
+              <div className='font-medium'>Project Search</div>
+            </div>
+            <Button
+              variant='ghost'
+              onClick={handleClearProjectSearch}
+              disabled={!canClearProjectSearch}
+              className='text-slate-600 hover:text-slate-800 disabled:text-slate-400'
+            >
+              <X size={16} /> Clear
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <div className='max-w-md'>
+              <Label htmlFor='project-search'>Project</Label>
+              <Input
+                id='project-search'
+                value={projectSearchQuery}
+                onChange={(e) => setProjectSearchQuery((e.target as HTMLInputElement).value)}
+                placeholder='Search by project number or customer…'
+                autoComplete='off'
+              />
+            </div>
+
+            <div className='mt-4'>
+              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
+              <div className='mt-2 grid gap-2 md:grid-cols-2'>
+                {!hasProjectSearch ? (
+                  <div className='text-sm text-slate-500'>Start typing above to find a project.</div>
+                ) : projectMatches.length === 0 ? (
+                  <div className='text-sm text-slate-500'>No projects found.</div>
+                ) : (
+                  projectMatches.map(match => (
+                    <button
+                      key={match.projectId}
+                      onClick={() => {
+                        setSelectedCustomerId(match.customerId)
+                        setSelectedProjectId(match.projectId)
+                      }}
+                      className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
+                      title='Open project details'
+                    >
+                      <div>
+                        <div className='text-sm font-semibold text-slate-800'>{match.projectNumber}</div>
+                        <div className='text-xs text-slate-500'>{match.customerName}</div>
+                        <div className='text-xs text-slate-500'>{match.statusLabel}</div>
+                      </div>
+                      <ChevronRight size={18} />
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className='grid gap-6 lg:grid-cols-2'>
+          <Card className='panel'>
+            <CardHeader className='flex-col items-start justify-start gap-1 sm:flex-row sm:items-center sm:justify-between'>
+              <div className='text-lg font-semibold text-slate-900'>Active Projects</div>
+              <div className='text-sm text-slate-500 sm:ml-auto'>
+                {activeProjects.length === 1
+                  ? '1 active project'
+                  : `${activeProjects.length} active projects`}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {activeProjects.length === 0 ? (
+                <p className='text-sm text-slate-500'>Add a project to see it listed here.</p>
+              ) : (
+                <div className='space-y-3'>
+                  {activeProjects.map(project => {
+                    const isSelected = selectedProjectId === project.projectId
+                    const baseClasses =
+                      'flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                    const selectionClasses = isSelected
+                      ? 'border-indigo-500 bg-indigo-50/80 shadow-md'
+                      : 'hover:-translate-y-0.5 hover:shadow-lg'
+
+                    return (
+                      <button
+                        type='button'
+                        key={project.projectId}
+                        onClick={() => {
+                          setSelectedCustomerId(project.customerId)
+                          setSelectedProjectId(project.projectId)
+                        }}
+                        className={`${baseClasses} ${selectionClasses}`}
+                        aria-pressed={isSelected}
+                        title='View project details'
+                      >
+                        <div>
+                          <div className='text-base font-semibold text-slate-900'>{project.projectNumber}</div>
+                          <div className='mt-1 text-sm text-slate-600'>{project.customerName}</div>
+                          <div className='mt-2 text-xs font-medium text-slate-500'>{project.statusLabel}</div>
+                        </div>
+                        <ChevronRight size={18} className='text-slate-400' aria-hidden />
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className='panel'>
+            <CardHeader className='flex-col items-start justify-start gap-1 sm:flex-row sm:items-center sm:justify-between'>
+              <div className='text-lg font-semibold text-slate-900'>Completed Projects</div>
+              <div className='text-sm text-slate-500 sm:ml-auto'>
+                {completedProjects.length === 1
+                  ? '1 completed project'
+                  : `${completedProjects.length} completed projects`}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {completedProjects.length === 0 ? (
+                <p className='text-sm text-slate-500'>Completed projects will appear here.</p>
+              ) : (
+                <div className='space-y-3'>
+                  {completedProjects.map(project => {
+                    const isSelected = selectedProjectId === project.projectId
+                    const baseClasses =
+                      'flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                    const selectionClasses = isSelected
+                      ? 'border-slate-400 bg-slate-50/80 shadow-md'
+                      : 'hover:-translate-y-0.5 hover:shadow-lg'
+
+                    return (
+                      <button
+                        type='button'
+                        key={project.projectId}
+                        onClick={() => {
+                          setSelectedCustomerId(project.customerId)
+                          setSelectedProjectId(project.projectId)
+                        }}
+                        className={`${baseClasses} ${selectionClasses}`}
+                        aria-pressed={isSelected}
+                        title='View project details'
+                      >
+                        <div>
+                          <div className='text-base font-semibold text-slate-900'>{project.projectNumber}</div>
+                          <div className='mt-1 text-sm text-slate-600'>{project.customerName}</div>
+                          <div className='mt-2 text-xs font-medium text-slate-500'>{project.statusLabel}</div>
+                        </div>
+                        <ChevronRight size={18} className='text-slate-400' aria-hidden />
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      </>
+    )
+  }
+
+  const renderDashboardView = () => {
     const averageWorkOrders = totalProjects > 0 ? totalWorkOrders / totalProjects : 0
     const maxStatusCount = projectStatusData.reduce((max, item) => (item.count > max ? item.count : max), 0)
     const barDenominator = maxStatusCount > 0 ? maxStatusCount : 1
@@ -851,13 +1049,14 @@ function AppContent() {
               <div className='text-lg font-semibold text-slate-900'>Overview</div>
               <p className='text-sm text-slate-500'>High-level metrics for the projects stored in this workspace.</p>
             </div>
-            <Button
-              className='w-full sm:ml-auto sm:w-auto'
-              variant='outline'
-              onClick={() => setActivePage('customers')}
-            >
-              View customers
-            </Button>
+            <div className='flex w-full flex-col gap-2 sm:ml-auto sm:w-auto sm:flex-row'>
+              <Button className='w-full sm:w-auto' variant='outline' onClick={() => setActivePage('customers')}>
+                View customers
+              </Button>
+              <Button className='w-full sm:w-auto' variant='outline' onClick={() => setActivePage('projects')}>
+                View projects
+              </Button>
+            </div>
           </CardHeader>
           <CardContent>
             <div className='grid gap-4 sm:grid-cols-3'>
@@ -1689,9 +1888,10 @@ function AppContent() {
         {!selectedProjectId && (
           <div className='mb-6 flex flex-wrap items-center justify-between gap-3'>
             <div className='flex overflow-hidden rounded-2xl border border-slate-200 bg-white/70 p-1 shadow-sm'>
-              {(['home', 'customers'] as const).map(page => {
+              {(['home', 'customers', 'projects'] as const).map(page => {
                 const isActive = activePage === page
-                const label = page === 'home' ? 'Home' : 'Customers'
+                const label =
+                  page === 'home' ? 'Home' : page === 'customers' ? 'Customers' : 'Projects'
                 return (
                   <button
                     key={page}
@@ -1763,9 +1963,11 @@ function AppContent() {
             </Card>
           )
         ) : activePage === 'home' ? (
-          <DashboardView />
+          renderDashboardView()
+        ) : activePage === 'customers' ? (
+          renderCustomersPage()
         ) : (
-          <CustomersPage />
+          renderProjectsPage()
         )}
       </div>
 
