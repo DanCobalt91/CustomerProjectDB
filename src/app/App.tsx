@@ -17,12 +17,14 @@ import type {
   Customer,
   Project,
   ProjectActiveSubStatus,
+  ProjectCustomerSignOff,
   ProjectFile,
   ProjectFileCategory,
-  ProjectSignOff,
   ProjectStatus,
   ProjectStatusLogEntry,
   WOType,
+  CustomerSignOffDecision,
+  CustomerSignOffSubmission,
 } from '../types'
 import {
   DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
@@ -41,6 +43,7 @@ import {
   updateProject as updateProjectRecord,
 } from '../lib/storage'
 import { createId } from '../lib/id'
+import { generateCustomerSignOffPdf } from '../lib/signOff'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
@@ -840,18 +843,6 @@ function AppContent() {
                           </div>
                           <div className='mt-4 space-y-2'>
                             <ContactInfoField
-                              label='Name'
-                              value={activeContact.name}
-                              placeholder='Not provided'
-                              copyTitle='Copy contact name'
-                            />
-                            <ContactInfoField
-                              label='Position'
-                              value={activeContact.position}
-                              placeholder='Not provided'
-                              copyTitle='Copy contact position'
-                            />
-                            <ContactInfoField
                               label='Phone'
                               value={activeContact.phone}
                               placeholder='Not provided'
@@ -1246,11 +1237,18 @@ function AppContent() {
               fileId,
             )
           }
-          onAddSignOff={(data) =>
-            addProjectSignOff(selectedProjectData.customer.id, selectedProjectData.project.id, data)
+          onUploadCustomerSignOff={(file) =>
+            uploadCustomerSignOff(selectedProjectData.customer.id, selectedProjectData.project.id, file)
           }
-          onRemoveSignOff={(signOffId) =>
-            removeProjectSignOff(selectedProjectData.customer.id, selectedProjectData.project.id, signOffId)
+          onGenerateCustomerSignOff={(submission) =>
+            generateCustomerSignOff(
+              selectedProjectData.customer.id,
+              selectedProjectData.project.id,
+              submission,
+            )
+          }
+          onRemoveCustomerSignOff={() =>
+            removeCustomerSignOff(selectedProjectData.customer.id, selectedProjectData.project.id)
           }
           onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
           onNavigateBack={() => setSelectedProjectId(null)}
@@ -1793,71 +1791,186 @@ function AppContent() {
     }
   }
 
-  async function addProjectSignOff(
+  async function saveCustomerSignOff(
     customerId: string,
     projectId: string,
-    data: { category: ProjectFileCategory; signedBy: string; note?: string },
+    signOff: ProjectCustomerSignOff,
+    options: { markComplete?: boolean; changedBy?: string } = {},
   ): Promise<string | null> {
     if (!canEdit) {
-      const message = 'Not authorized to record sign offs.'
+      const message = 'Not authorized to record customer sign offs.'
       setActionError(message)
       return message
     }
 
-    const signedBy = data.signedBy.trim()
-    if (!signedBy) {
-      return 'Enter a name for the sign off.'
-    }
+    const customer = db.find(entry => entry.id === customerId)
+    const existingProject = customer?.projects.find(project => project.id === projectId)
 
-    const existingProject = db
-      .find(customer => customer.id === customerId)
-      ?.projects.find(project => project.id === projectId)
-    if (!existingProject) {
+    if (!customer || !existingProject) {
       const message = 'Project not found.'
       setActionError(message)
       return message
     }
 
-    const payload: ProjectSignOff = {
-      id: createId(),
-      category: data.category,
-      signedBy,
-      signedAt: new Date().toISOString(),
-      note: data.note?.trim() ? data.note.trim() : undefined,
+    const shouldMarkComplete = options.markComplete ?? false
+    const needsStatusUpdate = shouldMarkComplete && existingProject.status !== 'Complete'
+    const statusUpdate = needsStatusUpdate
+      ? buildStatusUpdate(existingProject, 'Complete', undefined, options.changedBy)
+      : null
+
+    setDb(prev =>
+      prev.map(entry =>
+        entry.id !== customerId
+          ? entry
+          : {
+              ...entry,
+              projects: entry.projects.map(project => {
+                if (project.id !== projectId) {
+                  return project
+                }
+                const base: Project = { ...project, customerSignOff: signOff }
+                if (statusUpdate) {
+                  return {
+                    ...base,
+                    status: statusUpdate.status,
+                    activeSubStatus: statusUpdate.activeSubStatus,
+                    statusHistory: statusUpdate.statusHistory,
+                  }
+                }
+                return base
+              }),
+            },
+      ),
+    )
+
+    const payload: Parameters<typeof updateProjectRecord>[1] = {
+      customerSignOff: signOff,
     }
-    const nextSignOffs = [...(existingProject.signOffs ?? []), payload]
+    if (statusUpdate) {
+      payload.status = statusUpdate.status
+      payload.activeSubStatus =
+        statusUpdate.status === 'Active'
+          ? statusUpdate.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+          : null
+      payload.statusHistory = statusUpdate.statusHistory
+    }
 
     try {
-      await updateProjectRecord(projectId, { signOffs: nextSignOffs })
-      setDb(prev =>
-        prev.map(c =>
-          c.id !== customerId
-            ? c
-            : {
-                ...c,
-                projects: c.projects.map(p =>
-                  p.id !== projectId ? p : { ...p, signOffs: nextSignOffs },
-                ),
-              },
-        ),
-      )
+      await updateProjectRecord(projectId, payload)
       setActionError(null)
       return null
     } catch (error) {
-      console.error('Failed to add project sign off', error)
-      const message = toErrorMessage(error, 'Failed to add sign off.')
+      console.error('Failed to save customer sign off', error)
+      const message = toErrorMessage(error, 'Failed to save customer sign off.')
       setActionError(message)
       return message
     }
   }
 
-  async function removeProjectSignOff(
+  async function uploadCustomerSignOff(
     customerId: string,
     projectId: string,
-    signOffId: string,
+    file: File,
+  ): Promise<string | null> {
+    if (!isAllowedProjectFile(file)) {
+      return 'Upload a PDF, Word document, or image file.'
+    }
+
+    try {
+      const dataUrl = await readFileAsDataUrl(file)
+      const completedAt = new Date().toISOString()
+      const filePayload: ProjectFile = {
+        id: createId(),
+        name: file.name,
+        type: file.type || guessMimeTypeFromName(file.name),
+        dataUrl,
+        uploadedAt: completedAt,
+      }
+      const signOffPayload: ProjectCustomerSignOff = {
+        id: createId(),
+        type: 'upload',
+        completedAt,
+        file: filePayload,
+      }
+      return await saveCustomerSignOff(customerId, projectId, signOffPayload, { markComplete: true })
+    } catch (error) {
+      console.error('Failed to upload customer sign off', error)
+      const message = toErrorMessage(error, 'Failed to upload customer sign off.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function generateCustomerSignOff(
+    customerId: string,
+    projectId: string,
+    submission: CustomerSignOffSubmission,
   ): Promise<string | null> {
     if (!canEdit) {
-      const message = 'Not authorized to remove sign offs.'
+      const message = 'Not authorized to record customer sign offs.'
+      setActionError(message)
+      return message
+    }
+
+    const customer = db.find(entry => entry.id === customerId)
+    const project = customer?.projects.find(entry => entry.id === projectId)
+    if (!customer || !project) {
+      const message = 'Project not found.'
+      setActionError(message)
+      return message
+    }
+
+    const completedAt = new Date().toISOString()
+
+    try {
+      const pdfDataUrl = await generateCustomerSignOffPdf({
+        projectNumber: project.number,
+        customerName: customer.name,
+        signedByName: submission.name,
+        signedByPosition: submission.position,
+        decision: submission.decision,
+        snags: submission.snags,
+        signaturePaths: submission.signaturePaths,
+        signatureDimensions: submission.signatureDimensions,
+        completedAt,
+      })
+
+      const sanitizedNumber = stripPrefix(project.number, /^P[-\s]?(.+)$/i)
+      const filePayload: ProjectFile = {
+        id: createId(),
+        name: `Customer-SignOff-${sanitizedNumber || project.number}.pdf`,
+        type: 'application/pdf',
+        dataUrl: pdfDataUrl,
+        uploadedAt: completedAt,
+      }
+
+      const signOffPayload: ProjectCustomerSignOff = {
+        id: createId(),
+        type: 'generated',
+        completedAt,
+        file: filePayload,
+        signedByName: submission.name,
+        signedByPosition: submission.position,
+        decision: submission.decision,
+        snags: submission.snags.length > 0 ? submission.snags : undefined,
+        signatureDataUrl: submission.signatureDataUrl,
+      }
+
+      return await saveCustomerSignOff(customerId, projectId, signOffPayload, { markComplete: true })
+    } catch (error) {
+      console.error('Failed to generate customer sign off', error)
+      const message = toErrorMessage(error, 'Failed to generate customer sign off.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function removeCustomerSignOff(
+    customerId: string,
+    projectId: string,
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to remove customer sign offs.'
       setActionError(message)
       return message
     }
@@ -1865,23 +1978,19 @@ function AppContent() {
     const existingProject = db
       .find(customer => customer.id === customerId)
       ?.projects.find(project => project.id === projectId)
+
     if (!existingProject) {
       const message = 'Project not found.'
       setActionError(message)
       return message
     }
 
-    const currentSignOffs = existingProject.signOffs ?? []
-    if (!currentSignOffs.some(entry => entry.id === signOffId)) {
-      return 'Sign off not found.'
+    if (!existingProject.customerSignOff) {
+      return 'Customer sign off not found.'
     }
 
-    const updatedSignOffs = currentSignOffs.filter(entry => entry.id !== signOffId)
-
     try {
-      await updateProjectRecord(projectId, {
-        signOffs: updatedSignOffs.length > 0 ? updatedSignOffs : null,
-      })
+      await updateProjectRecord(projectId, { customerSignOff: null })
       setDb(prev =>
         prev.map(c =>
           c.id !== customerId
@@ -1889,9 +1998,7 @@ function AppContent() {
             : {
                 ...c,
                 projects: c.projects.map(p =>
-                  p.id !== projectId
-                    ? p
-                    : { ...p, signOffs: updatedSignOffs.length > 0 ? updatedSignOffs : undefined },
+                  p.id !== projectId ? p : { ...p, customerSignOff: undefined },
                 ),
               },
         ),
@@ -1899,8 +2006,8 @@ function AppContent() {
       setActionError(null)
       return null
     } catch (error) {
-      console.error('Failed to remove project sign off', error)
-      const message = toErrorMessage(error, 'Failed to remove sign off.')
+      console.error('Failed to remove customer sign off', error)
+      const message = toErrorMessage(error, 'Failed to remove customer sign off.')
       setActionError(message)
       return message
     }
@@ -2119,6 +2226,34 @@ function AppContent() {
     })()
   }
 
+  function buildStatusUpdate(
+    project: Project,
+    status: ProjectStatus,
+    activeSubStatus?: ProjectActiveSubStatus,
+    changedBy?: string,
+  ) {
+    const normalizedActiveSubStatus =
+      status === 'Active'
+        ? activeSubStatus ?? project.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+        : undefined
+
+    const entry: ProjectStatusLogEntry = {
+      id: createId(),
+      status,
+      activeSubStatus: status === 'Active' ? normalizedActiveSubStatus : undefined,
+      changedAt: new Date().toISOString(),
+      changedBy: changedBy?.trim() || CURRENT_USER_NAME,
+    }
+
+    const history = [...(project.statusHistory ?? []), entry]
+
+    return {
+      status,
+      activeSubStatus: entry.activeSubStatus,
+      statusHistory: history,
+    }
+  }
+
   function updateProjectStatus(
     customerId: string,
     projectId: string,
@@ -2140,25 +2275,7 @@ function AppContent() {
       return
     }
 
-    const normalizedActiveSubStatus =
-      status === 'Active'
-        ? activeSubStatus ?? existingProject?.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
-        : undefined
-
-    const nextActiveSubStatus =
-      status === 'Active'
-        ? normalizedActiveSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
-        : undefined
-
-    const changedBy = context?.changedBy?.trim() || CURRENT_USER_NAME
-    const historyEntry: ProjectStatusLogEntry = {
-      id: createId(),
-      status,
-      activeSubStatus: nextActiveSubStatus,
-      changedAt: new Date().toISOString(),
-      changedBy,
-    }
-    const nextHistory = [...(existingProject.statusHistory ?? []), historyEntry]
+    const statusUpdate = buildStatusUpdate(existingProject, status, activeSubStatus, context?.changedBy)
 
     setDb(prev =>
       prev.map(c =>
@@ -2171,9 +2288,9 @@ function AppContent() {
                   ? p
                   : {
                       ...p,
-                      status,
-                      activeSubStatus: nextActiveSubStatus,
-                      statusHistory: nextHistory,
+                      status: statusUpdate.status,
+                      activeSubStatus: statusUpdate.activeSubStatus,
+                      statusHistory: statusUpdate.statusHistory,
                     },
               ),
             },
@@ -2183,9 +2300,12 @@ function AppContent() {
     void (async () => {
       try {
         await updateProjectRecord(projectId, {
-          status,
-          activeSubStatus: status === 'Active' ? nextActiveSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS : null,
-          statusHistory: nextHistory,
+          status: statusUpdate.status,
+          activeSubStatus:
+            statusUpdate.status === 'Active'
+              ? statusUpdate.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
+              : null,
+          statusHistory: statusUpdate.statusHistory,
         })
         setActionError(null)
       } catch (error) {

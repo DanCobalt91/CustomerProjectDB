@@ -3,10 +3,10 @@ import type {
   CustomerContact,
   Project,
   ProjectActiveSubStatus,
+  ProjectCustomerSignOff,
   ProjectDocuments,
   ProjectFile,
   ProjectFileCategory,
-  ProjectSignOff,
   ProjectStatusLogEntry,
   ProjectStatus,
   WO,
@@ -50,7 +50,7 @@ type StorageApi = {
       status?: ProjectStatus
       activeSubStatus?: ProjectActiveSubStatus | null
       statusHistory?: ProjectStatusLogEntry[] | null
-      signOffs?: ProjectSignOff[] | null
+      customerSignOff?: ProjectCustomerSignOff | null
     },
   ): Promise<Project>
   deleteProject(projectId: string): Promise<void>
@@ -115,7 +115,7 @@ export function updateProject(
     status?: ProjectStatus
     activeSubStatus?: ProjectActiveSubStatus | null
     statusHistory?: ProjectStatusLogEntry[] | null
-    signOffs?: ProjectSignOff[] | null
+    customerSignOff?: ProjectCustomerSignOff | null
   },
 ): Promise<Project> {
   return ensureLocalStorage().updateProject(projectId, data)
@@ -325,37 +325,52 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
-  function normalizeProjectSignOff(value: unknown): ProjectSignOff | null {
+  function normalizeCustomerSignOff(value: unknown): ProjectCustomerSignOff | null {
     if (!value || typeof value !== 'object') {
       return null
     }
 
     const raw = value as Record<string, unknown>
     const idRaw = typeof raw.id === 'string' ? raw.id.trim() : ''
-    const categoryValue = (raw as { category?: unknown }).category
-    const category = PROJECT_FILE_CATEGORIES.find(cat => cat === categoryValue) ?? null
-    if (!category) {
+    const typeRaw = (raw as { type?: unknown }).type
+    const type = typeRaw === 'upload' || typeRaw === 'generated' ? typeRaw : null
+    if (!type) {
       return null
     }
 
-    const signedByRaw = typeof raw.signedBy === 'string' ? raw.signedBy.trim() : ''
-    if (!signedByRaw) {
+    const file = normalizeProjectFile((raw as { file?: unknown }).file)
+    if (!file) {
       return null
     }
 
-    const signedAtRaw = typeof raw.signedAt === 'string' ? raw.signedAt : null
-    const signedAt = signedAtRaw && !Number.isNaN(Date.parse(signedAtRaw))
-      ? signedAtRaw
+    const completedAtRaw = typeof raw.completedAt === 'string' ? raw.completedAt : null
+    const completedAt = completedAtRaw && !Number.isNaN(Date.parse(completedAtRaw))
+      ? completedAtRaw
       : new Date().toISOString()
 
-    const noteRaw = typeof raw.note === 'string' ? raw.note.trim() : ''
+    const decisionRaw = (raw as { decision?: unknown }).decision
+    const decision =
+      decisionRaw === 'option1' || decisionRaw === 'option2' || decisionRaw === 'option3'
+        ? decisionRaw
+        : undefined
+
+    const snagsSource = Array.isArray((raw as { snags?: unknown }).snags)
+      ? ((raw as { snags?: unknown }).snags as unknown[])
+      : []
+    const snags = snagsSource
+      .map(item => (typeof item === 'string' ? item.trim() : ''))
+      .filter(item => item.length > 0)
 
     return {
       id: idRaw || createId(),
-      category,
-      signedBy: signedByRaw,
-      signedAt,
-      note: noteRaw || undefined,
+      type,
+      file,
+      completedAt,
+      decision,
+      snags: snags.length > 0 ? snags : undefined,
+      signedByName: toOptionalString((raw as { signedByName?: unknown }).signedByName),
+      signedByPosition: toOptionalString((raw as { signedByPosition?: unknown }).signedByPosition),
+      signatureDataUrl: toOptionalString((raw as { signatureDataUrl?: unknown }).signatureDataUrl),
     }
   }
 
@@ -450,12 +465,9 @@ function createLocalStorageStorage(): StorageApi {
       .map(normalizeStatusHistoryEntry)
       .filter((entry): entry is ProjectStatusLogEntry => !!entry)
 
-    const signOffSource = Array.isArray((raw as { signOffs?: unknown }).signOffs)
-      ? ((raw as { signOffs?: unknown }).signOffs as unknown[])
-      : []
-    const signOffs = signOffSource
-      .map(normalizeProjectSignOff)
-      .filter((entry): entry is ProjectSignOff => !!entry)
+    const customerSignOff = normalizeCustomerSignOff(
+      (raw as { customerSignOff?: unknown }).customerSignOff,
+    )
 
     return {
       id,
@@ -477,7 +489,7 @@ function createLocalStorageStorage(): StorageApi {
                 changedBy: 'System',
               },
             ],
-      signOffs: signOffs.length > 0 ? sortSignOffs(signOffs) : undefined,
+      customerSignOff: customerSignOff ?? undefined,
     }
   }
 
@@ -608,13 +620,17 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
-  function cloneProjectSignOff(entry: ProjectSignOff): ProjectSignOff {
+  function cloneCustomerSignOff(signOff: ProjectCustomerSignOff): ProjectCustomerSignOff {
     return {
-      id: entry.id,
-      category: entry.category,
-      signedAt: entry.signedAt,
-      signedBy: entry.signedBy,
-      note: entry.note,
+      id: signOff.id,
+      type: signOff.type,
+      completedAt: signOff.completedAt,
+      file: cloneProjectFile(signOff.file),
+      signedByName: signOff.signedByName,
+      signedByPosition: signOff.signedByPosition,
+      decision: signOff.decision,
+      snags: signOff.snags ? [...signOff.snags] : undefined,
+      signatureDataUrl: signOff.signatureDataUrl,
     }
   }
 
@@ -638,7 +654,9 @@ function createLocalStorageStorage(): StorageApi {
       wos: project.wos.map(cloneWorkOrder),
       documents: cloneProjectDocuments(project.documents),
       statusHistory: project.statusHistory?.map(cloneStatusHistoryEntry),
-      signOffs: project.signOffs?.map(cloneProjectSignOff),
+      customerSignOff: project.customerSignOff
+        ? cloneCustomerSignOff(project.customerSignOff)
+        : undefined,
     }
   }
 
@@ -668,10 +686,6 @@ function createLocalStorageStorage(): StorageApi {
     return [...entries].sort(
       (a, b) => new Date(a.changedAt).getTime() - new Date(b.changedAt).getTime(),
     )
-  }
-
-  function sortSignOffs(entries: ProjectSignOff[]): ProjectSignOff[] {
-    return [...entries].sort((a, b) => new Date(b.signedAt).getTime() - new Date(a.signedAt).getTime())
   }
 
   function normalizeInput(value: string | undefined): string | undefined {
@@ -854,7 +868,7 @@ function createLocalStorageStorage(): StorageApi {
             changedBy: 'System',
           },
         ],
-        signOffs: [],
+        customerSignOff: undefined,
       }
 
       const nextProjects = sortProjects([project, ...customer.projects])
@@ -872,7 +886,7 @@ function createLocalStorageStorage(): StorageApi {
         status?: ProjectStatus
         activeSubStatus?: ProjectActiveSubStatus | null
         statusHistory?: ProjectStatusLogEntry[] | null
-        signOffs?: ProjectSignOff[] | null
+        customerSignOff?: ProjectCustomerSignOff | null
       },
     ): Promise<Project> {
       const db = loadDatabase()
@@ -966,17 +980,17 @@ function createLocalStorageStorage(): StorageApi {
       }
       const normalizedStatusHistory = sortStatusHistory(nextStatusHistory)
 
-      let nextSignOffs = project.signOffs ?? []
-      if (data.signOffs !== undefined) {
-        if (data.signOffs === null) {
-          nextSignOffs = []
+      let nextCustomerSignOff = project.customerSignOff
+      if (data.customerSignOff !== undefined) {
+        if (data.customerSignOff === null) {
+          nextCustomerSignOff = undefined
         } else {
-          nextSignOffs = data.signOffs
-            .map(normalizeProjectSignOff)
-            .filter((entry): entry is ProjectSignOff => !!entry)
+          const normalized = normalizeCustomerSignOff(data.customerSignOff)
+          if (normalized) {
+            nextCustomerSignOff = normalized
+          }
         }
       }
-      const normalizedSignOffs = nextSignOffs.length > 0 ? sortSignOffs(nextSignOffs) : undefined
 
       const nextProject: Project = {
         ...project,
@@ -985,7 +999,7 @@ function createLocalStorageStorage(): StorageApi {
         note: applyNullable(project.note, data.note),
         documents: normalizedDocuments,
         statusHistory: normalizedStatusHistory,
-        signOffs: normalizedSignOffs,
+        customerSignOff: nextCustomerSignOff,
       }
 
       const updatedProjects = [...customer.projects]
