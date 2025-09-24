@@ -8,8 +8,9 @@ import {
   X,
   Search,
   ChevronRight,
-  MapPin,
+  ChevronDown,
   AlertCircle,
+  ArrowLeft,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type {
@@ -203,10 +204,12 @@ function AppContent() {
   const [showNewContactForm, setShowNewContactForm] = useState(false)
   const [newContact, setNewContact] = useState({ name: '', position: '', phone: '', email: '' })
   const [contactError, setContactError] = useState<string | null>(null)
-  const [isEditingCustomerName, setIsEditingCustomerName] = useState(false)
-  const [customerNameDraft, setCustomerNameDraft] = useState('')
-  const [customerNameError, setCustomerNameError] = useState<string | null>(null)
-  const [isSavingCustomerName, setIsSavingCustomerName] = useState(false)
+  const [customerListCollapsed, setCustomerListCollapsed] = useState(false)
+  const [projectListCollapsed, setProjectListCollapsed] = useState(false)
+  const [showCustomerEditor, setShowCustomerEditor] = useState(false)
+  const [customerEditorDraft, setCustomerEditorDraft] = useState({ name: '', address: '' })
+  const [customerEditorError, setCustomerEditorError] = useState<string | null>(null)
+  const [isSavingCustomerEditor, setIsSavingCustomerEditor] = useState(false)
   const [activeContactId, setActiveContactId] = useState<string | null>(null)
   const [showInlineProjectForm, setShowInlineProjectForm] = useState(false)
 
@@ -274,11 +277,14 @@ function AppContent() {
     setShowNewContactForm(false)
     setNewContact({ name: '', position: '', phone: '', email: '' })
     setContactError(null)
-    setIsEditingCustomerName(false)
-    setCustomerNameDraft(selectedCustomer?.name ?? '')
-    setCustomerNameError(null)
-    setIsSavingCustomerName(false)
     setShowInlineProjectForm(false)
+    setShowCustomerEditor(false)
+    setCustomerEditorDraft({
+      name: selectedCustomer?.name ?? '',
+      address: selectedCustomer?.address ?? '',
+    })
+    setCustomerEditorError(null)
+    setIsSavingCustomerEditor(false)
     closeContactEditor()
   }, [selectedCustomer?.id, closeContactEditor])
 
@@ -298,12 +304,6 @@ function AppContent() {
   }, [db, contactEditor, closeContactEditor])
 
   useEffect(() => {
-    if (!isEditingCustomerName) {
-      setCustomerNameDraft(selectedCustomer?.name ?? '')
-    }
-  }, [selectedCustomer?.name, isEditingCustomerName])
-
-  useEffect(() => {
     if (!selectedCustomer || selectedCustomer.contacts.length === 0) {
       setActiveContactId(null)
       return
@@ -315,6 +315,15 @@ function AppContent() {
       return selectedCustomer.contacts[0]?.id ?? null
     })
   }, [selectedCustomer])
+
+
+  useEffect(() => {
+    setCustomerListCollapsed(!!selectedCustomer)
+  }, [selectedCustomer?.id])
+
+  useEffect(() => {
+    setProjectListCollapsed(!!selectedProjectId)
+  }, [selectedProjectId])
 
 
 
@@ -440,6 +449,16 @@ function AppContent() {
     [projectStatusData],
   )
 
+  const activeProjectStatusData = useMemo(
+    () => projectStatusData.filter(status => status.key !== 'complete'),
+    [projectStatusData],
+  )
+
+  const totalActiveProjects = useMemo(
+    () => activeProjectStatusData.reduce((sum, item) => sum + item.count, 0),
+    [activeProjectStatusData],
+  )
+
   const activeProjects = useMemo(
     () =>
       projectStatusBucketCounts.active_fds +
@@ -520,17 +539,103 @@ function AppContent() {
     }
   }
 
+  const openCustomerEditor = () => {
+    if (!selectedCustomer) {
+      return
+    }
+    setCustomerEditorDraft({
+      name: selectedCustomer.name,
+      address: selectedCustomer.address ?? '',
+    })
+    setCustomerEditorError(null)
+    setIsSavingCustomerEditor(false)
+    setShowCustomerEditor(true)
+  }
+
   const renderCustomersPage = () => {
+    const customerListCard = (
+      <Card className='panel h-fit'>
+        <CardHeader className='flex-col gap-2'>
+          <div className='flex items-start justify-between gap-3'>
+            <div>
+              <div className='text-lg font-semibold text-slate-900'>Customers</div>
+              <div className='text-sm text-slate-500'>
+                {customerCount === 1 ? '1 customer listed' : `${customerCount} customers listed`}
+              </div>
+            </div>
+            {hasCustomers ? (
+              <button
+                type='button'
+                onClick={() => setCustomerListCollapsed(prev => !prev)}
+                className='flex items-center gap-1 rounded-full border border-slate-200/70 bg-white/80 px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-800'
+                aria-expanded={!customerListCollapsed}
+              >
+                {customerListCollapsed ? 'Show list' : 'Hide list'}
+                <ChevronDown
+                  size={14}
+                  className={`transition-transform ${customerListCollapsed ? '' : 'rotate-180'}`}
+                  aria-hidden
+                />
+              </button>
+            ) : null}
+          </div>
+        </CardHeader>
+        {!customerListCollapsed && (
+          <CardContent>
+            {sortedCustomers.length === 0 ? (
+              <p className='text-sm text-slate-500'>Add a customer to see it listed here.</p>
+            ) : (
+              <div className='space-y-1.5'>
+                {sortedCustomers.map(customer => {
+                  const isSelected = selectedCustomerId === customer.id
+                  const baseClasses =
+                    'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                  const selectionClasses = isSelected
+                    ? 'border-indigo-500 bg-indigo-50/80 text-slate-900 shadow-md'
+                    : 'hover:border-slate-300 hover:bg-white'
+
+                  return (
+                    <button
+                      type='button'
+                      key={customer.id}
+                      onClick={() => {
+                        setSelectedCustomerId(customer.id)
+                        setSelectedProjectId(null)
+                      }}
+                      className={`${baseClasses} ${selectionClasses}`}
+                      aria-pressed={isSelected}
+                      title='View customer details'
+                    >
+                      <div className='flex flex-1 flex-col overflow-hidden text-left'>
+                        <span className='truncate text-sm font-semibold text-slate-900'>{customer.name}</span>
+                        <span className='truncate text-xs text-slate-500'>
+                          {customer.address ? customer.address : 'No address on file.'}
+                        </span>
+                      </div>
+                      <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        )}
+      </Card>
+    )
+
     if (!selectedCustomer) {
       return (
-        <Card className='panel'>
-          <CardHeader>
-            <div className='text-lg font-semibold text-slate-900'>Customer details</div>
-          </CardHeader>
-          <CardContent>
-            <p className='text-sm text-slate-600'>Select a customer from the sidebar to view their information.</p>
-          </CardContent>
-        </Card>
+        <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]'>
+          <Card className='panel'>
+            <CardHeader>
+              <div className='text-lg font-semibold text-slate-900'>Customer details</div>
+            </CardHeader>
+            <CardContent>
+              <p className='text-sm text-slate-600'>Select a customer from the list to view their information.</p>
+            </CardContent>
+          </Card>
+          {customerListCard}
+        </div>
       )
     }
 
@@ -542,82 +647,41 @@ function AppContent() {
         : null
 
     return (
-      <div className='space-y-6'>
+      <div className='grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]'>
         <Card className='panel'>
           <CardHeader>
             <div className='flex flex-col gap-3'>
               <div className='flex flex-wrap items-start gap-3'>
                 <div className='space-y-1'>
                   <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Customer</div>
-                  {isEditingCustomerName ? (
-                    <div className='flex flex-col gap-2'>
-                      <Label htmlFor='customer-name'>Customer Name</Label>
-                      <Input
-                        id='customer-name'
-                        value={customerNameDraft}
-                        onChange={(e) => {
-                          setCustomerNameDraft((e.target as HTMLInputElement).value)
-                          if (customerNameError) setCustomerNameError(null)
-                        }}
-                        placeholder='Enter customer name'
-                        disabled={!canEdit || isSavingCustomerName}
-                      />
-                      {customerNameError && (
-                        <p className='flex items-center gap-1 text-xs text-rose-600'>
-                          <AlertCircle size={14} /> {customerNameError}
-                        </p>
-                      )}
-                    </div>
-                  ) : (
-                    <div className='text-lg font-semibold text-slate-900'>Customer: {selectedCustomer.name}</div>
-                  )}
+                  <div className='text-lg font-semibold text-slate-900'>Customer: {selectedCustomer.name}</div>
                 </div>
-                <div className='flex flex-wrap items-center gap-2 self-start ml-auto'>
-                  {isEditingCustomerName ? (
-                    <>
-                      <Button
-                        onClick={() => {
-                          void handleSaveCustomerName()
-                        }}
-                        disabled={isSavingCustomerName || !canEdit}
-                        title={canEdit ? 'Save customer name' : 'Read-only access'}
-                      >
-                        <Save size={16} /> Save
-                      </Button>
-                      <Button
-                        variant='ghost'
-                        onClick={() => {
-                          setIsEditingCustomerName(false)
-                          setCustomerNameDraft(selectedCustomer.name)
-                          setCustomerNameError(null)
-                        }}
-                        disabled={isSavingCustomerName}
-                        title='Cancel editing'
-                      >
-                        <X size={16} /> Cancel
-                      </Button>
-                    </>
-                  ) : (
-                    <Button
-                      variant='outline'
-                      onClick={() => {
-                        setIsEditingCustomerName(true)
-                        setCustomerNameDraft(selectedCustomer.name)
-                        setCustomerNameError(null)
-                      }}
-                      title={canEdit ? 'Edit customer name' : 'Read-only access'}
-                      disabled={!canEdit}
-                    >
-                      <Pencil size={16} />
-                      <span className='sr-only'>Edit customer</span>
-                    </Button>
-                  )}
+                <div className='ml-auto flex flex-wrap items-center gap-2'>
+                  <Button
+                    variant='outline'
+                    onClick={() => setSelectedCustomerId(null)}
+                    title='Return to customer index'
+                  >
+                    <ArrowLeft size={16} />
+                    Return to index
+                  </Button>
+                  <Button
+                    variant='outline'
+                    onClick={openCustomerEditor}
+                    title={canEdit ? 'Edit customer details' : 'Read-only access'}
+                    disabled={!canEdit}
+                  >
+                    <Pencil size={16} />
+                    Edit details
+                  </Button>
                   <Button
                     variant='ghost'
                     className='text-rose-600 hover:bg-rose-50'
                     onClick={() => {
                       if (!selectedCustomer) return
-                      const confirmed = window.confirm('Delete this customer and all associated projects, purchase orders, and work orders?')
+                      const confirmed = window.confirm(
+                        'Delete this customer and all associated projects, purchase orders, and work orders?',
+                      )
                       if (!confirmed) return
                       void deleteCustomer(selectedCustomer.id)
                     }}
@@ -633,42 +697,41 @@ function AppContent() {
           </CardHeader>
           <CardContent>
             <div className='grid gap-6 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]'>
-              <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
+              <div className='relative rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
                 <div className='text-sm font-semibold text-slate-700'>Address</div>
-                <div className='mt-3 space-y-3'>
-                  <EditableField
-                    label='Address'
-                    value={selectedCustomer.address}
-                    placeholder='Add address'
-                    copyable
-                    copyTitle='Copy address'
-                    onSave={async (value) => {
-                      const trimmed = value.trim()
-                      await saveCustomerDetails(selectedCustomer.id, { address: trimmed ? trimmed : null })
-                    }}
-                  />
-                  {selectedCustomerAddressForMap ? (
-                    <div className='space-y-3'>
-                      <a
-                        href={`https://www.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}`}
-                        target='_blank'
-                        rel='noreferrer'
-                        className='inline-flex items-center gap-2 text-sm font-medium text-sky-600 hover:text-sky-500'
-                      >
-                        <MapPin size={16} /> Open in Google Maps
-                      </a>
-                      <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
-                        <iframe
-                          title={`Map preview for ${selectedCustomer.name}`}
-                          src={`https://maps.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}&z=15&output=embed`}
-                          loading='lazy'
-                          className='h-40 w-full border-0'
-                          referrerPolicy='no-referrer-when-downgrade'
-                        />
-                      </div>
-                    </div>
-                  ) : null}
+                {selectedCustomer.address ? (
+                  <Button
+                    variant='outline'
+                    onClick={() =>
+                      selectedCustomer.address && navigator.clipboard.writeText(selectedCustomer.address)
+                    }
+                    className='absolute right-5 top-5'
+                    title='Copy address'
+                  >
+                    <Copy size={16} />
+                    <span className='sr-only'>Copy address</span>
+                  </Button>
+                ) : null}
+                <div className='mt-3 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                  {selectedCustomer.address ? (
+                    <span className='block whitespace-pre-wrap break-words text-slate-800'>
+                      {selectedCustomer.address}
+                    </span>
+                  ) : (
+                    <span className='text-slate-400'>No address on file.</span>
+                  )}
                 </div>
+                {selectedCustomerAddressForMap ? (
+                  <div className='mt-3 overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
+                    <iframe
+                      title={`Map preview for ${selectedCustomer.name}`}
+                      src={`https://maps.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}&z=15&output=embed`}
+                      loading='lazy'
+                      className='h-40 w-full border-0'
+                      referrerPolicy='no-referrer-when-downgrade'
+                    />
+                  </div>
+                ) : null}
               </div>
               <div className='space-y-4'>
                 <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
@@ -699,7 +762,12 @@ function AppContent() {
                       {selectedCustomer.contacts.length > 1 && (
                         <div className='mt-4 flex flex-wrap items-center gap-2'>
                           {selectedCustomer.contacts.map((contact, index) => {
-                            const label = contact.name?.trim() || `Contact ${index + 1}`
+                            const name = contact.name?.trim()
+                            const position = contact.position?.trim()
+                            const labelParts: string[] = []
+                            if (name) labelParts.push(name)
+                            if (position) labelParts.push(position)
+                            const label = labelParts.length > 0 ? labelParts.join(' — ') : `Contact ${index + 1}`
                             const isActive = contact.id === (activeContact?.id ?? null)
                             return (
                               <button
@@ -759,11 +827,12 @@ function AppContent() {
                                 title={canEdit ? 'Remove contact' : 'Read-only access'}
                                 disabled={!canEdit}
                               >
-                                <Trash2 size={16} /> Remove
+                                <Trash2 size={16} />
+                                <span className='sr-only'>Remove contact</span>
                               </Button>
                             </div>
                           </div>
-                          <div className='mt-4 grid gap-3 md:grid-cols-2'>
+                          <div className='mt-4 space-y-2'>
                             <ContactInfoField
                               label='Name'
                               value={activeContact.name}
@@ -974,70 +1043,204 @@ function AppContent() {
             </div>
           </CardContent>
         </Card>
+        {customerListCard}
       </div>
     )
   }
-
   const renderProjectsPage = () => {
+    const { active: activeProjects, completed: completedProjects } = projectLists
+    const totalProjectsCount = activeProjects.length + completedProjects.length
+
+    const projectListCard = (
+      <Card className='panel h-fit'>
+        <CardHeader className='flex-col gap-2'>
+          <div className='flex items-start justify-between gap-3'>
+            <div>
+              <div className='text-lg font-semibold text-slate-900'>Projects</div>
+              <div className='text-sm text-slate-500'>
+                {totalProjectsCount === 1 ? '1 project listed' : `${totalProjectsCount} projects listed`}
+              </div>
+            </div>
+            {totalProjectsCount > 0 ? (
+              <button
+                type='button'
+                onClick={() => setProjectListCollapsed(prev => !prev)}
+                className='flex items-center gap-1 rounded-full border border-slate-200/70 bg-white/80 px-3 py-1 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-slate-300 hover:text-slate-800'
+                aria-expanded={!projectListCollapsed}
+              >
+                {projectListCollapsed ? 'Show list' : 'Hide list'}
+                <ChevronDown
+                  size={14}
+                  className={`transition-transform ${projectListCollapsed ? '' : 'rotate-180'}`}
+                  aria-hidden
+                />
+              </button>
+            ) : null}
+          </div>
+        </CardHeader>
+        {!projectListCollapsed && (
+          <CardContent className='space-y-4'>
+            <div>
+              <div className='flex items-center justify-between gap-2'>
+                <div className='text-sm font-semibold text-slate-700'>Active projects</div>
+                <span className='text-xs text-slate-500'>
+                  {activeProjects.length === 1 ? '1 active' : `${activeProjects.length} active`}
+                </span>
+              </div>
+              {activeProjects.length === 0 ? (
+                <p className='mt-2 text-sm text-slate-500'>Add a project to see it listed here.</p>
+              ) : (
+                <div className='mt-2 space-y-1.5'>
+                  {activeProjects.map(project => {
+                    const isSelected = selectedProjectId === project.projectId
+                    const baseClasses =
+                      'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                    const selectionClasses = isSelected
+                      ? 'border-indigo-500 bg-indigo-50/80 text-slate-900 shadow-md'
+                      : 'hover:border-slate-300 hover:bg-white'
+
+                    return (
+                      <button
+                        type='button'
+                        key={project.projectId}
+                        onClick={() => {
+                          setSelectedCustomerId(project.customerId)
+                          setSelectedProjectId(project.projectId)
+                          setActivePage('projects')
+                        }}
+                        className={`${baseClasses} ${selectionClasses}`}
+                        aria-pressed={isSelected}
+                        title='View project details'
+                      >
+                        <div className='flex flex-1 flex-col overflow-hidden text-left'>
+                          <span className='truncate text-sm font-semibold text-slate-900'>{project.projectNumber}</span>
+                          <span className='truncate text-xs text-slate-600'>{project.customerName}</span>
+                          <span className='truncate text-xs font-medium text-slate-500'>{project.statusLabel}</span>
+                        </div>
+                        <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+            <div>
+              <div className='flex items-center justify-between gap-2'>
+                <div className='text-sm font-semibold text-slate-700'>Completed projects</div>
+                <span className='text-xs text-slate-500'>
+                  {completedProjects.length === 1 ? '1 complete' : `${completedProjects.length} complete`}
+                </span>
+              </div>
+              {completedProjects.length === 0 ? (
+                <p className='mt-2 text-sm text-slate-500'>Completed projects will appear here.</p>
+              ) : (
+                <div className='mt-2 space-y-1.5'>
+                  {completedProjects.map(project => {
+                    const isSelected = selectedProjectId === project.projectId
+                    const baseClasses =
+                      'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                    const selectionClasses = isSelected
+                      ? 'border-slate-400 bg-slate-50/80 text-slate-900 shadow-md'
+                      : 'hover:border-slate-300 hover:bg-white'
+
+                    return (
+                      <button
+                        type='button'
+                        key={project.projectId}
+                        onClick={() => {
+                          setSelectedCustomerId(project.customerId)
+                          setSelectedProjectId(project.projectId)
+                          setActivePage('projects')
+                        }}
+                        className={`${baseClasses} ${selectionClasses}`}
+                        aria-pressed={isSelected}
+                        title='View project details'
+                      >
+                        <div className='flex flex-1 flex-col overflow-hidden text-left'>
+                          <span className='truncate text-sm font-semibold text-slate-900'>{project.projectNumber}</span>
+                          <span className='truncate text-xs text-slate-600'>{project.customerName}</span>
+                          <span className='truncate text-xs font-medium text-slate-500'>{project.statusLabel}</span>
+                        </div>
+                        <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </CardContent>
+        )}
+      </Card>
+    )
+
     if (!selectedProjectId) {
       return (
-        <Card className='panel'>
-          <CardHeader>
-            <div className='text-lg font-semibold text-slate-900'>Project details</div>
-          </CardHeader>
-          <CardContent>
-            <p className='text-sm text-slate-600'>Select a project from the sidebar to review its documents and work orders.</p>
-          </CardContent>
-        </Card>
+        <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]'>
+          <Card className='panel'>
+            <CardHeader>
+              <div className='text-lg font-semibold text-slate-900'>Project details</div>
+            </CardHeader>
+            <CardContent>
+              <p className='text-sm text-slate-600'>Select a project from the list to review its documents and work orders.</p>
+            </CardContent>
+          </Card>
+          {projectListCard}
+        </div>
       )
     }
 
     if (!selectedProjectData) {
       return (
-        <Card className='panel'>
-          <CardHeader>
-            <div className='text-lg font-semibold'>Project not found</div>
-          </CardHeader>
-          <CardContent>
-            <p className='text-sm text-slate-600'>We couldn't find that project. It may have been deleted.</p>
-            <div className='mt-4'>
-              <Button onClick={() => setSelectedProjectId(null)}>Back to index</Button>
-            </div>
-          </CardContent>
-        </Card>
+        <div className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]'>
+          <Card className='panel'>
+            <CardHeader>
+              <div className='text-lg font-semibold'>Project not found</div>
+            </CardHeader>
+            <CardContent>
+              <p className='text-sm text-slate-600'>We couldn't find that project. It may have been deleted.</p>
+              <div className='mt-4'>
+                <Button onClick={() => setSelectedProjectId(null)}>Return to index</Button>
+              </div>
+            </CardContent>
+          </Card>
+          {projectListCard}
+        </div>
       )
     }
 
     return (
-      <ProjectPage
-        customer={selectedProjectData.customer}
-        project={selectedProjectData.project}
-        canEdit={canEdit}
-        onUpdateProjectNote={(note) =>
-          updateProjectNote(selectedProjectData.customer.id, selectedProjectData.project.id, note)
-        }
-        onUpdateProjectStatus={(status, activeSubStatus) =>
-          updateProjectStatus(
-            selectedProjectData.customer.id,
-            selectedProjectData.project.id,
-            status,
-            activeSubStatus,
-          )
-        }
-        onAddWO={(data) => addWO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
-        onDeleteWO={(woId) => deleteWO(selectedProjectData.customer.id, selectedProjectData.project.id, woId)}
-        onUploadDocument={(category, file) =>
-          uploadProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category, file)
-        }
-        onRemoveDocument={(category) =>
-          removeProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category)
-        }
-        onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
-        onNavigateBack={() => setSelectedProjectId(null)}
-      />
+      <div className='grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,320px)]'>
+        <ProjectPage
+          customer={selectedProjectData.customer}
+          project={selectedProjectData.project}
+          canEdit={canEdit}
+          onUpdateProjectNote={(note) =>
+            updateProjectNote(selectedProjectData.customer.id, selectedProjectData.project.id, note)
+          }
+          onUpdateProjectStatus={(status, activeSubStatus) =>
+            updateProjectStatus(
+              selectedProjectData.customer.id,
+              selectedProjectData.project.id,
+              status,
+              activeSubStatus,
+            )
+          }
+          onAddWO={(data) => addWO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
+          onDeleteWO={(woId) => deleteWO(selectedProjectData.customer.id, selectedProjectData.project.id, woId)}
+          onUploadDocument={(category, file) =>
+            uploadProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category, file)
+          }
+          onRemoveDocument={(category) =>
+            removeProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category)
+          }
+          onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
+          onNavigateBack={() => setSelectedProjectId(null)}
+          onReturnToIndex={() => setSelectedProjectId(null)}
+        />
+        {projectListCard}
+      </div>
     )
   }
-
   const renderCustomersSidebar = () => (
     <div className='space-y-4'>
       <Card className='panel'>
@@ -1096,52 +1299,6 @@ function AppContent() {
         </CardContent>
       </Card>
 
-      <Card className='panel'>
-        <CardHeader className='flex-col items-start gap-2'>
-          <div className='text-lg font-semibold text-slate-900'>Customers</div>
-          <div className='text-sm text-slate-500'>
-            {customerCount === 1 ? '1 customer listed' : `${customerCount} customers listed`}
-          </div>
-        </CardHeader>
-        <CardContent>
-          {sortedCustomers.length === 0 ? (
-            <p className='text-sm text-slate-500'>Add a customer to see it listed here.</p>
-          ) : (
-            <div className='space-y-1.5'>
-              {sortedCustomers.map(customer => {
-                const isSelected = selectedCustomerId === customer.id
-                const baseClasses =
-                  'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
-                const selectionClasses = isSelected
-                  ? 'border-indigo-500 bg-indigo-50/80 text-slate-900 shadow-md'
-                  : 'hover:border-slate-300 hover:bg-white'
-
-                return (
-                  <button
-                    type='button'
-                    key={customer.id}
-                    onClick={() => {
-                      setSelectedCustomerId(customer.id)
-                      setSelectedProjectId(null)
-                    }}
-                    className={`${baseClasses} ${selectionClasses}`}
-                    aria-pressed={isSelected}
-                    title='View customer details'
-                  >
-                    <div className='flex flex-1 flex-col overflow-hidden text-left'>
-                      <span className='truncate text-sm font-semibold text-slate-900'>{customer.name}</span>
-                      <span className='truncate text-xs text-slate-500'>
-                        {customer.address ? customer.address : 'No address on file.'}
-                      </span>
-                    </div>
-                    <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
-                  </button>
-                )
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
     </div>
   )
 
@@ -1207,102 +1364,6 @@ function AppContent() {
             </div>
           </CardContent>
         </Card>
-
-        <Card className='panel'>
-          <CardHeader className='flex-col items-start gap-2'>
-            <div className='text-lg font-semibold text-slate-900'>Active Projects</div>
-            <div className='text-sm text-slate-500'>
-              {activeProjects.length === 1 ? '1 active project' : `${activeProjects.length} active projects`}
-            </div>
-          </CardHeader>
-          <CardContent>
-            {activeProjects.length === 0 ? (
-              <p className='text-sm text-slate-500'>Add a project to see it listed here.</p>
-            ) : (
-              <div className='space-y-1.5'>
-                {activeProjects.map(project => {
-                  const isSelected = selectedProjectId === project.projectId
-                  const baseClasses =
-                    'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
-                  const selectionClasses = isSelected
-                    ? 'border-indigo-500 bg-indigo-50/80 text-slate-900 shadow-md'
-                    : 'hover:border-slate-300 hover:bg-white'
-
-                  return (
-                    <button
-                      type='button'
-                      key={project.projectId}
-                      onClick={() => {
-                        setSelectedCustomerId(project.customerId)
-                        setSelectedProjectId(project.projectId)
-                        setActivePage('projects')
-                      }}
-                      className={`${baseClasses} ${selectionClasses}`}
-                      aria-pressed={isSelected}
-                      title='View project details'
-                    >
-                      <div className='flex flex-1 flex-col overflow-hidden text-left'>
-                        <span className='truncate text-sm font-semibold text-slate-900'>{project.projectNumber}</span>
-                        <span className='truncate text-xs text-slate-600'>{project.customerName}</span>
-                        <span className='truncate text-xs font-medium text-slate-500'>{project.statusLabel}</span>
-                      </div>
-                      <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className='panel'>
-          <CardHeader className='flex-col items-start gap-2'>
-            <div className='text-lg font-semibold text-slate-900'>Completed Projects</div>
-            <div className='text-sm text-slate-500'>
-              {completedProjects.length === 1
-                ? '1 completed project'
-                : `${completedProjects.length} completed projects`}
-            </div>
-          </CardHeader>
-          <CardContent>
-            {completedProjects.length === 0 ? (
-              <p className='text-sm text-slate-500'>Completed projects will appear here.</p>
-            ) : (
-              <div className='space-y-1.5'>
-                {completedProjects.map(project => {
-                  const isSelected = selectedProjectId === project.projectId
-                  const baseClasses =
-                    'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
-                  const selectionClasses = isSelected
-                    ? 'border-slate-400 bg-slate-50/80 text-slate-900 shadow-md'
-                    : 'hover:border-slate-300 hover:bg-white'
-
-                  return (
-                    <button
-                      type='button'
-                      key={project.projectId}
-                      onClick={() => {
-                        setSelectedCustomerId(project.customerId)
-                        setSelectedProjectId(project.projectId)
-                        setActivePage('projects')
-                      }}
-                      className={`${baseClasses} ${selectionClasses}`}
-                      aria-pressed={isSelected}
-                      title='View project details'
-                    >
-                      <div className='flex flex-1 flex-col overflow-hidden text-left'>
-                        <span className='truncate text-sm font-semibold text-slate-900'>{project.projectNumber}</span>
-                        <span className='truncate text-xs text-slate-600'>{project.customerName}</span>
-                        <span className='truncate text-xs font-medium text-slate-500'>{project.statusLabel}</span>
-                      </div>
-                      <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
-                    </button>
-                  )
-                })}
-              </div>
-            )}
-          </CardContent>
-        </Card>
       </div>
     )
   }
@@ -1359,8 +1420,8 @@ function AppContent() {
 
   const renderDashboardView = () => {
     const averageWorkOrders = totalProjects > 0 ? totalWorkOrders / totalProjects : 0
-    const pieChartData = projectStatusData.map(status => ({ value: status.count, color: status.color }))
-    const pieAriaLabel = projectStatusData
+    const pieChartData = activeProjectStatusData.map(status => ({ value: status.count, color: status.color }))
+    const pieAriaLabel = activeProjectStatusData
       .map(status => `${status.label}: ${status.count} ${status.count === 1 ? 'project' : 'projects'}`)
       .join('; ')
 
@@ -1412,6 +1473,8 @@ function AppContent() {
           <CardContent>
             {totalProjects === 0 ? (
               <p className='text-sm text-slate-500'>Add a project to see status details.</p>
+            ) : totalActiveProjects === 0 ? (
+              <p className='text-sm text-slate-500'>All projects are marked complete. Active lifecycle data will appear here once projects resume.</p>
             ) : (
               <div className='flex flex-col gap-6 lg:flex-row lg:items-center'>
                 <div className='flex justify-center lg:flex-1'>
@@ -1419,18 +1482,18 @@ function AppContent() {
                     data={pieChartData}
                     size={240}
                     thickness={80}
-                    ariaLabel={`Project status distribution. ${pieAriaLabel}`}
+                    ariaLabel={`Active project status distribution. ${pieAriaLabel}`}
                     centerContent={
                       <div className='px-4 text-center'>
-                        <div className='text-2xl font-semibold text-slate-900'>{totalProjects}</div>
-                        <div className='text-xs font-medium uppercase tracking-wide text-slate-500'>Projects</div>
+                        <div className='text-2xl font-semibold text-slate-900'>{totalActiveProjects}</div>
+                        <div className='text-xs font-medium uppercase tracking-wide text-slate-500'>Active Projects</div>
                       </div>
                     }
                   />
                 </div>
                 <div className='flex-1 space-y-3'>
-                  {projectStatusData.map(status => {
-                    const percentage = totalProjects > 0 ? Math.round((status.count / totalProjects) * 100) : 0
+                  {activeProjectStatusData.map(status => {
+                    const percentage = totalActiveProjects > 0 ? Math.round((status.count / totalActiveProjects) * 100) : 0
                     return (
                       <div
                         key={status.key}
@@ -1794,40 +1857,37 @@ function AppContent() {
     }
   }
 
-  async function handleSaveCustomerName() {
+  async function handleSaveCustomerEditor() {
     if (!selectedCustomer) {
       return
     }
     if (!canEdit) {
-      setCustomerNameError('You have read-only access.')
+      setCustomerEditorError('You have read-only access.')
       return
     }
-    const trimmed = customerNameDraft.trim()
-    if (!trimmed) {
-      setCustomerNameError('Customer name is required.')
+    const trimmedName = customerEditorDraft.name.trim()
+    const trimmedAddress = customerEditorDraft.address.trim()
+    if (!trimmedName) {
+      setCustomerEditorError('Customer name is required.')
       return
     }
-    if (customerNameExists(trimmed, selectedCustomer.id)) {
-      setCustomerNameError('A customer with this name already exists.')
-      return
-    }
-    if (trimmed === selectedCustomer.name.trim()) {
-      setIsEditingCustomerName(false)
-      setCustomerNameError(null)
-      setCustomerNameDraft(selectedCustomer.name)
+    if (customerNameExists(trimmedName, selectedCustomer.id)) {
+      setCustomerEditorError('A customer with this name already exists.')
       return
     }
 
-    setIsSavingCustomerName(true)
-    setCustomerNameError(null)
+    setIsSavingCustomerEditor(true)
+    setCustomerEditorError(null)
     try {
-      await saveCustomerDetails(selectedCustomer.id, { name: trimmed })
-      setIsEditingCustomerName(false)
-      setCustomerNameDraft(trimmed)
+      await saveCustomerDetails(selectedCustomer.id, {
+        name: trimmedName,
+        address: trimmedAddress ? trimmedAddress : null,
+      })
+      setShowCustomerEditor(false)
     } catch (error) {
-      setCustomerNameError(error instanceof Error ? error.message : 'Failed to update customer.')
+      setCustomerEditorError(error instanceof Error ? error.message : 'Failed to update customer.')
     } finally {
-      setIsSavingCustomerName(false)
+      setIsSavingCustomerEditor(false)
     }
   }
 
@@ -2064,130 +2124,6 @@ function AppContent() {
     }
   }
 
-  function EditableField({
-    label,
-    value,
-    onSave,
-    placeholder,
-    copyable,
-    copyTitle,
-  }: {
-    label: string
-    value?: string | null
-    onSave: (v: string) => Promise<void> | void
-    placeholder?: string
-    copyable?: boolean
-    copyTitle?: string
-  }) {
-    const [val, setVal] = useState(value ?? '')
-    const [isEditing, setIsEditing] = useState(false)
-    const [isSaving, setIsSaving] = useState(false)
-    const [fieldError, setFieldError] = useState<string | null>(null)
-
-    useEffect(() => {
-      if (!isEditing) {
-        setVal(value ?? '')
-      }
-    }, [value, isEditing])
-
-    useEffect(() => {
-      if (!canEdit && isEditing) {
-        setIsEditing(false)
-        setFieldError(null)
-        setVal(value ?? '')
-      }
-    }, [canEdit, isEditing, value])
-
-    const hasValue = !!value && value.trim().length > 0
-    const accessibleCopyLabel = copyTitle || `Copy ${label.toLowerCase()}`
-    const accessibleEditLabel = `Edit ${label.toLowerCase()}`
-
-    const handleSave = async () => {
-      const trimmed = val.trim()
-      setIsSaving(true)
-      setFieldError(null)
-      try {
-        await onSave(trimmed)
-        setIsEditing(false)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to save field.'
-        setFieldError(message)
-      } finally {
-        setIsSaving(false)
-      }
-    }
-
-    return (
-      <div className='flex flex-col gap-1'>
-        <Label>{label}</Label>
-        <div className='flex flex-wrap items-center gap-2'>
-          {isEditing ? (
-            <>
-              <Input
-                value={val}
-                onChange={(e) => {
-                  setVal((e.target as HTMLInputElement).value)
-                  if (fieldError) setFieldError(null)
-                }}
-                placeholder={placeholder}
-                disabled={!canEdit}
-                className='flex-1 min-w-0'
-              />
-              <Button onClick={handleSave} title='Save' disabled={isSaving}>
-                <Save size={16} /> Save
-              </Button>
-              <Button
-                variant='ghost'
-                onClick={() => {
-                  setIsEditing(false)
-                  setVal(value ?? '')
-                  setFieldError(null)
-                }}
-                title='Cancel'
-              >
-                <X size={16} />
-              </Button>
-            </>
-          ) : (
-            <>
-              <div className='min-h-[38px] flex-1 min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm'>
-                {hasValue ? (
-                  <span className='block break-words whitespace-pre-wrap text-slate-800'>{value}</span>
-                ) : (
-                  <span className='block text-slate-400'>{placeholder || 'Not set'}</span>
-                )}
-              </div>
-              {copyable && hasValue ? (
-                <Button
-                  variant='outline'
-                  onClick={() => value && navigator.clipboard.writeText(value)}
-                  title={accessibleCopyLabel}
-                >
-                  <Copy size={16} />
-                  <span className='sr-only'>{accessibleCopyLabel}</span>
-                </Button>
-              ) : null}
-              <Button
-                variant='outline'
-                onClick={() => setIsEditing(true)}
-                title={canEdit ? accessibleEditLabel : 'Read-only access'}
-                disabled={!canEdit}
-              >
-                <Pencil size={16} />
-                <span className='sr-only'>{accessibleEditLabel}</span>
-              </Button>
-            </>
-          )}
-        </div>
-        {fieldError && (
-          <p className='flex items-center gap-1 text-xs text-rose-600'>
-            <AlertCircle size={14} /> {fieldError}
-          </p>
-        )}
-      </div>
-    )
-  }
-
   function ContactInfoField({
     label,
     value,
@@ -2202,16 +2138,12 @@ function AppContent() {
     const display = value?.trim()
     const hasValue = !!display
     return (
-      <div className='flex flex-col gap-1'>
-        <Label>{label}</Label>
-        <div className='flex flex-wrap items-center gap-2'>
-          <div className='min-h-[38px] flex-1 min-w-0 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
-            {hasValue ? (
-              <span className='block break-words whitespace-pre-wrap text-slate-800'>{value}</span>
-            ) : (
-              <span className='block text-slate-400'>{placeholder}</span>
-            )}
-          </div>
+      <div className='rounded-2xl border border-slate-200 bg-white/90 px-3 py-2 shadow-sm'>
+        <div className='flex flex-wrap items-center gap-2 text-sm'>
+          <span className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{label}</span>
+          <span className={`flex-1 text-sm ${hasValue ? 'text-slate-800' : 'text-slate-400'}`}>
+            {hasValue ? display : placeholder}
+          </span>
           {hasValue ? (
             <Button
               variant='outline'
@@ -2274,8 +2206,8 @@ function AppContent() {
     resolvedPage === 'home'
       ? 'High-level metrics for your customers and projects.'
       : resolvedPage === 'customers'
-      ? 'Select a customer from the sidebar to review their details and contacts.'
-      : 'Select a project from the sidebar to manage its lifecycle and documents.'
+      ? 'Select a customer from the index to review their details and contacts.'
+      : 'Select a project from the index to manage its lifecycle and documents.'
 
   return (
     <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
@@ -2539,6 +2471,91 @@ function AppContent() {
                     title={canEdit ? 'Create customer' : 'Read-only access'}
                   >
                     <Plus size={18} /> Create Customer
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Customer Modal */}
+      <AnimatePresence>
+        {showCustomerEditor && selectedCustomer && (
+          <motion.div
+            className='fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4'
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <Card className='w-full max-w-xl panel'>
+              <CardHeader>
+                <div className='flex items-center gap-2'>
+                  <Pencil size={18} /> <span className='font-medium'>Edit Customer</span>
+                </div>
+                <Button
+                  variant='ghost'
+                  onClick={() => {
+                    setShowCustomerEditor(false)
+                    setCustomerEditorError(null)
+                    setIsSavingCustomerEditor(false)
+                  }}
+                  title='Close'
+                >
+                  <X size={16} />
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <div className='space-y-3'>
+                  <div>
+                    <Label htmlFor='edit-customer-name'>Customer Name</Label>
+                    <Input
+                      id='edit-customer-name'
+                      value={customerEditorDraft.name}
+                      onChange={(e) =>
+                        setCustomerEditorDraft(prev => ({ ...prev, name: (e.target as HTMLInputElement).value }))
+                      }
+                      placeholder='Enter customer name'
+                      disabled={!canEdit || isSavingCustomerEditor}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor='edit-customer-address'>Address</Label>
+                    <textarea
+                      id='edit-customer-address'
+                      value={customerEditorDraft.address}
+                      onChange={(e) =>
+                        setCustomerEditorDraft(prev => ({ ...prev, address: (e.target as HTMLTextAreaElement).value }))
+                      }
+                      placeholder='Enter address'
+                      rows={3}
+                      className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                      disabled={!canEdit || isSavingCustomerEditor}
+                    />
+                  </div>
+                </div>
+                {customerEditorError && (
+                  <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
+                    <AlertCircle size={14} /> {customerEditorError}
+                  </p>
+                )}
+                <div className='mt-4 flex justify-end gap-2'>
+                  <Button
+                    variant='outline'
+                    onClick={() => {
+                      setShowCustomerEditor(false)
+                      setCustomerEditorError(null)
+                      setIsSavingCustomerEditor(false)
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={() => void handleSaveCustomerEditor()}
+                    disabled={isSavingCustomerEditor || !canEdit}
+                    title={canEdit ? 'Save changes' : 'Read-only access'}
+                  >
+                    <Save size={16} /> Save Changes
                   </Button>
                 </div>
               </CardContent>

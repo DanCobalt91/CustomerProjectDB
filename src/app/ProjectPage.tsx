@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent } from 'react'
-import { AlertCircle, ArrowLeft, ChevronDown, Copy, Download, FileText, Plus, Trash2, Upload, X } from 'lucide-react'
+import { AlertCircle, ArrowLeft, ChevronDown, Copy, Download, FileText, List, Plus, Trash2, Upload, X } from 'lucide-react'
 import type {
   Customer,
   Project,
@@ -33,6 +33,7 @@ export type ProjectPageProps = {
   onRemoveDocument: (category: ProjectFileCategory) => Promise<string | null>
   onDeleteProject: () => void
   onNavigateBack: () => void
+  onReturnToIndex: () => void
 }
 
 const PROJECT_FILE_METADATA: Record<ProjectFileCategory, { label: string; description: string }> = {
@@ -115,6 +116,7 @@ export default function ProjectPage({
   onRemoveDocument,
   onDeleteProject,
   onNavigateBack,
+  onReturnToIndex,
 }: ProjectPageProps) {
   const [statusDraft, setStatusDraft] = useState<ProjectStatus>(project.status)
   const [activeSubStatusDraft, setActiveSubStatusDraft] = useState<ProjectActiveSubStatus>(
@@ -319,6 +321,9 @@ export default function ProjectPage({
         <div className='flex flex-wrap items-center gap-3'>
           <Button variant='outline' onClick={onNavigateBack}>
             <ArrowLeft size={16} /> Back to {customer.name}
+          </Button>
+          <Button variant='outline' onClick={onReturnToIndex} title='Return to project index'>
+            <List size={16} /> Return to index
           </Button>
           <div className='text-lg font-semibold text-slate-800'>Project: {project.number}</div>
         </div>
