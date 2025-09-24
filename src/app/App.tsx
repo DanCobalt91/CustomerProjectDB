@@ -14,7 +14,6 @@ import {
 import { motion, AnimatePresence } from 'framer-motion'
 import type {
   Customer,
-  CustomerContact,
   Project,
   ProjectActiveSubStatus,
   ProjectFile,
@@ -160,7 +159,6 @@ function AppContent() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [activePage, setActivePage] = useState<'home' | 'customers'>('home')
-  const [editingInfo, setEditingInfo] = useState<Record<string, boolean>>({})
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -200,6 +198,21 @@ function AppContent() {
   const [showNewContactForm, setShowNewContactForm] = useState(false)
   const [newContact, setNewContact] = useState({ name: '', position: '', phone: '', email: '' })
   const [contactError, setContactError] = useState<string | null>(null)
+  const [contactEditor, setContactEditor] = useState<{
+    customerId: string
+    contactId: string
+    name: string
+    position: string
+    phone: string
+    email: string
+  } | null>(null)
+  const [contactEditorError, setContactEditorError] = useState<string | null>(null)
+  const [isSavingContactEdit, setIsSavingContactEdit] = useState(false)
+  const closeContactEditor = useCallback(() => {
+    setContactEditor(null)
+    setContactEditorError(null)
+    setIsSavingContactEdit(false)
+  }, [])
 
   const refreshCustomers = useCallback(
     async (initial = false) => {
@@ -242,7 +255,23 @@ function AppContent() {
     setShowNewContactForm(false)
     setNewContact({ name: '', position: '', phone: '', email: '' })
     setContactError(null)
-  }, [selectedCustomer?.id])
+    closeContactEditor()
+  }, [selectedCustomer?.id, closeContactEditor])
+
+  useEffect(() => {
+    if (!contactEditor) {
+      return
+    }
+    const customer = db.find(c => c.id === contactEditor.customerId)
+    if (!customer) {
+      closeContactEditor()
+      return
+    }
+    const exists = customer.contacts.some(c => c.id === contactEditor.contactId)
+    if (!exists) {
+      closeContactEditor()
+    }
+  }, [db, contactEditor, closeContactEditor])
 
 
 
@@ -444,7 +473,6 @@ function AppContent() {
                   <EditableField
                     label='Address'
                     value={selectedCustomer.address}
-                    fieldKey={`addr_${selectedCustomer.id}`}
                     placeholder='Add address'
                     copyable
                     copyTitle='Copy address'
@@ -506,52 +534,62 @@ function AppContent() {
                             <div className='text-xs text-slate-500'>{contact.position}</div>
                           ) : null}
                         </div>
-                        <Button
-                          variant='ghost'
-                          className='text-rose-600 hover:bg-rose-50'
-                          onClick={() => removeContact(selectedCustomer, contact.id)}
-                          title={canEdit ? 'Remove contact' : 'Read-only access'}
-                          disabled={!canEdit}
-                        >
-                          <Trash2 size={16} /> Remove
-                        </Button>
+                        <div className='flex flex-wrap items-center gap-2'>
+                          <Button
+                            variant='outline'
+                            onClick={() => {
+                              if (!selectedCustomer) return
+                              setContactEditor({
+                                customerId: selectedCustomer.id,
+                                contactId: contact.id,
+                                name: contact.name ?? '',
+                                position: contact.position ?? '',
+                                phone: contact.phone ?? '',
+                                email: contact.email ?? '',
+                              })
+                              setContactEditorError(null)
+                              setIsSavingContactEdit(false)
+                            }}
+                            title={canEdit ? 'Edit contact' : 'Read-only access'}
+                            disabled={!canEdit}
+                          >
+                            <Pencil size={16} /> Edit Contact
+                          </Button>
+                          <Button
+                            variant='ghost'
+                            className='text-rose-600 hover:bg-rose-50'
+                            onClick={() => removeContact(selectedCustomer, contact.id)}
+                            title={canEdit ? 'Remove contact' : 'Read-only access'}
+                            disabled={!canEdit}
+                          >
+                            <Trash2 size={16} /> Remove
+                          </Button>
+                        </div>
                       </div>
                       <div className='mt-3 grid gap-3 md:grid-cols-2'>
-                        <EditableField
+                        <ContactInfoField
                           label='Name'
                           value={contact.name}
-                          fieldKey={`contact_${contact.id}_name`}
-                          placeholder='Add name'
-                          copyable
+                          placeholder='Not provided'
                           copyTitle='Copy contact name'
-                          onSave={(value) => saveContactField(selectedCustomer, contact.id, 'name', value)}
                         />
-                        <EditableField
+                        <ContactInfoField
                           label='Position'
                           value={contact.position}
-                          fieldKey={`contact_${contact.id}_position`}
-                          placeholder='Add position'
-                          copyable
+                          placeholder='Not provided'
                           copyTitle='Copy contact position'
-                          onSave={(value) => saveContactField(selectedCustomer, contact.id, 'position', value)}
                         />
-                        <EditableField
+                        <ContactInfoField
                           label='Phone'
                           value={contact.phone}
-                          fieldKey={`contact_${contact.id}_phone`}
-                          placeholder='Add phone'
-                          copyable
+                          placeholder='Not provided'
                           copyTitle='Copy phone number'
-                          onSave={(value) => saveContactField(selectedCustomer, contact.id, 'phone', value)}
                         />
-                        <EditableField
+                        <ContactInfoField
                           label='Email'
                           value={contact.email}
-                          fieldKey={`contact_${contact.id}_email`}
-                          placeholder='Add email'
-                          copyable
+                          placeholder='Not provided'
                           copyTitle='Copy email address'
-                          onSave={(value) => saveContactField(selectedCustomer, contact.id, 'email', value)}
                         />
                       </div>
                     </div>
@@ -859,13 +897,6 @@ function AppContent() {
     try {
       await deleteCustomerRecord(customerId)
       setDb(prev => prev.filter(c => c.id !== customerId))
-      setEditingInfo(prev => {
-        const next = { ...prev }
-        Object.keys(next).forEach(key => {
-          if (key.endsWith(customerId)) delete next[key]
-        })
-        return next
-      })
       if (shouldClearProject) setSelectedProjectId(null)
       if (selectedCustomerId === customerId) setSelectedCustomerId(null)
       setActionError(null)
@@ -1064,40 +1095,49 @@ function AppContent() {
     }
   }
 
-  async function saveContactField(
+  async function updateContactDetails(
     customer: Customer,
     contactId: string,
-    field: Exclude<keyof CustomerContact, 'id'>,
-    value: string,
-  ) {
+    details: { name: string; position: string; phone: string; email: string },
+  ): Promise<string | null> {
     if (!canEdit) {
-      setActionError('Not authorized to update contacts.')
-      return
+      const message = 'Not authorized to update contacts.'
+      setActionError(message)
+      return message
     }
 
-    const payload = customer.contacts.map(contact => {
-      if (contact.id !== contactId) {
-        return {
-          id: contact.id,
-          name: contact.name,
-          position: contact.position,
-          phone: contact.phone,
-          email: contact.email,
-        }
-      }
-      return {
-        id: contact.id,
-        name: field === 'name' ? value : contact.name,
-        position: field === 'position' ? value : contact.position,
-        phone: field === 'phone' ? value : contact.phone,
-        email: field === 'email' ? value : contact.email,
-      }
-    })
+    const name = details.name.trim()
+    const position = details.position.trim()
+    const phone = details.phone.trim()
+    const email = details.email.trim()
+
+    if (!name && !position && !phone && !email) {
+      return 'Enter at least one detail for the contact.'
+    }
+
+    const payload = customer.contacts.map(contact =>
+      contact.id !== contactId
+        ? {
+            id: contact.id,
+            name: contact.name,
+            position: contact.position,
+            phone: contact.phone,
+            email: contact.email,
+          }
+        : {
+            id: contact.id,
+            name: name || undefined,
+            position: position || undefined,
+            phone: phone || undefined,
+            email: email || undefined,
+          },
+    )
 
     try {
       await saveCustomerDetails(customer.id, { contacts: payload }, 'Failed to update contact.')
-    } catch {
-      // error handled in saveCustomerDetails
+      return null
+    } catch (error) {
+      return error instanceof Error ? error.message : 'Failed to update contact.'
     }
   }
 
@@ -1119,17 +1159,42 @@ function AppContent() {
 
     try {
       await saveCustomerDetails(customer.id, { contacts: payload }, 'Failed to remove contact.')
-      setEditingInfo(prev => {
-        const next = { ...prev }
-        Object.keys(next).forEach(key => {
-          if (key.includes(contactId)) {
-            delete next[key]
-          }
-        })
-        return next
-      })
+      if (contactEditor?.customerId === customer.id && contactEditor.contactId === contactId) {
+        closeContactEditor()
+      }
     } catch {
       // error handled in saveCustomerDetails
+    }
+  }
+
+  async function handleSaveContactEdit() {
+    if (!contactEditor) {
+      return
+    }
+
+    const { customerId, contactId, name, position, phone, email } = contactEditor
+    const customer = db.find(c => c.id === customerId)
+    if (!customer) {
+      setContactEditorError('Selected contact no longer exists.')
+      return
+    }
+
+    setIsSavingContactEdit(true)
+    setContactEditorError(null)
+    try {
+      const result = await updateContactDetails(customer, contactId, {
+        name,
+        position,
+        phone,
+        email,
+      })
+      if (result) {
+        setContactEditorError(result)
+        return
+      }
+      closeContactEditor()
+    } finally {
+      setIsSavingContactEdit(false)
     }
   }
 
@@ -1332,40 +1397,49 @@ function AppContent() {
     }
   }
 
-  // Inline editable input
   function EditableField({
-    label, value, onSave, fieldKey, placeholder, copyable, copyTitle,
+    label,
+    value,
+    onSave,
+    placeholder,
+    copyable,
+    copyTitle,
   }: {
     label: string
-    value?: string
+    value?: string | null
     onSave: (v: string) => Promise<void> | void
-    fieldKey: string
     placeholder?: string
     copyable?: boolean
     copyTitle?: string
   }) {
-    const [val, setVal] = useState(value || '')
-    const isEditing = !!editingInfo[fieldKey]
+    const [val, setVal] = useState(value ?? '')
+    const [isEditing, setIsEditing] = useState(false)
     const [isSaving, setIsSaving] = useState(false)
     const [fieldError, setFieldError] = useState<string | null>(null)
 
-    useEffect(() => setVal(value || ''), [value])
+    useEffect(() => {
+      if (!isEditing) {
+        setVal(value ?? '')
+      }
+    }, [value, isEditing])
+
     useEffect(() => {
       if (!canEdit && isEditing) {
-        setEditingInfo(s => ({ ...s, [fieldKey]: false }))
+        setIsEditing(false)
         setFieldError(null)
-        setVal(value || '')
+        setVal(value ?? '')
       }
-    }, [canEdit, isEditing, fieldKey, value])
-    const hasValue = !!(value && value.trim())
+    }, [canEdit, isEditing, value])
 
-    const saveValue = async () => {
+    const hasValue = !!value && value.trim().length > 0
+
+    const handleSave = async () => {
       const trimmed = val.trim()
       setIsSaving(true)
       setFieldError(null)
       try {
         await onSave(trimmed)
-        setEditingInfo(s => ({ ...s, [fieldKey]: false }))
+        setIsEditing(false)
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to save field.'
         setFieldError(message)
@@ -1373,6 +1447,7 @@ function AppContent() {
         setIsSaving(false)
       }
     }
+
     return (
       <div className='flex flex-col gap-1'>
         <Label>{label}</Label>
@@ -1388,14 +1463,14 @@ function AppContent() {
                 placeholder={placeholder}
                 disabled={!canEdit}
               />
-              <Button onClick={saveValue} title='Save' disabled={isSaving}>
+              <Button onClick={handleSave} title='Save' disabled={isSaving}>
                 <Save size={16} /> Save
               </Button>
               <Button
                 variant='ghost'
                 onClick={() => {
-                  setEditingInfo(s => ({ ...s, [fieldKey]: false }))
-                  setVal(value || '')
+                  setIsEditing(false)
+                  setVal(value ?? '')
                   setFieldError(null)
                 }}
                 title='Cancel'
@@ -1406,7 +1481,11 @@ function AppContent() {
           ) : (
             <>
               <div className='min-h-[38px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm'>
-                {hasValue ? <span className='text-slate-800'>{value}</span> : <span className='text-slate-400'>{placeholder || 'Not set'}</span>}
+                {hasValue ? (
+                  <span className='text-slate-800'>{value}</span>
+                ) : (
+                  <span className='text-slate-400'>{placeholder || 'Not set'}</span>
+                )}
               </div>
               {copyable && hasValue ? (
                 <Button
@@ -1419,7 +1498,7 @@ function AppContent() {
               ) : null}
               <Button
                 variant='outline'
-                onClick={() => setEditingInfo(s => ({ ...s, [fieldKey]: true }))}
+                onClick={() => setIsEditing(true)}
                 title={canEdit ? 'Edit' : 'Read-only access'}
                 disabled={!canEdit}
               >
@@ -1433,6 +1512,44 @@ function AppContent() {
             <AlertCircle size={14} /> {fieldError}
           </p>
         )}
+      </div>
+    )
+  }
+
+  function ContactInfoField({
+    label,
+    value,
+    placeholder = 'Not provided',
+    copyTitle,
+  }: {
+    label: string
+    value?: string
+    placeholder?: string
+    copyTitle: string
+  }) {
+    const display = value?.trim()
+    const hasValue = !!display
+    return (
+      <div className='flex flex-col gap-1'>
+        <Label>{label}</Label>
+        <div className='flex items-center gap-2'>
+          <div className='min-h-[38px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+            {hasValue ? (
+              <span className='block break-words whitespace-pre-wrap text-slate-800'>{value}</span>
+            ) : (
+              <span className='block text-slate-400'>{placeholder}</span>
+            )}
+          </div>
+          {hasValue ? (
+            <Button
+              variant='outline'
+              onClick={() => value && navigator.clipboard.writeText(value)}
+              title={copyTitle}
+            >
+              <Copy size={16} /> Copy
+            </Button>
+          ) : null}
+        </div>
       </div>
     )
   }
@@ -1714,6 +1831,102 @@ function AppContent() {
                     title={canEdit ? 'Create customer' : 'Read-only access'}
                   >
                     <Plus size={18} /> Create Customer
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Contact Modal */}
+      <AnimatePresence>
+        {contactEditor && (
+          <motion.div
+            className='fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4'
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <Card className='w-full max-w-xl panel'>
+              <CardHeader>
+                <div className='flex items-center gap-2'><Pencil size={18} /> <span className='font-medium'>Edit Contact</span></div>
+                <Button variant='ghost' onClick={closeContactEditor} title='Close'>
+                  <X size={16} />
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <div className='grid gap-3 md:grid-cols-2'>
+                  <div>
+                    <Label>Name</Label>
+                    <Input
+                      value={contactEditor.name}
+                      onChange={(e) => {
+                        const value = (e.target as HTMLInputElement).value
+                        setContactEditor(prev => (prev ? { ...prev, name: value } : prev))
+                        if (contactEditorError) setContactEditorError(null)
+                      }}
+                      placeholder='Jane Doe'
+                      disabled={!canEdit || isSavingContactEdit}
+                    />
+                  </div>
+                  <div>
+                    <Label>Position</Label>
+                    <Input
+                      value={contactEditor.position}
+                      onChange={(e) => {
+                        const value = (e.target as HTMLInputElement).value
+                        setContactEditor(prev => (prev ? { ...prev, position: value } : prev))
+                        if (contactEditorError) setContactEditorError(null)
+                      }}
+                      placeholder='Project Manager'
+                      disabled={!canEdit || isSavingContactEdit}
+                    />
+                  </div>
+                  <div>
+                    <Label>Phone</Label>
+                    <Input
+                      value={contactEditor.phone}
+                      onChange={(e) => {
+                        const value = (e.target as HTMLInputElement).value
+                        setContactEditor(prev => (prev ? { ...prev, phone: value } : prev))
+                        if (contactEditorError) setContactEditorError(null)
+                      }}
+                      placeholder='555-123-4567'
+                      disabled={!canEdit || isSavingContactEdit}
+                    />
+                  </div>
+                  <div>
+                    <Label>Email</Label>
+                    <Input
+                      value={contactEditor.email}
+                      onChange={(e) => {
+                        const value = (e.target as HTMLInputElement).value
+                        setContactEditor(prev => (prev ? { ...prev, email: value } : prev))
+                        if (contactEditorError) setContactEditorError(null)
+                      }}
+                      placeholder='name@example.com'
+                      disabled={!canEdit || isSavingContactEdit}
+                    />
+                  </div>
+                </div>
+                {contactEditorError && (
+                  <p className='mt-2 flex items-center gap-1 text-sm text-rose-600'>
+                    <AlertCircle size={14} /> {contactEditorError}
+                  </p>
+                )}
+                <div className='mt-3 flex justify-end gap-2'>
+                  <Button variant='outline' onClick={closeContactEditor} disabled={isSavingContactEdit}>
+                    Cancel
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      void handleSaveContactEdit()
+                    }}
+                    disabled={isSavingContactEdit || !canEdit}
+                    title={canEdit ? 'Save contact' : 'Read-only access'}
+                  >
+                    <Save size={16} /> Save Changes
                   </Button>
                 </div>
               </CardContent>
