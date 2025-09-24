@@ -436,448 +436,520 @@ function AppContent() {
   const canClearProjectSearch = hasProjectSearch || selectedProjectId !== null || selectedCustomerId !== null
 
   const renderCustomersPage = () => {
+    if (!selectedCustomer) {
+      return (
+        <Card className='panel'>
+          <CardHeader>
+            <div className='text-lg font-semibold text-slate-900'>Customer details</div>
+          </CardHeader>
+          <CardContent>
+            <p className='text-sm text-slate-600'>Select a customer from the sidebar to view their information.</p>
+          </CardContent>
+        </Card>
+      )
+    }
+
     return (
-      <>
-        <Card className='mb-6 panel'>
-          <CardHeader className='flex-col items-start justify-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
+      <div className='space-y-6'>
+        <Card className='panel'>
+          <CardHeader>
             <div className='flex items-center gap-2'>
-              <Search size={18} />
-              <div className='font-medium'>Customer Search</div>
+              <div className='text-lg font-semibold'>Customer: {selectedCustomer.name}</div>
             </div>
-            <Button
-              variant='ghost'
-              onClick={handleClearCustomerSearch}
-              disabled={!canClearCustomerSearch}
-              className='text-slate-600 hover:text-slate-800 disabled:text-slate-400'
-            >
-              <X size={16} /> Clear
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <div className='max-w-md'>
-              <Label htmlFor='customer-search'>Customer</Label>
-              <Input
-                id='customer-search'
-                value={customerQuery}
-                onChange={(e) => setCustomerQuery((e.target as HTMLInputElement).value)}
-                placeholder='Search by customer name or address…'
-                autoComplete='off'
-              />
-            </div>
-
-            <div className='mt-4'>
-              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
-              <div className='mt-2 grid gap-2 md:grid-cols-2'>
-                {!hasCustomerSearch ? (
-                  <div className='text-sm text-slate-500'>Start typing above to find a customer.</div>
-                ) : customerMatches.length === 0 ? (
-                  <div className='text-sm text-slate-500'>No customers found.</div>
-                ) : (
-                  customerMatches.map(match => (
-                    <button
-                      key={match.id}
-                      onClick={() => {
-                        setSelectedCustomerId(match.id)
-                        setSelectedProjectId(null)
-                      }}
-                      className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
-                      title='Open customer'
-                    >
-                      <div>
-                        <div className='text-sm font-semibold text-slate-800'>{match.name}</div>
-                        {match.address ? <div className='text-xs text-slate-500'>{match.address}</div> : null}
-                      </div>
-                      <ChevronRight size={18} />
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className='mb-6 panel'>
-          <CardHeader className='flex-col items-start justify-start gap-1 sm:flex-row sm:items-center sm:justify-between'>
-            <div className='text-lg font-semibold text-slate-900'>Customers</div>
-            <div className='text-sm text-slate-500 sm:ml-auto'>
-              {customerCount === 1 ? '1 customer listed' : `${customerCount} customers listed`}
+            <div className='flex flex-wrap items-center gap-2'>
+              <Button
+                variant='outline'
+                onClick={() => {
+                  setSelectedCustomerId(null)
+                  setSelectedProjectId(null)
+                }}
+              >
+                Back to Index
+              </Button>
+              <Button
+                variant='ghost'
+                className='text-rose-600 hover:bg-rose-50'
+                onClick={() => {
+                  if (!selectedCustomer) return
+                  const confirmed = window.confirm('Delete this customer and all associated projects, purchase orders, and work orders?')
+                  if (!confirmed) return
+                  void deleteCustomer(selectedCustomer.id)
+                }}
+                title={canEdit ? 'Delete customer' : 'Read-only access'}
+                disabled={!canEdit}
+              >
+                <Trash2 size={16} /> Delete Customer
+              </Button>
             </div>
           </CardHeader>
           <CardContent>
-            {sortedCustomers.length === 0 ? (
-              <p className='text-sm text-slate-500'>Add a customer to see it listed here.</p>
-            ) : (
-              <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
-                {sortedCustomers.map(customer => {
-                  const isSelected = selectedCustomerId === customer.id
-                  const baseClasses =
-                    'flex w-full flex-col gap-2 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
-                  const selectionClasses = isSelected
-                    ? 'border-indigo-500 bg-indigo-50/80 shadow-md'
-                    : 'hover:-translate-y-0.5 hover:shadow-lg'
-
-                  return (
-                    <button
-                      type='button'
-                      key={customer.id}
-                      onClick={() => {
-                        setSelectedCustomerId(customer.id)
-                        setSelectedProjectId(null)
-                      }}
-                      className={`${baseClasses} ${selectionClasses}`}
-                      aria-pressed={isSelected}
-                      title='View customer details'
-                    >
-                      <div className='flex items-start justify-between gap-3'>
-                        <div>
-                          <div className='text-base font-semibold text-slate-900'>{customer.name}</div>
-                          <div className='mt-1 text-sm text-slate-500'>
-                            {customer.address ? customer.address : 'No address on file.'}
-                          </div>
-                        </div>
-                        <ChevronRight size={18} className='text-slate-400' aria-hidden />
-                      </div>
-                    </button>
-                  )
-                })}
+            <div className='grid gap-4 md:grid-cols-2'>
+              <div className='md:col-span-2 space-y-2'>
+                <EditableField
+                  label='Address'
+                  value={selectedCustomer.address}
+                  placeholder='Add address'
+                  copyable
+                  copyTitle='Copy address'
+                  onSave={async (value) => {
+                    const trimmed = value.trim()
+                    await saveCustomerDetails(selectedCustomer.id, { address: trimmed ? trimmed : null })
+                  }}
+                />
+                {selectedCustomerAddressForMap ? (
+                  <a
+                    href={`https://www.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}`}
+                    target='_blank'
+                    rel='noreferrer'
+                    className='inline-flex items-center gap-2 text-sm font-medium text-sky-600 hover:text-sky-500'
+                  >
+                    <MapPin size={16} /> Open in Google Maps
+                  </a>
+                ) : null}
               </div>
-            )}
-          </CardContent>
-        </Card>
+            </div>
 
-        {selectedCustomer ? (
-          <Card className='mb-6 panel'>
-            <CardHeader>
-              <div className='flex items-center gap-2'>
-                <div className='text-lg font-semibold'>Customer: {selectedCustomer.name}</div>
-              </div>
-              <div className='flex flex-wrap items-center gap-2'>
+            <div className='mt-6 space-y-3'>
+              <div className='flex flex-wrap items-center justify-between gap-2'>
+                <div className='text-sm font-semibold text-slate-700'>Contacts</div>
                 <Button
                   variant='outline'
                   onClick={() => {
-                    setSelectedCustomerId(null)
-                    setSelectedProjectId(null)
+                    setShowNewContactForm(prev => !prev)
+                    setContactError(null)
                   }}
-                >
-                  Back to Index
-                </Button>
-                <Button
-                  variant='ghost'
-                  className='text-rose-600 hover:bg-rose-50'
-                  onClick={() => {
-                    if (!selectedCustomer) return
-                    const confirmed = window.confirm('Delete this customer and all associated projects, purchase orders, and work orders?')
-                    if (!confirmed) return
-                    void deleteCustomer(selectedCustomer.id)
-                  }}
-                  title={canEdit ? 'Delete customer' : 'Read-only access'}
+                  title={canEdit ? (showNewContactForm ? 'Cancel adding contact' : 'Add contact') : 'Read-only access'}
                   disabled={!canEdit}
                 >
-                  <Trash2 size={16} /> Delete Customer
+                  {showNewContactForm ? (
+                    <>
+                      <X size={16} /> Cancel
+                    </>
+                  ) : (
+                    <>
+                      <Plus size={16} /> Add Contact
+                    </>
+                  )}
                 </Button>
               </div>
-            </CardHeader>
-            <CardContent>
-              <div className='grid gap-4 md:grid-cols-2'>
-                <div className='md:col-span-2 space-y-2'>
-                  <EditableField
-                    label='Address'
-                    value={selectedCustomer.address}
-                    placeholder='Add address'
-                    copyable
-                    copyTitle='Copy address'
-                    onSave={async (value) => {
-                      const trimmed = value.trim()
-                      await saveCustomerDetails(selectedCustomer.id, { address: trimmed ? trimmed : null })
-                    }}
-                  />
-                  {selectedCustomerAddressForMap ? (
-                    <a
-                      href={`https://www.google.com/maps?q=${encodeURIComponent(selectedCustomerAddressForMap)}`}
-                      target='_blank'
-                      rel='noreferrer'
-                      className='inline-flex items-center gap-2 text-sm font-medium text-sky-600 hover:text-sky-500'
-                    >
-                      <MapPin size={16} /> Open in Google Maps
-                    </a>
-                  ) : null}
-                </div>
-              </div>
 
-              <div className='mt-6 space-y-3'>
-                <div className='flex flex-wrap items-center justify-between gap-2'>
-                  <div className='text-sm font-semibold text-slate-700'>Contacts</div>
-                  <Button
-                    variant='outline'
-                    onClick={() => {
-                      setShowNewContactForm(prev => !prev)
-                      setContactError(null)
-                    }}
-                    title={canEdit ? (showNewContactForm ? 'Cancel adding contact' : 'Add contact') : 'Read-only access'}
-                    disabled={!canEdit}
-                  >
-                    {showNewContactForm ? (
-                      <>
-                        <X size={16} /> Cancel
-                      </>
-                    ) : (
-                      <>
-                        <Plus size={16} /> Add Contact
-                      </>
-                    )}
-                  </Button>
-                </div>
+              {selectedCustomer.contacts.length === 0 && !showNewContactForm && (
+                <div className='text-sm text-slate-500'>No contacts yet.</div>
+              )}
 
-                {selectedCustomer.contacts.length === 0 && !showNewContactForm && (
-                  <div className='text-sm text-slate-500'>No contacts yet.</div>
-                )}
-
-                {selectedCustomer.contacts.map((contact, index) => {
-                  return (
-                    <div key={contact.id} className='rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm'>
-                      <div className='flex flex-wrap items-center justify-between gap-2'>
-                        <div>
-                          <div className='text-sm font-semibold text-slate-800'>
-                            {contact.name?.trim() || `Contact ${index + 1}`}
-                          </div>
-                          {contact.position ? (
-                            <div className='text-xs text-slate-500'>{contact.position}</div>
-                          ) : null}
+              {selectedCustomer.contacts.map((contact, index) => {
+                return (
+                  <div key={contact.id} className='rounded-2xl border border-slate-200/70 bg-white/80 p-4 shadow-sm'>
+                    <div className='flex flex-wrap items-center justify-between gap-2'>
+                      <div>
+                        <div className='text-sm font-semibold text-slate-800'>
+                          {contact.name?.trim() || `Contact ${index + 1}`}
                         </div>
-                        <div className='flex flex-wrap items-center gap-2'>
-                          <Button
-                            variant='outline'
-                            onClick={() => {
-                              if (!selectedCustomer) return
-                              setContactEditor({
-                                customerId: selectedCustomer.id,
-                                contactId: contact.id,
-                                name: contact.name ?? '',
-                                position: contact.position ?? '',
-                                phone: contact.phone ?? '',
-                                email: contact.email ?? '',
-                              })
-                              setContactEditorError(null)
-                              setIsSavingContactEdit(false)
-                            }}
-                            title={canEdit ? 'Edit contact' : 'Read-only access'}
-                            disabled={!canEdit}
-                          >
-                            <Pencil size={16} /> Edit Contact
-                          </Button>
-                          <Button
-                            variant='ghost'
-                            className='text-rose-600 hover:bg-rose-50'
-                            onClick={() => removeContact(selectedCustomer, contact.id)}
-                            title={canEdit ? 'Remove contact' : 'Read-only access'}
-                            disabled={!canEdit}
-                          >
-                            <Trash2 size={16} /> Remove
-                          </Button>
-                        </div>
-                      </div>
-                      <div className='mt-3 grid gap-3 md:grid-cols-2'>
-                        <ContactInfoField
-                          label='Name'
-                          value={contact.name}
-                          placeholder='Not provided'
-                          copyTitle='Copy contact name'
-                        />
-                        <ContactInfoField
-                          label='Position'
-                          value={contact.position}
-                          placeholder='Not provided'
-                          copyTitle='Copy contact position'
-                        />
-                        <ContactInfoField
-                          label='Phone'
-                          value={contact.phone}
-                          placeholder='Not provided'
-                          copyTitle='Copy phone number'
-                        />
-                        <ContactInfoField
-                          label='Email'
-                          value={contact.email}
-                          placeholder='Not provided'
-                          copyTitle='Copy email address'
-                        />
-                      </div>
-                    </div>
-                  )
-                })}
-
-                {showNewContactForm && (
-                  <div className='rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
-                    <div className='text-sm font-semibold text-slate-700'>New Contact</div>
-                    <div className='mt-3 grid gap-3 md:grid-cols-2'>
-                      <div>
-                        <Label>Name</Label>
-                        <Input
-                          value={newContact.name}
-                          onChange={(e) => setNewContact({ ...newContact, name: (e.target as HTMLInputElement).value })}
-                          placeholder='Jane Doe'
-                          disabled={!canEdit}
-                        />
-                      </div>
-                      <div>
-                        <Label>Position</Label>
-                        <Input
-                          value={newContact.position}
-                          onChange={(e) => setNewContact({ ...newContact, position: (e.target as HTMLInputElement).value })}
-                          placeholder='Project Manager'
-                          disabled={!canEdit}
-                        />
-                      </div>
-                      <div>
-                        <Label>Phone</Label>
-                        <Input
-                          value={newContact.phone}
-                          onChange={(e) => setNewContact({ ...newContact, phone: (e.target as HTMLInputElement).value })}
-                          placeholder='555-123-4567'
-                          disabled={!canEdit}
-                        />
-                      </div>
-                      <div>
-                        <Label>Email</Label>
-                        <Input
-                          value={newContact.email}
-                          onChange={(e) => setNewContact({ ...newContact, email: (e.target as HTMLInputElement).value })}
-                          placeholder='name@example.com'
-                          disabled={!canEdit}
-                        />
-                      </div>
-                    </div>
-                    <div className='mt-3 flex flex-wrap items-center gap-2'>
-                      <Button
-                        onClick={async () => {
-                          if (!selectedCustomer) return
-                          const result = await addContact(selectedCustomer, newContact)
-                          if (result) {
-                            setContactError(result)
-                          } else {
-                            setNewContact({ name: '', position: '', phone: '', email: '' })
-                            setContactError(null)
-                            setShowNewContactForm(false)
-                          }
-                        }}
-                        disabled={!canEdit}
-                        title={canEdit ? 'Save contact' : 'Read-only access'}
-                      >
-                        <Save size={16} /> Save Contact
-                      </Button>
-                      <Button
-                        variant='ghost'
-                        onClick={() => {
-                          setShowNewContactForm(false)
-                          setNewContact({ name: '', position: '', phone: '', email: '' })
-                          setContactError(null)
-                        }}
-                      >
-                        <X size={16} /> Cancel
-                      </Button>
-                      {contactError && (
-                        <p className='text-sm text-rose-600'>{contactError}</p>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div className='mt-6 rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm'>
-                <div className='mb-2 text-sm font-semibold text-slate-700'>Add Project</div>
-                <AddProjectForm onAdd={(num) => addProject(selectedCustomer.id, num)} disabled={!canEdit} />
-              </div>
-
-              <div className='mt-6'>
-                <div className='mb-2 text-sm font-semibold text-slate-700'>Projects</div>
-                {selectedCustomer.projects.length === 0 && <div className='text-sm text-slate-500'>No projects yet.</div>}
-                {selectedCustomer.projects.map(project => (
-                  <Card key={project.id} className='mb-3 panel'>
-                    <CardHeader>
-                      <div className='flex flex-wrap items-center gap-2'>
-                        <div className='text-lg font-semibold text-slate-800'>Project: {project.number}</div>
-                        {project.note && (
-                          <span className='rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700'>Note</span>
-                        )}
+                        {contact.position ? (
+                          <div className='text-xs text-slate-500'>{contact.position}</div>
+                        ) : null}
                       </div>
                       <div className='flex flex-wrap items-center gap-2'>
                         <Button
                           variant='outline'
-                          onClick={() => navigator.clipboard.writeText(stripPrefix(project.number, /^P[-\s]?(.+)$/i))}
-                          title='Copy project number'
-                        >
-                          <Copy size={16} />
-                        </Button>
-                        <Button
                           onClick={() => {
-                            setSelectedCustomerId(selectedCustomer.id)
-                            setSelectedProjectId(project.id)
+                            if (!selectedCustomer) return
+                            setContactEditor({
+                              customerId: selectedCustomer.id,
+                              contactId: contact.id,
+                              name: contact.name ?? '',
+                              position: contact.position ?? '',
+                              phone: contact.phone ?? '',
+                              email: contact.email ?? '',
+                            })
+                            setContactEditorError(null)
+                            setIsSavingContactEdit(false)
                           }}
+                          title={canEdit ? 'Edit contact' : 'Read-only access'}
+                          disabled={!canEdit}
                         >
-                          <ChevronRight size={16} /> View project
+                          <Pencil size={16} /> Edit Contact
                         </Button>
                         <Button
                           variant='ghost'
                           className='text-rose-600 hover:bg-rose-50'
-                          onClick={() => {
-                            const confirmed = window.confirm('Delete this project and all associated records?')
-                            if (!confirmed) return
-                            void deleteProject(selectedCustomer.id, project.id)
-                          }}
-                          title={canEdit ? 'Delete project' : 'Read-only access'}
+                          onClick={() => removeContact(selectedCustomer, contact.id)}
+                          title={canEdit ? 'Remove contact' : 'Read-only access'}
                           disabled={!canEdit}
                         >
-                          <Trash2 size={16} />
+                          <Trash2 size={16} /> Remove
                         </Button>
                       </div>
-                    </CardHeader>
-                    <CardContent>
-                      <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
-                        {[
-                          {
-                            label: 'Status',
-                            value: formatProjectStatus(project.status, project.activeSubStatus),
-                          },
-                          { label: 'Work Orders', value: project.wos.length },
-                          {
-                            label: 'Project Files',
-                            value: PROJECT_FILE_CATEGORIES.reduce(
-                              (count, category) => (project.documents?.[category] ? count + 1 : count),
-                              0,
-                            ),
-                          },
-                        ].map(item => (
-                          <div key={item.label} className='rounded-xl border border-slate-200 bg-white/80 p-3'>
-                            <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{item.label}</div>
-                            <div className='text-lg font-semibold text-slate-800'>{item.value}</div>
-                          </div>
-                        ))}
-                      </div>
-                      {project.note && (
-                        <div className='mt-3 rounded-xl border border-slate-200 bg-white/80 p-3 text-sm text-slate-700'>
-                          <span className='font-semibold text-slate-900'>Note:</span> {project.note}
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        ) : null}
+                    </div>
+                    <div className='mt-3 grid gap-3 md:grid-cols-2'>
+                      <ContactInfoField
+                        label='Name'
+                        value={contact.name}
+                        placeholder='Not provided'
+                        copyTitle='Copy contact name'
+                      />
+                      <ContactInfoField
+                        label='Position'
+                        value={contact.position}
+                        placeholder='Not provided'
+                        copyTitle='Copy contact position'
+                      />
+                      <ContactInfoField
+                        label='Phone'
+                        value={contact.phone}
+                        placeholder='Not provided'
+                        copyTitle='Copy phone number'
+                      />
+                      <ContactInfoField
+                        label='Email'
+                        value={contact.email}
+                        placeholder='Not provided'
+                        copyTitle='Copy email address'
+                      />
+                    </div>
+                  </div>
+                )
+              })}
 
-        <div className='h-8' />
-      </>
+              {showNewContactForm && (
+                <div className='rounded-2xl border border-slate-200/70 bg-white/75 p-4 shadow-sm'>
+                  <div className='text-sm font-semibold text-slate-700'>New Contact</div>
+                  <div className='mt-3 grid gap-3 md:grid-cols-2'>
+                    <div>
+                      <Label>Name</Label>
+                      <Input
+                        value={newContact.name}
+                        onChange={(e) => setNewContact({ ...newContact, name: (e.target as HTMLInputElement).value })}
+                        placeholder='Jane Doe'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                    <div>
+                      <Label>Position</Label>
+                      <Input
+                        value={newContact.position}
+                        onChange={(e) => setNewContact({ ...newContact, position: (e.target as HTMLInputElement).value })}
+                        placeholder='Project Manager'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                    <div>
+                      <Label>Phone</Label>
+                      <Input
+                        value={newContact.phone}
+                        onChange={(e) => setNewContact({ ...newContact, phone: (e.target as HTMLInputElement).value })}
+                        placeholder='555-123-4567'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                    <div>
+                      <Label>Email</Label>
+                      <Input
+                        value={newContact.email}
+                        onChange={(e) => setNewContact({ ...newContact, email: (e.target as HTMLInputElement).value })}
+                        placeholder='name@example.com'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                  </div>
+                  <div className='mt-3 flex flex-wrap items-center gap-2'>
+                    <Button
+                      onClick={async () => {
+                        if (!selectedCustomer) return
+                        const result = await addContact(selectedCustomer, newContact)
+                        if (result) {
+                          setContactError(result)
+                        } else {
+                          setNewContact({ name: '', position: '', phone: '', email: '' })
+                          setContactError(null)
+                          setShowNewContactForm(false)
+                        }
+                      }}
+                      disabled={!canEdit}
+                      title={canEdit ? 'Save contact' : 'Read-only access'}
+                    >
+                      <Save size={16} /> Save Contact
+                    </Button>
+                    <Button
+                      variant='ghost'
+                      onClick={() => {
+                        setShowNewContactForm(false)
+                        setNewContact({ name: '', position: '', phone: '', email: '' })
+                        setContactError(null)
+                      }}
+                    >
+                      <X size={16} /> Cancel
+                    </Button>
+                    {contactError && (
+                      <p className='text-sm text-rose-600'>{contactError}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className='mt-6 rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm'>
+              <div className='mb-2 text-sm font-semibold text-slate-700'>Add Project</div>
+              <AddProjectForm onAdd={(num) => addProject(selectedCustomer.id, num)} disabled={!canEdit} />
+            </div>
+
+            <div className='mt-6'>
+              <div className='mb-2 text-sm font-semibold text-slate-700'>Projects</div>
+              {selectedCustomer.projects.length === 0 && <div className='text-sm text-slate-500'>No projects yet.</div>}
+              {selectedCustomer.projects.map(project => (
+                <Card key={project.id} className='mb-3 panel'>
+                  <CardHeader>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <div className='text-lg font-semibold text-slate-800'>Project: {project.number}</div>
+                      {project.note && (
+                        <span className='rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700'>Note</span>
+                      )}
+                    </div>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <Button
+                        variant='outline'
+                        onClick={() => navigator.clipboard.writeText(stripPrefix(project.number, /^P[-\s]?(.+)$/i))}
+                        title='Copy project number'
+                      >
+                        <Copy size={16} />
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          setSelectedCustomerId(selectedCustomer.id)
+                          setSelectedProjectId(project.id)
+                          setActivePage('projects')
+                        }}
+                      >
+                        <ChevronRight size={16} /> View project
+                      </Button>
+                      <Button
+                        variant='ghost'
+                        className='text-rose-600 hover:bg-rose-50'
+                        onClick={() => {
+                          const confirmed = window.confirm('Delete this project and all associated records?')
+                          if (!confirmed) return
+                          void deleteProject(selectedCustomer.id, project.id)
+                        }}
+                        title={canEdit ? 'Delete project' : 'Read-only access'}
+                        disabled={!canEdit}
+                      >
+                        <Trash2 size={16} />
+                      </Button>
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-3'>
+                      {[
+                        {
+                          label: 'Status',
+                          value: formatProjectStatus(project.status, project.activeSubStatus),
+                        },
+                        { label: 'Work Orders', value: project.wos.length },
+                        {
+                          label: 'Project Files',
+                          value: PROJECT_FILE_CATEGORIES.reduce(
+                            (count, category) => (project.documents?.[category] ? count + 1 : count),
+                            0,
+                          ),
+                        },
+                      ].map(item => (
+                        <div key={item.label} className='rounded-xl border border-slate-200 bg-white/80 p-3'>
+                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{item.label}</div>
+                          <div className='text-lg font-semibold text-slate-800'>{item.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {project.note && (
+                      <div className='mt-3 rounded-xl border border-slate-200 bg-white/80 p-3 text-sm text-slate-700'>
+                        <span className='font-semibold text-slate-900'>Note:</span> {project.note}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
     )
   }
 
   const renderProjectsPage = () => {
+    if (!selectedProjectId) {
+      return (
+        <Card className='panel'>
+          <CardHeader>
+            <div className='text-lg font-semibold text-slate-900'>Project details</div>
+          </CardHeader>
+          <CardContent>
+            <p className='text-sm text-slate-600'>Select a project from the sidebar to review its documents and work orders.</p>
+          </CardContent>
+        </Card>
+      )
+    }
+
+    if (!selectedProjectData) {
+      return (
+        <Card className='panel'>
+          <CardHeader>
+            <div className='text-lg font-semibold'>Project not found</div>
+          </CardHeader>
+          <CardContent>
+            <p className='text-sm text-slate-600'>We couldn't find that project. It may have been deleted.</p>
+            <div className='mt-4'>
+              <Button onClick={() => setSelectedProjectId(null)}>Back to index</Button>
+            </div>
+          </CardContent>
+        </Card>
+      )
+    }
+
+    return (
+      <ProjectPage
+        customer={selectedProjectData.customer}
+        project={selectedProjectData.project}
+        canEdit={canEdit}
+        onUpdateProjectNote={(note) =>
+          updateProjectNote(selectedProjectData.customer.id, selectedProjectData.project.id, note)
+        }
+        onUpdateProjectStatus={(status, activeSubStatus) =>
+          updateProjectStatus(
+            selectedProjectData.customer.id,
+            selectedProjectData.project.id,
+            status,
+            activeSubStatus,
+          )
+        }
+        onAddWO={(data) => addWO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
+        onDeleteWO={(woId) => deleteWO(selectedProjectData.customer.id, selectedProjectData.project.id, woId)}
+        onUploadDocument={(category, file) =>
+          uploadProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category, file)
+        }
+        onRemoveDocument={(category) =>
+          removeProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category)
+        }
+        onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
+        onNavigateBack={() => setSelectedProjectId(null)}
+      />
+    )
+  }
+
+  const renderCustomersSidebar = () => (
+    <div className='space-y-4'>
+      <Card className='panel'>
+        <CardHeader className='flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
+          <div className='flex items-center gap-2'>
+            <Search size={18} />
+            <div className='font-medium'>Customer Search</div>
+          </div>
+          <Button
+            variant='ghost'
+            onClick={handleClearCustomerSearch}
+            disabled={!canClearCustomerSearch}
+            className='w-full text-slate-600 hover:text-slate-800 disabled:text-slate-400 sm:w-auto'
+          >
+            <X size={16} /> Clear
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <Label htmlFor='customer-search'>Customer</Label>
+          <Input
+            id='customer-search'
+            value={customerQuery}
+            onChange={(e) => setCustomerQuery((e.target as HTMLInputElement).value)}
+            placeholder='Search by customer name or address…'
+            autoComplete='off'
+          />
+
+          <div className='mt-4'>
+            <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
+            <div className='mt-2 space-y-2'>
+              {!hasCustomerSearch ? (
+                <div className='text-sm text-slate-500'>Start typing above to find a customer.</div>
+              ) : customerMatches.length === 0 ? (
+                <div className='text-sm text-slate-500'>No customers found.</div>
+              ) : (
+                customerMatches.map(match => (
+                  <button
+                    key={match.id}
+                    onClick={() => {
+                      setSelectedCustomerId(match.id)
+                      setSelectedProjectId(null)
+                    }}
+                    className='flex w-full items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
+                    title='Open customer'
+                  >
+                    <div>
+                      <div className='text-sm font-semibold text-slate-800'>{match.name}</div>
+                      {match.address ? <div className='text-xs text-slate-500'>{match.address}</div> : null}
+                    </div>
+                    <ChevronRight size={18} />
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className='panel'>
+        <CardHeader className='flex-col items-start gap-2'>
+          <div className='text-lg font-semibold text-slate-900'>Customers</div>
+          <div className='text-sm text-slate-500'>
+            {customerCount === 1 ? '1 customer listed' : `${customerCount} customers listed`}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {sortedCustomers.length === 0 ? (
+            <p className='text-sm text-slate-500'>Add a customer to see it listed here.</p>
+          ) : (
+            <div className='space-y-2'>
+              {sortedCustomers.map(customer => {
+                const isSelected = selectedCustomerId === customer.id
+                const baseClasses =
+                  'flex w-full flex-col gap-2 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                const selectionClasses = isSelected
+                  ? 'border-indigo-500 bg-indigo-50/80 shadow-md'
+                  : 'hover:-translate-y-0.5 hover:shadow-lg'
+
+                return (
+                  <button
+                    type='button'
+                    key={customer.id}
+                    onClick={() => {
+                      setSelectedCustomerId(customer.id)
+                      setSelectedProjectId(null)
+                    }}
+                    className={`${baseClasses} ${selectionClasses}`}
+                    aria-pressed={isSelected}
+                    title='View customer details'
+                  >
+                    <div className='flex items-start justify-between gap-3'>
+                      <div>
+                        <div className='text-base font-semibold text-slate-900'>{customer.name}</div>
+                        <div className='mt-1 text-sm text-slate-500'>
+                          {customer.address ? customer.address : 'No address on file.'}
+                        </div>
+                      </div>
+                      <ChevronRight size={18} className='text-slate-400' aria-hidden />
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
+
+  const renderProjectsSidebar = () => {
     const { active: activeProjects, completed: completedProjects } = projectLists
 
     return (
-      <>
-        <Card className='mb-6 panel'>
-          <CardHeader className='flex-col items-start justify-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
+      <div className='space-y-4'>
+        <Card className='panel'>
+          <CardHeader className='flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
             <div className='flex items-center gap-2'>
               <Search size={18} />
               <div className='font-medium'>Project Search</div>
@@ -886,26 +958,24 @@ function AppContent() {
               variant='ghost'
               onClick={handleClearProjectSearch}
               disabled={!canClearProjectSearch}
-              className='text-slate-600 hover:text-slate-800 disabled:text-slate-400'
+              className='w-full text-slate-600 hover:text-slate-800 disabled:text-slate-400 sm:w-auto'
             >
               <X size={16} /> Clear
             </Button>
           </CardHeader>
           <CardContent>
-            <div className='max-w-md'>
-              <Label htmlFor='project-search'>Project</Label>
-              <Input
-                id='project-search'
-                value={projectSearchQuery}
-                onChange={(e) => setProjectSearchQuery((e.target as HTMLInputElement).value)}
-                placeholder='Search by project number or customer…'
-                autoComplete='off'
-              />
-            </div>
+            <Label htmlFor='project-search'>Project</Label>
+            <Input
+              id='project-search'
+              value={projectSearchQuery}
+              onChange={(e) => setProjectSearchQuery((e.target as HTMLInputElement).value)}
+              placeholder='Search by project number or customer…'
+              autoComplete='off'
+            />
 
             <div className='mt-4'>
               <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
-              <div className='mt-2 grid gap-2 md:grid-cols-2'>
+              <div className='mt-2 space-y-2'>
                 {!hasProjectSearch ? (
                   <div className='text-sm text-slate-500'>Start typing above to find a project.</div>
                 ) : projectMatches.length === 0 ? (
@@ -917,8 +987,9 @@ function AppContent() {
                       onClick={() => {
                         setSelectedCustomerId(match.customerId)
                         setSelectedProjectId(match.projectId)
+                        setActivePage('projects')
                       }}
-                      className='flex items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
+                      className='flex w-full items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
                       title='Open project details'
                     >
                       <div>
@@ -935,106 +1006,154 @@ function AppContent() {
           </CardContent>
         </Card>
 
-        <div className='grid gap-6 lg:grid-cols-2'>
-          <Card className='panel'>
-            <CardHeader className='flex-col items-start justify-start gap-1 sm:flex-row sm:items-center sm:justify-between'>
-              <div className='text-lg font-semibold text-slate-900'>Active Projects</div>
-              <div className='text-sm text-slate-500 sm:ml-auto'>
-                {activeProjects.length === 1
-                  ? '1 active project'
-                  : `${activeProjects.length} active projects`}
+        <Card className='panel'>
+          <CardHeader className='flex-col items-start gap-2'>
+            <div className='text-lg font-semibold text-slate-900'>Active Projects</div>
+            <div className='text-sm text-slate-500'>
+              {activeProjects.length === 1 ? '1 active project' : `${activeProjects.length} active projects`}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {activeProjects.length === 0 ? (
+              <p className='text-sm text-slate-500'>Add a project to see it listed here.</p>
+            ) : (
+              <div className='space-y-2'>
+                {activeProjects.map(project => {
+                  const isSelected = selectedProjectId === project.projectId
+                  const baseClasses =
+                    'flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                  const selectionClasses = isSelected
+                    ? 'border-indigo-500 bg-indigo-50/80 shadow-md'
+                    : 'hover:-translate-y-0.5 hover:shadow-lg'
+
+                  return (
+                    <button
+                      type='button'
+                      key={project.projectId}
+                      onClick={() => {
+                        setSelectedCustomerId(project.customerId)
+                        setSelectedProjectId(project.projectId)
+                        setActivePage('projects')
+                      }}
+                      className={`${baseClasses} ${selectionClasses}`}
+                      aria-pressed={isSelected}
+                      title='View project details'
+                    >
+                      <div>
+                        <div className='text-base font-semibold text-slate-900'>{project.projectNumber}</div>
+                        <div className='mt-1 text-sm text-slate-600'>{project.customerName}</div>
+                        <div className='mt-2 text-xs font-medium text-slate-500'>{project.statusLabel}</div>
+                      </div>
+                      <ChevronRight size={18} className='text-slate-400' aria-hidden />
+                    </button>
+                  )
+                })}
               </div>
-            </CardHeader>
-            <CardContent>
-              {activeProjects.length === 0 ? (
-                <p className='text-sm text-slate-500'>Add a project to see it listed here.</p>
-              ) : (
-                <div className='space-y-3'>
-                  {activeProjects.map(project => {
-                    const isSelected = selectedProjectId === project.projectId
-                    const baseClasses =
-                      'flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
-                    const selectionClasses = isSelected
-                      ? 'border-indigo-500 bg-indigo-50/80 shadow-md'
-                      : 'hover:-translate-y-0.5 hover:shadow-lg'
+            )}
+          </CardContent>
+        </Card>
 
-                    return (
-                      <button
-                        type='button'
-                        key={project.projectId}
-                        onClick={() => {
-                          setSelectedCustomerId(project.customerId)
-                          setSelectedProjectId(project.projectId)
-                        }}
-                        className={`${baseClasses} ${selectionClasses}`}
-                        aria-pressed={isSelected}
-                        title='View project details'
-                      >
-                        <div>
-                          <div className='text-base font-semibold text-slate-900'>{project.projectNumber}</div>
-                          <div className='mt-1 text-sm text-slate-600'>{project.customerName}</div>
-                          <div className='mt-2 text-xs font-medium text-slate-500'>{project.statusLabel}</div>
-                        </div>
-                        <ChevronRight size={18} className='text-slate-400' aria-hidden />
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+        <Card className='panel'>
+          <CardHeader className='flex-col items-start gap-2'>
+            <div className='text-lg font-semibold text-slate-900'>Completed Projects</div>
+            <div className='text-sm text-slate-500'>
+              {completedProjects.length === 1
+                ? '1 completed project'
+                : `${completedProjects.length} completed projects`}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {completedProjects.length === 0 ? (
+              <p className='text-sm text-slate-500'>Completed projects will appear here.</p>
+            ) : (
+              <div className='space-y-2'>
+                {completedProjects.map(project => {
+                  const isSelected = selectedProjectId === project.projectId
+                  const baseClasses =
+                    'flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                  const selectionClasses = isSelected
+                    ? 'border-slate-400 bg-slate-50/80 shadow-md'
+                    : 'hover:-translate-y-0.5 hover:shadow-lg'
 
-          <Card className='panel'>
-            <CardHeader className='flex-col items-start justify-start gap-1 sm:flex-row sm:items-center sm:justify-between'>
-              <div className='text-lg font-semibold text-slate-900'>Completed Projects</div>
-              <div className='text-sm text-slate-500 sm:ml-auto'>
-                {completedProjects.length === 1
-                  ? '1 completed project'
-                  : `${completedProjects.length} completed projects`}
+                  return (
+                    <button
+                      type='button'
+                      key={project.projectId}
+                      onClick={() => {
+                        setSelectedCustomerId(project.customerId)
+                        setSelectedProjectId(project.projectId)
+                        setActivePage('projects')
+                      }}
+                      className={`${baseClasses} ${selectionClasses}`}
+                      aria-pressed={isSelected}
+                      title='View project details'
+                    >
+                      <div>
+                        <div className='text-base font-semibold text-slate-900'>{project.projectNumber}</div>
+                        <div className='mt-1 text-sm text-slate-600'>{project.customerName}</div>
+                        <div className='mt-2 text-xs font-medium text-slate-500'>{project.statusLabel}</div>
+                      </div>
+                      <ChevronRight size={18} className='text-slate-400' aria-hidden />
+                    </button>
+                  )
+                })}
               </div>
-            </CardHeader>
-            <CardContent>
-              {completedProjects.length === 0 ? (
-                <p className='text-sm text-slate-500'>Completed projects will appear here.</p>
-              ) : (
-                <div className='space-y-3'>
-                  {completedProjects.map(project => {
-                    const isSelected = selectedProjectId === project.projectId
-                    const baseClasses =
-                      'flex w-full items-start justify-between gap-3 rounded-2xl border border-slate-200/70 bg-white/80 p-4 text-left shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
-                    const selectionClasses = isSelected
-                      ? 'border-slate-400 bg-slate-50/80 shadow-md'
-                      : 'hover:-translate-y-0.5 hover:shadow-lg'
-
-                    return (
-                      <button
-                        type='button'
-                        key={project.projectId}
-                        onClick={() => {
-                          setSelectedCustomerId(project.customerId)
-                          setSelectedProjectId(project.projectId)
-                        }}
-                        className={`${baseClasses} ${selectionClasses}`}
-                        aria-pressed={isSelected}
-                        title='View project details'
-                      >
-                        <div>
-                          <div className='text-base font-semibold text-slate-900'>{project.projectNumber}</div>
-                          <div className='mt-1 text-sm text-slate-600'>{project.customerName}</div>
-                          <div className='mt-2 text-xs font-medium text-slate-500'>{project.statusLabel}</div>
-                        </div>
-                        <ChevronRight size={18} className='text-slate-400' aria-hidden />
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      </>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     )
   }
+
+  const renderHomeSidebar = () => (
+    <div className='space-y-4'>
+      <Card className='panel'>
+        <CardHeader>
+          <div className='text-lg font-semibold text-slate-900'>Quick stats</div>
+        </CardHeader>
+        <CardContent>
+          <div className='space-y-3'>
+            {[
+              { label: 'Customers', value: customerCount },
+              { label: 'Projects', value: totalProjects },
+              { label: 'Work Orders', value: totalWorkOrders },
+            ].map(item => (
+              <div key={item.label} className='rounded-xl border border-slate-200 bg-white/70 p-3'>
+                <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{item.label}</div>
+                <div className='mt-1 text-lg font-semibold text-slate-900'>{item.value}</div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className='panel'>
+        <CardHeader>
+          <div className='text-sm font-semibold text-slate-700'>Status distribution</div>
+        </CardHeader>
+        <CardContent>
+          {totalProjects === 0 ? (
+            <p className='text-sm text-slate-500'>Add a project to see status information.</p>
+          ) : (
+            <div className='space-y-2'>
+              {projectStatusData.map(status => (
+                <div
+                  key={status.key}
+                  className='flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white/70 px-3 py-2'
+                >
+                  <span className='flex items-center gap-2 text-sm text-slate-600'>
+                    <span className={`h-2.5 w-2.5 rounded-full ${status.colorClass}`} aria-hidden />
+                    {status.label}
+                  </span>
+                  <span className='text-sm font-semibold text-slate-900'>{status.count}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  )
 
   const renderDashboardView = () => {
     const averageWorkOrders = totalProjects > 0 ? totalWorkOrders / totalProjects : 0
@@ -1841,134 +1960,141 @@ function AppContent() {
     )
   }
 
+  const resolvedPage: 'home' | 'customers' | 'projects' = selectedProjectId ? 'projects' : activePage
+
+  const sidebarContent =
+    resolvedPage === 'home'
+      ? renderHomeSidebar()
+      : resolvedPage === 'customers'
+      ? renderCustomersSidebar()
+      : renderProjectsSidebar()
+
+  const handleNavigate = (page: 'home' | 'customers' | 'projects') => {
+    setActivePage(page)
+    if (page !== 'projects') {
+      setSelectedProjectId(null)
+    }
+    if (page !== 'customers') {
+      setShowNewCustomer(false)
+    }
+  }
+
+  const pageHeading =
+    resolvedPage === 'home'
+      ? 'Workspace Overview'
+      : resolvedPage === 'customers'
+      ? 'Customer Records'
+      : 'Projects'
+
+  const pageDescription =
+    resolvedPage === 'home'
+      ? 'High-level metrics for your customers and projects.'
+      : resolvedPage === 'customers'
+      ? 'Select a customer from the sidebar to review their details and contacts.'
+      : 'Select a project from the sidebar to manage its lifecycle and documents.'
+
   return (
     <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
-      <div className='mx-auto max-w-6xl'>
-        {loadError && (
-          <div className='mb-6 flex items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
-            <span>{loadError}</span>
-            <Button variant='outline' onClick={() => void refreshCustomers()} disabled={isSyncing}>
-              Retry
-            </Button>
-          </div>
-        )}
-        <div className='mb-6 flex flex-wrap items-center justify-between gap-3'>
-          <div>
-            <h1 className='text-3xl font-semibold tracking-tight text-slate-900'>CustomerProjectDB</h1>
-            <p className='text-sm text-slate-500'>Keep track of customers, projects, and their work orders.</p>
-          </div>
-          <div className='flex flex-wrap items-center justify-end gap-3'>
-            <span
-              className={`rounded-full border px-3 py-1 text-xs font-medium ${storageBadgeClass}`}
-              title={storageTitle}
-            >
-              Storage: {storageLabel}
-            </span>
-            {isSyncing && (
-              <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
-                <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
-                Syncing…
-              </span>
-            )}
-            {!selectedProjectId && activePage === 'customers' && (
-              <Button
-                onClick={() => {
-                  setShowNewCustomer(true)
-                  setNewCustomerError(null)
-                }}
-                title='Create new customer'
-                disabled={!canEdit}
-              >
-                <Plus size={16} /> New Customer
-              </Button>
-            )}
-          </div>
-        </div>
-
-        {!selectedProjectId && (
-          <div className='mb-6 flex flex-wrap items-center justify-between gap-3'>
-            <div className='flex overflow-hidden rounded-2xl border border-slate-200 bg-white/70 p-1 shadow-sm'>
-              {(['home', 'customers', 'projects'] as const).map(page => {
-                const isActive = activePage === page
-                const label =
-                  page === 'home' ? 'Home' : page === 'customers' ? 'Customers' : 'Projects'
-                return (
-                  <button
-                    key={page}
-                    type='button'
-                    onClick={() => setActivePage(page)}
-                    className={`rounded-xl px-4 py-2 text-sm font-medium transition ${
-                      isActive ? 'bg-slate-900 text-white shadow' : 'text-slate-600 hover:bg-white'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        )}
-
-        {storageNotice && (
-          <div className='mb-6 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700'>
-            {storageNotice}
-          </div>
-        )}
-
-        {actionError && (
-          <div className='mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
-            {actionError}
-          </div>
-        )}
-
-        {selectedProjectId ? (
-          selectedProjectData ? (
-            <ProjectPage
-              customer={selectedProjectData.customer}
-              project={selectedProjectData.project}
-              canEdit={canEdit}
-              onUpdateProjectNote={(note) =>
-                updateProjectNote(selectedProjectData.customer.id, selectedProjectData.project.id, note)
-              }
-              onUpdateProjectStatus={(status, activeSubStatus) =>
-                updateProjectStatus(
-                  selectedProjectData.customer.id,
-                  selectedProjectData.project.id,
-                  status,
-                  activeSubStatus,
-                )
-              }
-              onAddWO={(data) => addWO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
-              onDeleteWO={(woId) => deleteWO(selectedProjectData.customer.id, selectedProjectData.project.id, woId)}
-              onUploadDocument={(category, file) =>
-                uploadProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category, file)
-              }
-              onRemoveDocument={(category) =>
-                removeProjectDocument(selectedProjectData.customer.id, selectedProjectData.project.id, category)
-              }
-              onDeleteProject={() => deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)}
-              onNavigateBack={() => setSelectedProjectId(null)}
-            />
-          ) : (
+      <div className='mx-auto flex max-w-6xl flex-col gap-6 lg:flex-row'>
+        <aside className='w-full lg:w-80 lg:flex-shrink-0'>
+          <div className='flex flex-col gap-6 lg:sticky lg:top-6'>
             <Card className='panel'>
               <CardHeader>
-                <div className='text-lg font-semibold'>Project not found</div>
+                <div>
+                  <h1 className='text-2xl font-semibold tracking-tight text-slate-900'>CustomerProjectDB</h1>
+                  <p className='mt-1 text-sm text-slate-500'>Keep track of customers, projects, and their work orders.</p>
+                </div>
               </CardHeader>
               <CardContent>
-                <p className='text-sm text-slate-600'>We couldn't find that project. It may have been deleted.</p>
-                <div className='mt-4'>
-                  <Button onClick={() => setSelectedProjectId(null)}>Back to index</Button>
-                </div>
+                <nav className='flex flex-col gap-1'>
+                  {(['home', 'customers', 'projects'] as const).map(page => {
+                    const isActive = resolvedPage === page
+                    const label = page === 'home' ? 'Home' : page === 'customers' ? 'Customers' : 'Projects'
+                    return (
+                      <button
+                        key={page}
+                        type='button'
+                        onClick={() => handleNavigate(page)}
+                        className={`flex items-center justify-between rounded-xl px-4 py-2 text-sm font-medium transition ${
+                          isActive
+                            ? 'bg-slate-900 text-white shadow'
+                            : 'text-slate-600 hover:bg-white hover:text-slate-800'
+                        }`}
+                      >
+                        <span>{label}</span>
+                        {isActive ? <ChevronRight size={16} className='text-white/80' /> : null}
+                      </button>
+                    )
+                  })}
+                </nav>
               </CardContent>
             </Card>
-          )
-        ) : activePage === 'home' ? (
-          renderDashboardView()
-        ) : activePage === 'customers' ? (
-          renderCustomersPage()
-        ) : (
-          renderProjectsPage()
-        )}
+
+            {sidebarContent}
+          </div>
+        </aside>
+
+        <main className='flex-1'>
+          {loadError && (
+            <div className='mb-6 flex items-center justify-between gap-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
+              <span>{loadError}</span>
+              <Button variant='outline' onClick={() => void refreshCustomers()} disabled={isSyncing}>
+                Retry
+              </Button>
+            </div>
+          )}
+
+          <div className='mb-6 flex flex-wrap items-start justify-between gap-3'>
+            <div>
+              <h2 className='text-2xl font-semibold tracking-tight text-slate-900'>{pageHeading}</h2>
+              <p className='mt-1 text-sm text-slate-500'>{pageDescription}</p>
+            </div>
+            <div className='flex flex-wrap items-center justify-end gap-3'>
+              <span
+                className={`rounded-full border px-3 py-1 text-xs font-medium ${storageBadgeClass}`}
+                title={storageTitle}
+              >
+                Storage: {storageLabel}
+              </span>
+              {isSyncing && (
+                <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
+                  <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
+                  Syncing…
+                </span>
+              )}
+              {resolvedPage === 'customers' && (
+                <Button
+                  onClick={() => {
+                    setShowNewCustomer(true)
+                    setNewCustomerError(null)
+                  }}
+                  title='Create new customer'
+                  disabled={!canEdit}
+                >
+                  <Plus size={16} /> New Customer
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {storageNotice && (
+            <div className='mb-6 rounded-2xl border border-slate-200 bg-white/80 px-4 py-3 text-sm text-slate-700'>
+              {storageNotice}
+            </div>
+          )}
+
+          {actionError && (
+            <div className='mb-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
+              {actionError}
+            </div>
+          )}
+
+          {resolvedPage === 'home'
+            ? renderDashboardView()
+            : resolvedPage === 'customers'
+            ? renderCustomersPage()
+            : renderProjectsPage()}
+        </main>
       </div>
 
       {/* New Customer Modal */}
