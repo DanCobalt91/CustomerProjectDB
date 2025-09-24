@@ -15,7 +15,13 @@ export const PROJECT_STATUS_OPTIONS = ['Active', 'Complete'] as const;
 
 export type ProjectStatus = (typeof PROJECT_STATUS_OPTIONS)[number];
 
-export const PROJECT_ACTIVE_SUB_STATUS_OPTIONS = ['FDS', 'Design', 'Build', 'Install'] as const;
+export const PROJECT_ACTIVE_SUB_STATUS_OPTIONS = [
+  'FDS',
+  'Design',
+  'Build',
+  'Install',
+  'Install (Snagging)',
+] as const;
 
 export type ProjectActiveSubStatus = (typeof PROJECT_ACTIVE_SUB_STATUS_OPTIONS)[number];
 
@@ -104,7 +110,8 @@ export type Customer = {
 export type AppRole = 'viewer' | 'editor' | 'admin';
 
 export function formatProjectStatus(status: ProjectStatus, activeSubStatus?: ProjectActiveSubStatus): string {
-  return status === 'Active'
-    ? `Active — ${activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS}`
-    : 'Complete';
+  if (status === 'Active') {
+    return activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS;
+  }
+  return 'Complete';
 }
