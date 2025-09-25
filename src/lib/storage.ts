@@ -56,6 +56,8 @@ type StorageApi = {
   deleteProject(projectId: string): Promise<void>
   createWO(projectId: string, data: { number: string; type: WOType; note?: string }): Promise<WO>
   deleteWO(woId: string): Promise<void>
+  exportDatabase(): Promise<{ customers: Customer[] }>
+  importDatabase(data: unknown): Promise<Customer[]>
 }
 
 let localStorageStorage: StorageApi | null = null
@@ -134,6 +136,14 @@ export function createWO(
 
 export function deleteWO(woId: string): Promise<void> {
   return ensureLocalStorage().deleteWO(woId)
+}
+
+export function exportDatabase(): Promise<{ customers: Customer[] }> {
+  return ensureLocalStorage().exportDatabase()
+}
+
+export function importDatabase(data: unknown): Promise<Customer[]> {
+  return ensureLocalStorage().importDatabase(data)
 }
 
 function sortByText<T>(items: T[], getValue: (item: T) => string): T[] {
@@ -1069,6 +1079,28 @@ function createLocalStorageStorage(): StorageApi {
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
       saveDatabase({ customers: nextCustomers })
+    },
+
+    async exportDatabase(): Promise<{ customers: Customer[] }> {
+      const db = loadDatabase()
+      return {
+        customers: db.customers.map(cloneCustomer),
+      }
+    },
+
+    async importDatabase(data: unknown): Promise<Customer[]> {
+      let source: unknown = data
+      if (typeof data === 'string') {
+        try {
+          source = JSON.parse(data) as unknown
+        } catch {
+          throw new Error('The provided file is not valid JSON.')
+        }
+      }
+
+      const normalized = normalizeDatabase(source)
+      saveDatabase(normalized)
+      return normalized.customers.map(cloneCustomer)
     },
   }
 }
