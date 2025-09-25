@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent } from 'react'
+import type { ChangeEvent, KeyboardEvent } from 'react'
 import {
   Plus,
   Trash2,
@@ -28,6 +28,8 @@ import type {
   WOType,
   CustomerSignOffDecision,
   CustomerSignOffSubmission,
+  ProjectTask,
+  ProjectTaskStatus,
 } from '../types'
 import {
   DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
@@ -44,6 +46,9 @@ import {
   createWO as createWORecord,
   deleteWO as deleteWORecord,
   updateProject as updateProjectRecord,
+  createTask as createTaskRecord,
+  updateTask as updateTaskRecord,
+  deleteTask as deleteTaskRecord,
   exportDatabase as exportDatabaseRecords,
   importDatabase as importDatabaseRecords,
 } from '../lib/storage'
@@ -218,8 +223,12 @@ function AppContent() {
   }, [])
 
   // Search
-  const [customerQuery, setCustomerQuery] = useState('')
-  const [projectSearchQuery, setProjectSearchQuery] = useState('')
+  const [globalSearchQuery, setGlobalSearchQuery] = useState('')
+  const trimmedGlobalSearch = globalSearchQuery.trim()
+  const hasGlobalSearch = trimmedGlobalSearch.length > 0
+  const handleClearGlobalSearch = useCallback(() => {
+    setGlobalSearchQuery('')
+  }, [setGlobalSearchQuery])
 
   // Create customer (modal)
   const [newCust, setNewCust] = useState({
@@ -355,51 +364,88 @@ function AppContent() {
     })
   }, [selectedCustomer])
 
-  const customerMatches = useMemo(() => {
-    const query = customerQuery.trim().toLowerCase()
-    if (!query) {
-      return []
-    }
-    const matches: Array<{ id: string; name: string; address?: string | null }> = []
-    db.forEach(customer => {
-      const nameMatch = customer.name.toLowerCase().includes(query)
-      const addressMatch = customer.address ? customer.address.toLowerCase().includes(query) : false
-      if (nameMatch || addressMatch) {
-        matches.push({ id: customer.id, name: customer.name, address: customer.address })
+  type GlobalSearchMatch =
+    | {
+        id: string
+        kind: 'customer'
+        title: string
+        subtitle?: string
+        customerId: string
       }
-    })
-    return matches.slice(0, 25)
-  }, [db, customerQuery])
+    | {
+        id: string
+        kind: 'project'
+        title: string
+        subtitle: string
+        statusLabel: string
+        customerId: string
+        projectId: string
+      }
 
-  const projectMatches = useMemo(() => {
-    const query = projectSearchQuery.trim().toLowerCase()
-    if (!query) {
+  const globalMatches = useMemo<GlobalSearchMatch[]>(() => {
+    if (!hasGlobalSearch) {
       return []
     }
-    const matches: Array<{
-      customerId: string
-      projectId: string
-      projectNumber: string
-      customerName: string
-      statusLabel: string
-    }> = []
+    const normalized = trimmedGlobalSearch.toLowerCase()
+    const matches: GlobalSearchMatch[] = []
     db.forEach(customer => {
+      const customerName = customer.name.toLowerCase()
+      const customerAddress = customer.address?.toLowerCase() ?? ''
+      if (customerName.includes(normalized) || customerAddress.includes(normalized)) {
+        matches.push({
+          id: `customer-${customer.id}`,
+          kind: 'customer',
+          title: customer.name,
+          subtitle: customer.address ?? undefined,
+          customerId: customer.id,
+        })
+      }
       customer.projects.forEach(project => {
-        const normalizedNumber = project.number.toLowerCase()
-        const normalizedCustomer = customer.name.toLowerCase()
-        if (normalizedNumber.includes(query) || normalizedCustomer.includes(query)) {
+        const numberMatch = project.number.toLowerCase().includes(normalized)
+        const customerMatch = customerName.includes(normalized)
+        if (numberMatch || customerMatch) {
           matches.push({
+            id: `project-${project.id}`,
+            kind: 'project',
+            title: project.number,
+            subtitle: customer.name,
+            statusLabel: formatProjectStatus(project.status, project.activeSubStatus),
             customerId: customer.id,
             projectId: project.id,
-            projectNumber: project.number,
-            customerName: customer.name,
-            statusLabel: formatProjectStatus(project.status, project.activeSubStatus),
           })
         }
       })
     })
     return matches.slice(0, 25)
-  }, [db, projectSearchQuery])
+  }, [db, hasGlobalSearch, trimmedGlobalSearch])
+
+  const handleSelectGlobalMatch = useCallback(
+    (match: GlobalSearchMatch) => {
+      if (match.kind === 'customer') {
+        setSelectedCustomerId(match.customerId)
+        setSelectedProjectId(null)
+        setActivePage('customerDetail')
+      } else {
+        setSelectedCustomerId(match.customerId)
+        setSelectedProjectId(match.projectId)
+        setActivePage('projectDetail')
+      }
+      setGlobalSearchQuery('')
+    },
+    [setActivePage, setGlobalSearchQuery, setSelectedCustomerId, setSelectedProjectId],
+  )
+
+  const handleGlobalSearchKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === 'Enter' && globalMatches.length > 0) {
+        event.preventDefault()
+        handleSelectGlobalMatch(globalMatches[0])
+      } else if (event.key === 'Escape' && hasGlobalSearch) {
+        handleClearGlobalSearch()
+      }
+    },
+    [globalMatches, handleClearGlobalSearch, handleSelectGlobalMatch, hasGlobalSearch],
+  )
 
   const projectLists = useMemo(() => {
     const active: Array<{
@@ -513,26 +559,6 @@ function AppContent() {
       ),
     [db],
   )
-
-  const hasCustomerSearch = customerQuery.trim().length > 0
-
-  const handleClearCustomerSearch = useCallback(() => {
-    setCustomerQuery('')
-    setSelectedCustomerId(null)
-    setSelectedProjectId(null)
-  }, [setCustomerQuery, setSelectedCustomerId, setSelectedProjectId])
-
-  const canClearCustomerSearch = hasCustomerSearch || selectedCustomerId !== null || selectedProjectId !== null
-
-  const hasProjectSearch = projectSearchQuery.trim().length > 0
-
-  const handleClearProjectSearch = useCallback(() => {
-    setProjectSearchQuery('')
-    setSelectedProjectId(null)
-    setSelectedCustomerId(null)
-  }, [setProjectSearchQuery, setSelectedCustomerId, setSelectedProjectId])
-
-  const canClearProjectSearch = hasProjectSearch || selectedProjectId !== null || selectedCustomerId !== null
 
   const handleExportData = useCallback(async () => {
     setSettingsError(null)
@@ -763,19 +789,7 @@ function AppContent() {
     </Card>
   )
 
-  const renderCustomersIndex = () => (
-    <div className='space-y-6'>
-      {renderCustomerListCard()}
-      <Card className='panel'>
-        <CardHeader>
-          <div className='text-lg font-semibold text-slate-900'>Customer details</div>
-        </CardHeader>
-        <CardContent>
-          <p className='text-sm text-slate-600'>Select a customer from the list to view their information.</p>
-        </CardContent>
-      </Card>
-    </div>
-  )
+  const renderCustomersIndex = () => <div className='space-y-6'>{renderCustomerListCard()}</div>
 
   const renderCustomerDetailPage = () => {
     if (!selectedCustomer) {
@@ -1348,14 +1362,6 @@ function AppContent() {
           )}
         </Card>
 
-        <Card className='panel'>
-          <CardHeader>
-            <div className='text-lg font-semibold text-slate-900'>Project details</div>
-          </CardHeader>
-          <CardContent>
-            <p className='text-sm text-slate-600'>Select a project from the list to review its documents and work orders.</p>
-          </CardContent>
-        </Card>
       </div>
     )
   }
@@ -1461,135 +1467,21 @@ function AppContent() {
           setSelectedProjectId(null)
           setActivePage('customers')
         }}
+        onCreateTask={(task) =>
+          addTask(selectedProjectData.customer.id, selectedProjectData.project.id, task)
+        }
+        onUpdateTask={(taskId, updates) =>
+          updateTask(selectedProjectData.customer.id, selectedProjectData.project.id, taskId, updates)
+        }
+        onDeleteTask={(taskId) =>
+          deleteTask(selectedProjectData.customer.id, selectedProjectData.project.id, taskId)
+        }
       />
     )
   }
-  const renderCustomersSidebar = () => (
-    <div className='space-y-4'>
-      <Card className='panel'>
-        <CardHeader className='flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
-          <div className='flex items-center gap-2'>
-            <Search size={18} />
-            <div className='font-medium'>Customer Search</div>
-          </div>
-          <Button
-            variant='ghost'
-            onClick={handleClearCustomerSearch}
-            disabled={!canClearCustomerSearch}
-            className='w-full text-slate-600 hover:text-slate-800 disabled:text-slate-400 sm:w-auto'
-          >
-            <X size={16} /> Clear
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <Label htmlFor='customer-search'>Customer</Label>
-          <Input
-            id='customer-search'
-            value={customerQuery}
-            onChange={(e) => setCustomerQuery((e.target as HTMLInputElement).value)}
-            placeholder='Search by customer name or address…'
-            autoComplete='off'
-          />
+  const renderCustomersSidebar = () => null
 
-          <div className='mt-4'>
-            <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
-            <div className='mt-2 space-y-2'>
-              {!hasCustomerSearch ? (
-                <div className='text-sm text-slate-500'>Start typing above to find a customer.</div>
-              ) : customerMatches.length === 0 ? (
-                <div className='text-sm text-slate-500'>No customers found.</div>
-              ) : (
-                customerMatches.map(match => (
-                  <button
-                    key={match.id}
-                    onClick={() => {
-                      setSelectedCustomerId(match.id)
-                      setSelectedProjectId(null)
-                    }}
-                    className='flex w-full items-center justify-between rounded-2xl border border-slate-200/70 bg-white/80 p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg'
-                    title='Open customer'
-                  >
-                    <div>
-                      <div className='text-sm font-semibold text-slate-800'>{match.name}</div>
-                      {match.address ? <div className='text-xs text-slate-500'>{match.address}</div> : null}
-                    </div>
-                    <ChevronRight size={18} />
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-    </div>
-  )
-
-  const renderProjectsSidebar = () => {
-    const { active: activeProjects, completed: completedProjects } = projectLists
-
-    return (
-      <div className='space-y-4'>
-        <Card className='panel'>
-          <CardHeader className='flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
-            <div className='flex items-center gap-2'>
-              <Search size={18} />
-              <div className='font-medium'>Project Search</div>
-            </div>
-            <Button
-              variant='ghost'
-              onClick={handleClearProjectSearch}
-              disabled={!canClearProjectSearch}
-              className='w-full text-slate-600 hover:text-slate-800 disabled:text-slate-400 sm:w-auto'
-            >
-              <X size={16} /> Clear
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <Label htmlFor='project-search'>Project</Label>
-            <Input
-              id='project-search'
-              value={projectSearchQuery}
-              onChange={(e) => setProjectSearchQuery((e.target as HTMLInputElement).value)}
-              placeholder='Search by project number or customer…'
-              autoComplete='off'
-            />
-
-            <div className='mt-4'>
-              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Matches</div>
-              <div className='mt-2 space-y-2'>
-                {!hasProjectSearch ? (
-                  <div className='text-sm text-slate-500'>Start typing above to find a project.</div>
-                ) : projectMatches.length === 0 ? (
-                  <div className='text-sm text-slate-500'>No projects found.</div>
-                ) : (
-                  projectMatches.map(match => (
-                    <button
-                      key={match.projectId}
-                      onClick={() => {
-                        setSelectedCustomerId(match.customerId)
-                        setSelectedProjectId(match.projectId)
-                        setActivePage('projectDetail')
-                      }}
-                      className='flex w-full items-center justify-between rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition hover:border-slate-300 hover:bg-white'
-                      title='Open project details'
-                    >
-                      <div className='flex flex-col gap-0.5 text-left'>
-                        <span className='text-sm font-semibold text-slate-800'>{match.projectNumber}</span>
-                        <span className='text-xs text-slate-500'>{match.customerName}</span>
-                        <span className='text-xs text-slate-500'>{match.statusLabel}</span>
-                      </div>
-                      <ChevronRight size={16} />
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    )
-  }
+  const renderProjectsSidebar = () => null
 
   const renderHomeSidebar = () => (
     <div className='space-y-4'>
@@ -1904,6 +1796,22 @@ function AppContent() {
     const norm = number.trim().toLowerCase()
     return db.some(c => c.projects.some(p => p.wos.some(w => w.id !== excludeWoId && w.number.trim().toLowerCase() === norm)))
   }
+  const sortTasksForUi = (tasks: ProjectTask[]): ProjectTask[] =>
+    [...tasks].sort((a, b) => {
+      const aStart = a.start ? Date.parse(a.start) : Number.NaN
+      const bStart = b.start ? Date.parse(b.start) : Number.NaN
+      const aValid = !Number.isNaN(aStart)
+      const bValid = !Number.isNaN(bStart)
+      if (aValid && bValid) {
+        if (aStart === bStart) {
+          return a.name.localeCompare(b.name)
+        }
+        return aStart - bStart
+      }
+      if (aValid) return -1
+      if (bValid) return 1
+      return a.name.localeCompare(b.name)
+    })
 
   // Mutators
   async function saveCustomerDetails(
@@ -2690,6 +2598,205 @@ function AppContent() {
     })()
   }
 
+  async function addTask(
+    customerId: string,
+    projectId: string,
+    data: { name: string; start: string; end: string; assignee?: string; status: ProjectTaskStatus },
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to create tasks.'
+      setActionError(message)
+      return message
+    }
+    const trimmedName = data.name.trim()
+    if (!trimmedName) {
+      return 'Enter a task name.'
+    }
+    const startMs = Date.parse(data.start)
+    if (Number.isNaN(startMs)) {
+      return 'Enter a valid start date and time.'
+    }
+    const endMs = Date.parse(data.end)
+    if (Number.isNaN(endMs)) {
+      return 'Enter a valid end date and time.'
+    }
+    if (endMs < startMs) {
+      return 'The end time must be after the start time.'
+    }
+
+    const assignee = data.assignee?.trim()
+
+    try {
+      const createdTask = await createTaskRecord(projectId, {
+        name: trimmedName,
+        start: new Date(startMs).toISOString(),
+        end: new Date(endMs).toISOString(),
+        assignee: assignee || undefined,
+        status: data.status,
+      })
+
+      setDb(prev =>
+        prev.map(customer =>
+          customer.id !== customerId
+            ? customer
+            : {
+                ...customer,
+                projects: customer.projects.map(project =>
+                  project.id !== projectId
+                    ? project
+                    : {
+                        ...project,
+                        tasks: sortTasksForUi([...(project.tasks ?? []), createdTask]),
+                      },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to create task', error)
+      const message = toErrorMessage(error, 'Failed to create task.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function updateTask(
+    customerId: string,
+    projectId: string,
+    taskId: string,
+    updates: {
+      name?: string
+      start?: string
+      end?: string
+      assignee?: string
+      status?: ProjectTaskStatus
+    },
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to update tasks.'
+      setActionError(message)
+      return message
+    }
+
+    const customer = db.find(entry => entry.id === customerId)
+    const project = customer?.projects.find(entry => entry.id === projectId)
+    const existingTask = project?.tasks?.find(entry => entry.id === taskId)
+
+    if (!customer || !project || !existingTask) {
+      const message = 'Task not found.'
+      setActionError(message)
+      return message
+    }
+
+    const nextName = updates.name !== undefined ? updates.name.trim() : existingTask.name
+    if (!nextName) {
+      return 'Enter a task name.'
+    }
+
+    const nextStartSource = updates.start ?? existingTask.start
+    const nextEndSource = updates.end ?? existingTask.end
+    if (!nextStartSource) {
+      return 'Enter a start date and time.'
+    }
+    if (!nextEndSource) {
+      return 'Enter an end date and time.'
+    }
+
+    const startMs = Date.parse(nextStartSource)
+    if (Number.isNaN(startMs)) {
+      return 'Enter a valid start date and time.'
+    }
+    const endMs = Date.parse(nextEndSource)
+    if (Number.isNaN(endMs)) {
+      return 'Enter a valid end date and time.'
+    }
+    if (endMs < startMs) {
+      return 'The end time must be after the start time.'
+    }
+
+    let normalizedAssignee: string | undefined
+    if (updates.assignee !== undefined) {
+      const trimmedAssignee = updates.assignee.trim()
+      normalizedAssignee = trimmedAssignee ? trimmedAssignee : undefined
+    } else {
+      normalizedAssignee = existingTask.assignee
+    }
+
+    const nextStatus = updates.status ?? existingTask.status
+
+    try {
+      const updatedTask = await updateTaskRecord(projectId, taskId, {
+        name: nextName,
+        start: new Date(startMs).toISOString(),
+        end: new Date(endMs).toISOString(),
+        assignee: normalizedAssignee ?? null,
+        status: nextStatus,
+      })
+
+      setDb(prev =>
+        prev.map(entry =>
+          entry.id !== customerId
+            ? entry
+            : {
+                ...entry,
+                projects: entry.projects.map(projectEntry =>
+                  projectEntry.id !== projectId
+                    ? projectEntry
+                    : {
+                        ...projectEntry,
+                        tasks: sortTasksForUi(
+                          (projectEntry.tasks ?? []).map(task => (task.id === taskId ? updatedTask : task)),
+                        ),
+                      },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to update task', error)
+      const message = toErrorMessage(error, 'Failed to update task.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function deleteTask(customerId: string, projectId: string, taskId: string) {
+    if (!canEdit) {
+      setActionError('Not authorized to delete tasks.')
+      return
+    }
+
+    try {
+      await deleteTaskRecord(projectId, taskId)
+      setDb(prev =>
+        prev.map(entry =>
+          entry.id !== customerId
+            ? entry
+            : {
+                ...entry,
+                projects: entry.projects.map(projectEntry =>
+                  projectEntry.id !== projectId
+                    ? projectEntry
+                    : {
+                        ...projectEntry,
+                        tasks: sortTasksForUi((projectEntry.tasks ?? []).filter(task => task.id !== taskId)),
+                      },
+                ),
+              },
+        ),
+      )
+      setActionError(null)
+    } catch (error) {
+      console.error('Failed to delete task', error)
+      const message = toErrorMessage(error, 'Failed to delete task.')
+      setActionError(message)
+    }
+  }
+
   async function addWO(
     customerId: string,
     projectId: string,
@@ -2990,55 +3097,127 @@ function AppContent() {
             </div>
           )}
 
-          <div className='mb-6 flex flex-wrap items-start justify-between gap-3'>
+          <div className='mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between'>
             <div>
               <h2 className='text-2xl font-semibold tracking-tight text-slate-900'>{pageHeading}</h2>
               <p className='mt-1 text-sm text-slate-500'>{pageDescription}</p>
             </div>
-            <div className='flex flex-wrap items-center justify-end gap-3'>
-              <span
-                className={`rounded-full border px-3 py-1 text-xs font-medium ${storageBadgeClass}`}
-                title={storageTitle}
-              >
-                Storage: {storageLabel}
-              </span>
-              {isSyncing && (
-                <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
-                  <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
-                  Syncing…
-                </span>
-              )}
-              {resolvedPage === 'customers' && (
-                <Button
-                  onClick={() => {
-                    setShowNewCustomer(true)
-                    setNewCustomerError(null)
-                  }}
-                  title='Create new customer'
-                  disabled={!canEdit}
-                >
-                  <Plus size={16} /> New Customer
-                </Button>
-              )}
-              {resolvedPage === 'projects' && (
-                <Button
-                  onClick={() => {
-                    setShowNewProject(true)
-                    setNewProjectError(null)
-                    setNewProjectNumber('')
-                    const fallbackCustomerId = sortedCustomers[0]?.id ?? ''
-                    const validSelectedCustomerId =
-                      selectedCustomerId && db.some(customer => customer.id === selectedCustomerId)
-                        ? selectedCustomerId
-                        : null
-                    setNewProjectCustomerId(validSelectedCustomerId ?? fallbackCustomerId)
-                  }}
-                  title={hasCustomers ? 'Create new project' : 'Add a customer before creating projects'}
-                  disabled={!canEdit || !hasCustomers}
-                >
-                  <Plus size={16} /> New Project
-                </Button>
-              )}
+            <div className='flex w-full flex-col gap-3 lg:w-auto lg:items-end'>
+              <div className='flex w-full flex-col gap-3 sm:flex-row sm:items-start sm:justify-end'>
+                <div className='relative w-full sm:w-80'>
+                  <Label htmlFor='global-search' className='sr-only'>
+                    Search customers or projects
+                  </Label>
+                  <Search
+                    size={16}
+                    className='pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400'
+                  />
+                  <Input
+                    id='global-search'
+                    value={globalSearchQuery}
+                    onChange={(event) => setGlobalSearchQuery((event.target as HTMLInputElement).value)}
+                    onKeyDown={handleGlobalSearchKeyDown}
+                    placeholder='Search customers or projects…'
+                    autoComplete='off'
+                    className='pl-9 pr-10'
+                  />
+                  {hasGlobalSearch && (
+                    <button
+                      type='button'
+                      onClick={handleClearGlobalSearch}
+                      className='absolute inset-y-0 right-2 flex items-center rounded-full p-1 text-slate-400 transition hover:text-slate-600'
+                    >
+                      <X size={14} />
+                      <span className='sr-only'>Clear search</span>
+                    </button>
+                  )}
+                  {hasGlobalSearch && (
+                    <div className='absolute left-0 right-0 top-full z-20 mt-2 max-h-64 overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 p-2 text-sm shadow-xl backdrop-blur'>
+                      {globalMatches.length === 0 ? (
+                        <div className='px-2 py-4 text-slate-500'>No matches found.</div>
+                      ) : (
+                        <ul className='space-y-1'>
+                          {globalMatches.map(match => (
+                            <li key={match.id}>
+                              <button
+                                type='button'
+                                onClick={() => handleSelectGlobalMatch(match)}
+                                className='flex w-full flex-col items-start gap-1 rounded-xl px-3 py-2 text-left transition hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                              >
+                                <div className='flex w-full items-center justify-between gap-2'>
+                                  <span className='text-sm font-semibold text-slate-800'>{match.title}</span>
+                                  <span
+                                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                                      match.kind === 'customer'
+                                        ? 'bg-indigo-100 text-indigo-700'
+                                        : 'bg-emerald-100 text-emerald-700'
+                                    }`}
+                                  >
+                                    {match.kind === 'customer' ? 'Customer' : 'Project'}
+                                  </span>
+                                </div>
+                                {match.kind === 'project' ? (
+                                  <>
+                                    <span className='text-xs text-slate-500'>{match.subtitle}</span>
+                                    <span className='text-xs font-medium text-slate-500'>{match.statusLabel}</span>
+                                  </>
+                                ) : match.subtitle ? (
+                                  <span className='text-xs text-slate-500'>{match.subtitle}</span>
+                                ) : null}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className='flex flex-wrap items-center justify-end gap-3'>
+                  <span
+                    className={`rounded-full border px-3 py-1 text-xs font-medium ${storageBadgeClass}`}
+                    title={storageTitle}
+                  >
+                    Storage: {storageLabel}
+                  </span>
+                  {isSyncing && (
+                    <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
+                      <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
+                      Syncing…
+                    </span>
+                  )}
+                  {resolvedPage === 'customers' && (
+                    <Button
+                      onClick={() => {
+                        setShowNewCustomer(true)
+                        setNewCustomerError(null)
+                      }}
+                      title='Create new customer'
+                      disabled={!canEdit}
+                    >
+                      <Plus size={16} /> New Customer
+                    </Button>
+                  )}
+                  {resolvedPage === 'projects' && (
+                    <Button
+                      onClick={() => {
+                        setShowNewProject(true)
+                        setNewProjectError(null)
+                        setNewProjectNumber('')
+                        const fallbackCustomerId = sortedCustomers[0]?.id ?? ''
+                        const validSelectedCustomerId =
+                          selectedCustomerId && db.some(customer => customer.id === selectedCustomerId)
+                            ? selectedCustomerId
+                            : null
+                        setNewProjectCustomerId(validSelectedCustomerId ?? fallbackCustomerId)
+                      }}
+                      title={hasCustomers ? 'Create new project' : 'Add a customer before creating projects'}
+                      disabled={!canEdit || !hasCustomers}
+                    >
+                      <Plus size={16} /> New Project
+                    </Button>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 

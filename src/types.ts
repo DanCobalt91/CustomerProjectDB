@@ -84,6 +84,19 @@ export type CustomerSignOffSubmission = {
   signatureDimensions: CustomerSignOffSignatureDimensions;
 };
 
+export const PROJECT_TASK_STATUSES = ['Not started', 'Started', 'Complete'] as const;
+
+export type ProjectTaskStatus = (typeof PROJECT_TASK_STATUSES)[number];
+
+export type ProjectTask = {
+  id: string;
+  name: string;
+  status: ProjectTaskStatus;
+  start?: string;
+  end?: string;
+  assignee?: string;
+};
+
 export type Project = {
   id: string;
   number: string;
@@ -94,6 +107,7 @@ export type Project = {
   documents?: ProjectDocuments;
   statusHistory?: ProjectStatusLogEntry[];
   customerSignOff?: ProjectCustomerSignOff;
+  tasks?: ProjectTask[];
 };
 
 export type CustomerContact = {
