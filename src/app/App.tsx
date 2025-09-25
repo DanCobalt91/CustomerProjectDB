@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, KeyboardEvent } from 'react'
+import type { ChangeEvent, KeyboardEvent, CSSProperties } from 'react'
 import {
   Plus,
   Trash2,
@@ -34,6 +34,7 @@ import type {
 import {
   DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
   PROJECT_FILE_CATEGORIES,
+  PROJECT_TASK_STATUSES,
   formatProjectStatus,
 } from '../types'
 import {
@@ -170,6 +171,21 @@ const PROJECT_STATUS_BUCKET_META: Record<
 
 const CURRENT_USER_NAME = 'Demo User'
 
+const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchClass: string }> = {
+  'Not started': {
+    badgeClass: 'bg-slate-100 text-slate-700',
+    swatchClass: 'bg-slate-300',
+  },
+  Started: {
+    badgeClass: 'bg-sky-100 text-sky-700',
+    swatchClass: 'bg-sky-500',
+  },
+  Complete: {
+    badgeClass: 'bg-emerald-100 text-emerald-700',
+    swatchClass: 'bg-emerald-500',
+  },
+}
+
 function resolveProjectStatusBucket(project: Project): ProjectStatusBucket {
   if (project.status === 'Complete') {
     return 'complete'
@@ -189,12 +205,52 @@ function resolveProjectStatusBucket(project: Project): ProjectStatusBucket {
   }
 }
 
+function compareTasksBySchedule(a: ProjectTask, b: ProjectTask): number {
+  const aStart = a.start ? Date.parse(a.start) : Number.NaN
+  const bStart = b.start ? Date.parse(b.start) : Number.NaN
+  const aValid = !Number.isNaN(aStart)
+  const bValid = !Number.isNaN(bStart)
+  if (aValid && bValid) {
+    if (aStart === bStart) {
+      return a.name.localeCompare(b.name)
+    }
+    return aStart - bStart
+  }
+  if (aValid) return -1
+  if (bValid) return 1
+  return a.name.localeCompare(b.name)
+}
+
+function formatTaskRange(task: ProjectTask): string {
+  if (!task.start || !task.end) {
+    return 'No schedule recorded'
+  }
+  const start = new Date(task.start)
+  const end = new Date(task.end)
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return 'No schedule recorded'
+  }
+  const startLabel = start.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  const endLabel = end.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  return `${startLabel} – ${endLabel}`
+}
+
 function AppContent() {
   const [db, setDb] = useState<Customer[]>([])
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [activePage, setActivePage] = useState<
-    'home' | 'customers' | 'projects' | 'customerDetail' | 'projectDetail' | 'settings'
+    'home' | 'myTasks' | 'customers' | 'projects' | 'customerDetail' | 'projectDetail' | 'settings'
   >('home')
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
@@ -884,8 +940,8 @@ function AppContent() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className='grid gap-6 lg:grid-cols-2'>
-            <div className='flex flex-col gap-4 rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
+          <div className='grid grid-cols-1 gap-6 lg:grid-cols-2'>
+            <div className='flex min-w-0 flex-col gap-4 rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
               <div className='flex items-start justify-between gap-2'>
                 <div className='text-sm font-semibold text-slate-700'>Address</div>
                 {selectedCustomer.address ? (
@@ -902,7 +958,7 @@ function AppContent() {
                   </Button>
                 ) : null}
               </div>
-              <div className='rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+              <div className='w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
                 {selectedCustomer.address ? (
                   <span className='block whitespace-pre-wrap break-words text-slate-800'>
                     {selectedCustomer.address}
@@ -923,8 +979,8 @@ function AppContent() {
                 </div>
               ) : null}
             </div>
-            <div className='flex flex-col gap-4'>
-              <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
+            <div className='flex min-w-0 flex-col gap-4'>
+              <div className='w-full rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
                 <div className='flex flex-wrap items-center justify-between gap-2'>
                   <div className='text-sm font-semibold text-slate-700'>Contacts</div>
                   <Button
@@ -1036,7 +1092,7 @@ function AppContent() {
                 )}
               </div>
               {showNewContactForm && (
-                <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
+                <div className='w-full rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
                   <div className='text-sm font-semibold text-slate-700'>New Contact</div>
                   <div className='mt-3 grid gap-3 md:grid-cols-2'>
                     <div>
@@ -1366,6 +1422,119 @@ function AppContent() {
     )
   }
 
+  const renderMyTasksPage = () => {
+    const hasTasks = myTasks.length > 0
+
+    return (
+      <div className='space-y-6'>
+        <Card className='panel'>
+          <CardHeader className='flex-col items-start gap-2'>
+            <div className='text-lg font-semibold text-slate-900'>Task summary</div>
+            <p className='text-sm text-slate-500'>Monitor progress across the work assigned to you.</p>
+          </CardHeader>
+          <CardContent>
+            {!hasTasks ? (
+              <p className='text-sm text-slate-500'>Tasks assigned to you will appear here.</p>
+            ) : (
+              <div className='grid gap-3 sm:grid-cols-3'>
+                {PROJECT_TASK_STATUSES.map(status => (
+                  <div
+                    key={status}
+                    className='rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm'
+                  >
+                    <div className='flex items-center justify-between text-sm font-medium text-slate-700'>
+                      <span className='flex items-center gap-2'>
+                        <span className={`h-2.5 w-2.5 rounded-full ${TASK_STATUS_META[status].swatchClass}`} aria-hidden />
+                        {status}
+                      </span>
+                      <span className='text-base font-semibold text-slate-900'>{myTaskCounts[status]}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className='panel'>
+          <CardHeader className='flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between'>
+            <div>
+              <div className='text-lg font-semibold text-slate-900'>Assigned tasks</div>
+              <p className='text-sm text-slate-500'>All work items currently assigned to {CURRENT_USER_NAME}.</p>
+            </div>
+            {hasTasks ? (
+              <span className='text-xs font-medium text-slate-500'>
+                {myTasks.length === 1 ? '1 task assigned' : `${myTasks.length} tasks assigned`}
+              </span>
+            ) : null}
+          </CardHeader>
+          <CardContent>
+            {!hasTasks ? (
+              <p className='text-sm text-slate-500'>No tasks have been assigned to you yet.</p>
+            ) : (
+              <div className='space-y-3'>
+                {myTasks.map(entry => {
+                  const scheduleLabel = formatTaskRange(entry.task)
+                  const projectStatusStyle: CSSProperties = {
+                    color: entry.projectStatusColor,
+                    backgroundColor: `${entry.projectStatusColor}1a`,
+                    borderColor: `${entry.projectStatusColor}33`,
+                  }
+                  return (
+                    <div
+                      key={entry.id}
+                      className='rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm'
+                    >
+                      <div className='flex flex-col gap-3 md:flex-row md:items-start md:justify-between'>
+                        <div className='space-y-2'>
+                          <div className='flex flex-wrap items-center gap-2'>
+                            <span className='text-sm font-semibold text-slate-900'>{entry.task.name}</span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                TASK_STATUS_META[entry.task.status].badgeClass
+                              }`}
+                            >
+                              {entry.task.status}
+                            </span>
+                          </div>
+                          <div className='text-xs text-slate-500'>{scheduleLabel}</div>
+                          <div className='flex flex-wrap items-center gap-2 text-xs text-slate-500'>
+                            <span className='font-medium text-slate-600'>{entry.customerName}</span>
+                            <span aria-hidden className='text-slate-400'>•</span>
+                            <span>Project {entry.projectNumber}</span>
+                            <span aria-hidden className='text-slate-400'>•</span>
+                            <span
+                              className='inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold'
+                              style={projectStatusStyle}
+                            >
+                              {entry.projectStatusLabel}
+                            </span>
+                          </div>
+                        </div>
+                        <div className='flex flex-wrap items-center gap-2 md:justify-end'>
+                          <Button
+                            variant='outline'
+                            onClick={() => {
+                              setSelectedCustomerId(entry.customerId)
+                              setSelectedProjectId(entry.projectId)
+                              setActivePage('projectDetail')
+                            }}
+                          >
+                            View project
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   const renderProjectDetailPage = () => {
     if (!selectedProjectId) {
       return (
@@ -1482,6 +1651,51 @@ function AppContent() {
   const renderCustomersSidebar = () => null
 
   const renderProjectsSidebar = () => null
+
+  const renderMyTasksSidebar = () => (
+    <Card className='panel'>
+      <CardHeader className='flex-col items-start gap-3'>
+        <div>
+          <div className='text-lg font-semibold text-slate-900'>Your tasks</div>
+          <p className='text-sm text-slate-500'>Quick overview of work assigned to you.</p>
+        </div>
+        {myTasks.length > 0 ? (
+          <span className='rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white shadow'>
+            {myTasks.length === 1 ? '1 task' : `${myTasks.length} tasks`}
+          </span>
+        ) : null}
+      </CardHeader>
+      <CardContent>
+        {myTasks.length === 0 ? (
+          <p className='text-sm text-slate-500'>Tasks assigned to you will appear here.</p>
+        ) : (
+          <div className='space-y-4'>
+            <div className='space-y-2'>
+              {PROJECT_TASK_STATUSES.map(status => (
+                <div key={status} className='flex items-center justify-between text-sm text-slate-600'>
+                  <span className='flex items-center gap-2'>
+                    <span className={`h-2.5 w-2.5 rounded-full ${TASK_STATUS_META[status].swatchClass}`} aria-hidden />
+                    {status}
+                  </span>
+                  <span className='text-sm font-semibold text-slate-900'>{myTaskCounts[status]}</span>
+                </div>
+              ))}
+            </div>
+            {nextScheduledTask ? (
+              <div className='rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm'>
+                <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Next scheduled</div>
+                <div className='mt-1 text-sm font-semibold text-slate-900'>{nextScheduledTask.task.name}</div>
+                <div className='mt-1 text-xs text-slate-500'>{formatTaskRange(nextScheduledTask.task)}</div>
+                <div className='mt-2 text-xs text-slate-500'>
+                  {nextScheduledTask.customerName} • Project {nextScheduledTask.projectNumber}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
 
   const renderHomeSidebar = () => (
     <div className='space-y-4'>
@@ -1784,6 +1998,76 @@ function AppContent() {
     return null
   }, [db, selectedProjectId])
 
+  type AssignedTaskEntry = {
+    id: string
+    task: ProjectTask
+    customerId: string
+    projectId: string
+    customerName: string
+    projectNumber: string
+    projectStatusLabel: string
+    projectStatusColor: string
+  }
+
+  const myTasks = useMemo<AssignedTaskEntry[]>(() => {
+    const normalizedAssignee = CURRENT_USER_NAME.trim().toLowerCase()
+    if (!normalizedAssignee) {
+      return []
+    }
+
+    const tasks: AssignedTaskEntry[] = []
+    for (const customer of db) {
+      for (const project of customer.projects) {
+        const projectTasks = project.tasks ?? []
+        for (const task of projectTasks) {
+          const assignee = task.assignee?.trim().toLowerCase()
+          if (assignee && assignee === normalizedAssignee) {
+            const statusBucket = resolveProjectStatusBucket(project)
+            const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
+            tasks.push({
+              id: `${project.id}:${task.id}`,
+              task,
+              customerId: customer.id,
+              projectId: project.id,
+              customerName: customer.name,
+              projectNumber: project.number,
+              projectStatusLabel: formatProjectStatus(project.status, project.activeSubStatus),
+              projectStatusColor: statusMeta.color,
+            })
+          }
+        }
+      }
+    }
+
+    return tasks.sort((a, b) => compareTasksBySchedule(a.task, b.task))
+  }, [db])
+
+  const myTaskCounts = useMemo(() => {
+    const counts: Record<ProjectTaskStatus, number> = {
+      'Not started': 0,
+      Started: 0,
+      Complete: 0,
+    }
+    for (const entry of myTasks) {
+      counts[entry.task.status] += 1
+    }
+    return counts
+  }, [myTasks])
+
+  const nextScheduledTask = useMemo(() => {
+    for (const entry of myTasks) {
+      const startValue = entry.task.start
+      const endValue = entry.task.end
+      if (!startValue || !endValue) continue
+      const parsedStart = Date.parse(startValue)
+      const parsedEnd = Date.parse(endValue)
+      if (!Number.isNaN(parsedStart) && !Number.isNaN(parsedEnd)) {
+        return { ...entry, startDate: new Date(parsedStart), endDate: new Date(parsedEnd) }
+      }
+    }
+    return null
+  }, [myTasks])
+
   // Helpers
   const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
   const customerNameExists = (name: string, excludeId?: string) =>
@@ -1796,22 +2080,7 @@ function AppContent() {
     const norm = number.trim().toLowerCase()
     return db.some(c => c.projects.some(p => p.wos.some(w => w.id !== excludeWoId && w.number.trim().toLowerCase() === norm)))
   }
-  const sortTasksForUi = (tasks: ProjectTask[]): ProjectTask[] =>
-    [...tasks].sort((a, b) => {
-      const aStart = a.start ? Date.parse(a.start) : Number.NaN
-      const bStart = b.start ? Date.parse(b.start) : Number.NaN
-      const aValid = !Number.isNaN(aStart)
-      const bValid = !Number.isNaN(bStart)
-      if (aValid && bValid) {
-        if (aStart === bStart) {
-          return a.name.localeCompare(b.name)
-        }
-        return aStart - bStart
-      }
-      if (aValid) return -1
-      if (bValid) return 1
-      return a.name.localeCompare(b.name)
-    })
+  const sortTasksForUi = (tasks: ProjectTask[]): ProjectTask[] => [...tasks].sort(compareTasksBySchedule)
 
   // Mutators
   async function saveCustomerDetails(
@@ -2957,7 +3226,7 @@ function AppContent() {
     )
   }
 
-  const resolvedPage: 'home' | 'customers' | 'projects' | 'settings' =
+  const resolvedPage: 'home' | 'myTasks' | 'customers' | 'projects' | 'settings' =
     activePage === 'customerDetail'
       ? 'customers'
       : activePage === 'projectDetail'
@@ -2967,13 +3236,15 @@ function AppContent() {
   const sidebarContent =
     resolvedPage === 'home'
       ? renderHomeSidebar()
+      : resolvedPage === 'myTasks'
+      ? renderMyTasksSidebar()
       : resolvedPage === 'customers'
       ? renderCustomersSidebar()
       : resolvedPage === 'projects'
       ? renderProjectsSidebar()
       : renderSettingsSidebar()
 
-  const handleNavigate = (page: 'home' | 'customers' | 'projects' | 'settings') => {
+  const handleNavigate = (page: 'home' | 'myTasks' | 'customers' | 'projects' | 'settings') => {
     setIsSidebarOpen(false)
     if (page === 'projects') {
       setSelectedProjectId(null)
@@ -2982,6 +3253,9 @@ function AppContent() {
       setActivePage('customers')
     } else if (page === 'settings') {
       setActivePage('settings')
+    } else if (page === 'myTasks') {
+      setSelectedProjectId(null)
+      setActivePage('myTasks')
     } else {
       setActivePage(page)
     }
@@ -3001,6 +3275,8 @@ function AppContent() {
   const pageHeading =
     activePage === 'home'
       ? 'Workspace Overview'
+      : activePage === 'myTasks'
+      ? 'My Tasks'
       : activePage === 'customers'
       ? 'Customer Records'
       : activePage === 'customerDetail'
@@ -3014,6 +3290,8 @@ function AppContent() {
   const pageDescription =
     activePage === 'home'
       ? 'High-level metrics for your customers and projects.'
+      : activePage === 'myTasks'
+      ? 'Track and review tasks assigned to you across active projects.'
       : activePage === 'customers'
       ? 'Select a customer from the index to review their details and contacts.'
       : activePage === 'customerDetail'
@@ -3023,6 +3301,14 @@ function AppContent() {
       : activePage === 'settings'
       ? 'Export a backup or import data into this workspace.'
       : 'Manage documents, work orders, and final acceptance for this project.'
+
+  const navigationItems: Array<{ page: 'home' | 'myTasks' | 'customers' | 'projects' | 'settings'; label: string }> = [
+    { page: 'home', label: 'Home' },
+    { page: 'myTasks', label: 'My Tasks' },
+    { page: 'customers', label: 'Customers' },
+    { page: 'projects', label: 'Projects' },
+    { page: 'settings', label: 'Settings' },
+  ]
 
   const sidebarPanels = (
     <>
@@ -3034,34 +3320,93 @@ function AppContent() {
           </div>
         </CardHeader>
         <CardContent>
-          <nav className='flex flex-col gap-1'>
-            {(['home', 'customers', 'projects', 'settings'] as const).map(page => {
-              const isActive = resolvedPage === page
-              const label =
-                page === 'home'
-                  ? 'Home'
-                  : page === 'customers'
-                  ? 'Customers'
-                  : page === 'projects'
-                  ? 'Projects'
-                  : 'Settings'
-              return (
+          <div className='space-y-4'>
+            <div className='relative'>
+              <Label htmlFor='global-search' className='sr-only'>
+                Search customers or projects
+              </Label>
+              <Search size={16} className='pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400' />
+              <Input
+                id='global-search'
+                value={globalSearchQuery}
+                onChange={(event) => setGlobalSearchQuery((event.target as HTMLInputElement).value)}
+                onKeyDown={handleGlobalSearchKeyDown}
+                placeholder='Search customers or projects…'
+                autoComplete='off'
+                className='pl-9 pr-10'
+              />
+              {hasGlobalSearch && (
                 <button
-                  key={page}
                   type='button'
-                  onClick={() => handleNavigate(page)}
-                  className={`flex items-center justify-between rounded-xl px-4 py-2 text-sm font-medium transition ${
-                    isActive
-                      ? 'bg-slate-900 text-white shadow'
-                      : 'text-slate-600 hover:bg-white hover:text-slate-800'
-                  }`}
+                  onClick={handleClearGlobalSearch}
+                  className='absolute inset-y-0 right-2 flex items-center rounded-full p-1 text-slate-400 transition hover:text-slate-600'
                 >
-                  <span>{label}</span>
-                  {isActive ? <ChevronRight size={16} className='text-white/80' /> : null}
+                  <X size={14} />
+                  <span className='sr-only'>Clear search</span>
                 </button>
-              )
-            })}
-          </nav>
+              )}
+              {hasGlobalSearch && (
+                <div className='absolute left-0 right-0 top-full z-30 mt-2 max-h-64 overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 p-2 text-sm shadow-xl backdrop-blur'>
+                  {globalMatches.length === 0 ? (
+                    <div className='px-2 py-4 text-slate-500'>No matches found.</div>
+                  ) : (
+                    <ul className='space-y-1'>
+                      {globalMatches.map(match => (
+                        <li key={match.id}>
+                          <button
+                            type='button'
+                            onClick={() => handleSelectGlobalMatch(match)}
+                            className='flex w-full flex-col items-start gap-1 rounded-xl px-3 py-2 text-left transition hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
+                          >
+                            <div className='flex w-full items-center justify-between gap-2'>
+                              <span className='text-sm font-semibold text-slate-800'>{match.title}</span>
+                              <span
+                                className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                                  match.kind === 'customer'
+                                    ? 'bg-indigo-100 text-indigo-700'
+                                    : 'bg-emerald-100 text-emerald-700'
+                                }`}
+                              >
+                                {match.kind === 'customer' ? 'Customer' : 'Project'}
+                              </span>
+                            </div>
+                            {match.kind === 'project' ? (
+                              <>
+                                <span className='text-xs text-slate-500'>{match.subtitle}</span>
+                                <span className='text-xs font-medium text-slate-500'>{match.statusLabel}</span>
+                              </>
+                            ) : match.subtitle ? (
+                              <span className='text-xs text-slate-500'>{match.subtitle}</span>
+                            ) : null}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+            <nav className='flex flex-col gap-1'>
+              {navigationItems.map(item => {
+                const isActive = resolvedPage === item.page
+                return (
+                  <button
+                    key={item.page}
+                    type='button'
+                    onClick={() => handleNavigate(item.page)}
+                    className={`flex items-center justify-between rounded-xl px-4 py-2 text-sm font-medium transition ${
+                      isActive
+                        ? 'bg-slate-900 text-white shadow'
+                        : 'text-slate-600 hover:bg-white hover:text-slate-800'
+                    }`}
+                  >
+                    <span>{item.label}</span>
+                    {isActive ? <ChevronRight size={16} className='text-white/80' /> : null}
+                  </button>
+                )
+              })}
+            </nav>
+          </div>
         </CardContent>
       </Card>
       {sidebarContent}
@@ -3102,122 +3447,50 @@ function AppContent() {
               <h2 className='text-2xl font-semibold tracking-tight text-slate-900'>{pageHeading}</h2>
               <p className='mt-1 text-sm text-slate-500'>{pageDescription}</p>
             </div>
-            <div className='flex w-full flex-col gap-3 lg:w-auto lg:items-end'>
-              <div className='flex w-full flex-col gap-3 sm:flex-row sm:items-start sm:justify-end'>
-                <div className='relative w-full sm:w-80'>
-                  <Label htmlFor='global-search' className='sr-only'>
-                    Search customers or projects
-                  </Label>
-                  <Search
-                    size={16}
-                    className='pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400'
-                  />
-                  <Input
-                    id='global-search'
-                    value={globalSearchQuery}
-                    onChange={(event) => setGlobalSearchQuery((event.target as HTMLInputElement).value)}
-                    onKeyDown={handleGlobalSearchKeyDown}
-                    placeholder='Search customers or projects…'
-                    autoComplete='off'
-                    className='pl-9 pr-10'
-                  />
-                  {hasGlobalSearch && (
-                    <button
-                      type='button'
-                      onClick={handleClearGlobalSearch}
-                      className='absolute inset-y-0 right-2 flex items-center rounded-full p-1 text-slate-400 transition hover:text-slate-600'
-                    >
-                      <X size={14} />
-                      <span className='sr-only'>Clear search</span>
-                    </button>
-                  )}
-                  {hasGlobalSearch && (
-                    <div className='absolute left-0 right-0 top-full z-20 mt-2 max-h-64 overflow-y-auto rounded-2xl border border-slate-200 bg-white/95 p-2 text-sm shadow-xl backdrop-blur'>
-                      {globalMatches.length === 0 ? (
-                        <div className='px-2 py-4 text-slate-500'>No matches found.</div>
-                      ) : (
-                        <ul className='space-y-1'>
-                          {globalMatches.map(match => (
-                            <li key={match.id}>
-                              <button
-                                type='button'
-                                onClick={() => handleSelectGlobalMatch(match)}
-                                className='flex w-full flex-col items-start gap-1 rounded-xl px-3 py-2 text-left transition hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
-                              >
-                                <div className='flex w-full items-center justify-between gap-2'>
-                                  <span className='text-sm font-semibold text-slate-800'>{match.title}</span>
-                                  <span
-                                    className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                                      match.kind === 'customer'
-                                        ? 'bg-indigo-100 text-indigo-700'
-                                        : 'bg-emerald-100 text-emerald-700'
-                                    }`}
-                                  >
-                                    {match.kind === 'customer' ? 'Customer' : 'Project'}
-                                  </span>
-                                </div>
-                                {match.kind === 'project' ? (
-                                  <>
-                                    <span className='text-xs text-slate-500'>{match.subtitle}</span>
-                                    <span className='text-xs font-medium text-slate-500'>{match.statusLabel}</span>
-                                  </>
-                                ) : match.subtitle ? (
-                                  <span className='text-xs text-slate-500'>{match.subtitle}</span>
-                                ) : null}
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
-                  )}
-                </div>
-                <div className='flex flex-wrap items-center justify-end gap-3'>
-                  <span
-                    className={`rounded-full border px-3 py-1 text-xs font-medium ${storageBadgeClass}`}
-                    title={storageTitle}
-                  >
-                    Storage: {storageLabel}
-                  </span>
-                  {isSyncing && (
-                    <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
-                      <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
-                      Syncing…
-                    </span>
-                  )}
-                  {resolvedPage === 'customers' && (
-                    <Button
-                      onClick={() => {
-                        setShowNewCustomer(true)
-                        setNewCustomerError(null)
-                      }}
-                      title='Create new customer'
-                      disabled={!canEdit}
-                    >
-                      <Plus size={16} /> New Customer
-                    </Button>
-                  )}
-                  {resolvedPage === 'projects' && (
-                    <Button
-                      onClick={() => {
-                        setShowNewProject(true)
-                        setNewProjectError(null)
-                        setNewProjectNumber('')
-                        const fallbackCustomerId = sortedCustomers[0]?.id ?? ''
-                        const validSelectedCustomerId =
-                          selectedCustomerId && db.some(customer => customer.id === selectedCustomerId)
-                            ? selectedCustomerId
-                            : null
-                        setNewProjectCustomerId(validSelectedCustomerId ?? fallbackCustomerId)
-                      }}
-                      title={hasCustomers ? 'Create new project' : 'Add a customer before creating projects'}
-                      disabled={!canEdit || !hasCustomers}
-                    >
-                      <Plus size={16} /> New Project
-                    </Button>
-                  )}
-                </div>
-              </div>
+            <div className='flex w-full flex-wrap items-center justify-end gap-3 lg:w-auto'>
+              <span
+                className={`rounded-full border px-3 py-1 text-xs font-medium ${storageBadgeClass}`}
+                title={storageTitle}
+              >
+                Storage: {storageLabel}
+              </span>
+              {isSyncing && (
+                <span className='flex items-center gap-2 text-xs font-medium text-slate-500'>
+                  <span className='h-2.5 w-2.5 animate-spin rounded-full border-2 border-slate-300 border-t-sky-500' aria-hidden />
+                  Syncing…
+                </span>
+              )}
+              {resolvedPage === 'customers' && (
+                <Button
+                  onClick={() => {
+                    setShowNewCustomer(true)
+                    setNewCustomerError(null)
+                  }}
+                  title='Create new customer'
+                  disabled={!canEdit}
+                >
+                  <Plus size={16} /> New Customer
+                </Button>
+              )}
+              {resolvedPage === 'projects' && (
+                <Button
+                  onClick={() => {
+                    setShowNewProject(true)
+                    setNewProjectError(null)
+                    setNewProjectNumber('')
+                    const fallbackCustomerId = sortedCustomers[0]?.id ?? ''
+                    const validSelectedCustomerId =
+                      selectedCustomerId && db.some(customer => customer.id === selectedCustomerId)
+                        ? selectedCustomerId
+                        : null
+                    setNewProjectCustomerId(validSelectedCustomerId ?? fallbackCustomerId)
+                  }}
+                  title={hasCustomers ? 'Create new project' : 'Add a customer before creating projects'}
+                  disabled={!canEdit || !hasCustomers}
+                >
+                  <Plus size={16} /> New Project
+                </Button>
+              )}
             </div>
           </div>
 
@@ -3235,6 +3508,8 @@ function AppContent() {
 
           {activePage === 'home'
             ? renderDashboardView()
+            : activePage === 'myTasks'
+            ? renderMyTasksPage()
             : activePage === 'customers'
             ? renderCustomersIndex()
             : activePage === 'customerDetail'
