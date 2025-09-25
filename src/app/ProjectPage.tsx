@@ -13,6 +13,7 @@ import {
   Trash2,
   Upload,
   X,
+  User,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import type {
@@ -26,11 +27,14 @@ import type {
   WOType,
   CustomerSignOffDecision,
   CustomerSignOffSubmission,
+  ProjectTask,
+  ProjectTaskStatus,
 } from '../types'
 import {
   DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
   PROJECT_ACTIVE_SUB_STATUS_OPTIONS,
   PROJECT_FILE_CATEGORIES,
+  PROJECT_TASK_STATUSES,
   formatProjectStatus,
 } from '../types'
 import Button from '../components/ui/Button'
@@ -38,6 +42,7 @@ import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { CUSTOMER_SIGN_OFF_OPTIONS, CUSTOMER_SIGN_OFF_OPTION_COPY } from '../lib/signOff'
+import TaskGanttChart from '../components/ui/TaskGanttChart'
 
 export type ProjectPageProps = {
   customer: Customer
@@ -61,6 +66,24 @@ export type ProjectPageProps = {
   onNavigateToCustomer: () => void
   onReturnToIndex: () => void
   onNavigateToCustomers: () => void
+  onCreateTask: (data: {
+    name: string
+    start: string
+    end: string
+    assignee?: string
+    status: ProjectTaskStatus
+  }) => Promise<string | null>
+  onUpdateTask: (
+    taskId: string,
+    updates: {
+      name?: string
+      start?: string
+      end?: string
+      assignee?: string
+      status?: ProjectTaskStatus
+    },
+  ) => Promise<string | null>
+  onDeleteTask: (taskId: string) => void
 }
 
 const PROJECT_FILE_METADATA: Record<ProjectFileCategory, { label: string; description: string }> = {
@@ -96,18 +119,106 @@ const UPLOAD_OPTIONS: Array<{ value: UploadCategory; label: string }> = [
 const PROJECT_FILE_ACCEPT =
   '.pdf,.doc,.docx,.png,.jpg,.jpeg,.svg,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/png,image/jpeg,image/svg+xml'
 
+const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchClass: string }> = {
+  'Not started': {
+    badgeClass: 'bg-slate-100 text-slate-700',
+    swatchClass: 'bg-slate-300',
+  },
+  Started: {
+    badgeClass: 'bg-sky-100 text-sky-700',
+    swatchClass: 'bg-sky-500',
+  },
+  Complete: {
+    badgeClass: 'bg-emerald-100 text-emerald-700',
+    swatchClass: 'bg-emerald-500',
+  },
+}
+
 const PROJECT_TABS = [
   { value: 'files', label: 'Project Files' },
   { value: 'workOrders', label: 'Work Orders' },
+  { value: 'tasks', label: 'Tasks' },
 ] as const
 
 type ProjectTab = (typeof PROJECT_TABS)[number]['value']
 type UploadCategory = ProjectFileCategory | 'finalAcceptance'
+type TaskFormState = {
+  name: string
+  start: string
+  end: string
+  assignee: string
+  status: ProjectTaskStatus
+}
 
 function stripPrefix(value: string, pattern: RegExp): string {
   const trimmed = value.trim()
   const match = trimmed.match(pattern)
   return match ? match[1].trim() : trimmed
+}
+
+function sortTasksForDisplay(tasks: ProjectTask[]): ProjectTask[] {
+  return [...tasks].sort((a, b) => {
+    const aStart = a.start ? Date.parse(a.start) : Number.NaN
+    const bStart = b.start ? Date.parse(b.start) : Number.NaN
+    const aValid = !Number.isNaN(aStart)
+    const bValid = !Number.isNaN(bStart)
+    if (aValid && bValid) {
+      if (aStart === bStart) {
+        return a.name.localeCompare(b.name)
+      }
+      return aStart - bStart
+    }
+    if (aValid) return -1
+    if (bValid) return 1
+    return a.name.localeCompare(b.name)
+  })
+}
+
+function toDateTimeLocal(value?: string): string {
+  if (!value) {
+    return ''
+  }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return ''
+  }
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 16)
+}
+
+function fromDateTimeLocal(value: string): string | null {
+  if (!value) {
+    return null
+  }
+  const parsed = Date.parse(value)
+  if (Number.isNaN(parsed)) {
+    return null
+  }
+  return new Date(parsed).toISOString()
+}
+
+function formatTaskRange(task: ProjectTask): string {
+  if (!task.start || !task.end) {
+    return 'No schedule recorded'
+  }
+  const start = new Date(task.start)
+  const end = new Date(task.end)
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return 'No schedule recorded'
+  }
+  const startLabel = start.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  const endLabel = end.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  return `${startLabel} – ${endLabel}`
 }
 
 const ACTIVE_STATUS_STYLES: Record<
@@ -214,6 +325,9 @@ export default function ProjectPage({
   onNavigateToCustomer,
   onReturnToIndex,
   onNavigateToCustomers,
+  onCreateTask,
+  onUpdateTask,
+  onDeleteTask,
 }: ProjectPageProps) {
   const [statusDraft, setStatusDraft] = useState<ProjectStatus>(project.status)
   const [activeSubStatusDraft, setActiveSubStatusDraft] = useState<ProjectActiveSubStatus>(
@@ -260,6 +374,26 @@ export default function ProjectPage({
   const signatureDrawingRef = useRef(false)
   const signatureStrokesRef = useRef<Array<Array<{ x: number; y: number }>>>([])
   const activeSignatureStrokeRef = useRef<number | null>(null)
+  const tasks = useMemo(() => sortTasksForDisplay(project.tasks ?? []), [project.tasks])
+  const [taskForm, setTaskForm] = useState<TaskFormState>({
+    name: '',
+    start: '',
+    end: '',
+    assignee: '',
+    status: PROJECT_TASK_STATUSES[0],
+  })
+  const [taskError, setTaskError] = useState<string | null>(null)
+  const [isSavingTask, setIsSavingTask] = useState(false)
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
+  const [taskEditDraft, setTaskEditDraft] = useState<TaskFormState>({
+    name: '',
+    start: '',
+    end: '',
+    assignee: '',
+    status: PROJECT_TASK_STATUSES[0],
+  })
+  const [taskEditError, setTaskEditError] = useState<string | null>(null)
+  const [isSavingTaskEdit, setIsSavingTaskEdit] = useState(false)
 
   const documents = project.documents ?? {}
   const documentsCount = useMemo(() => {
@@ -296,6 +430,16 @@ export default function ProjectPage({
     signatureStrokesRef.current = []
     setHasSignature(false)
   }, [])
+
+  useEffect(() => {
+    setTaskForm({ name: '', start: '', end: '', assignee: '', status: PROJECT_TASK_STATUSES[0] })
+    setTaskError(null)
+    setEditingTaskId(null)
+    setTaskEditDraft({ name: '', start: '', end: '', assignee: '', status: PROJECT_TASK_STATUSES[0] })
+    setTaskEditError(null)
+    setIsSavingTask(false)
+    setIsSavingTaskEdit(false)
+  }, [project.id])
 
   const openNoteDialog = () => {
     if (!canEdit) {
@@ -714,6 +858,149 @@ export default function ProjectPage({
       setWoError(null)
     } finally {
       setIsAddingWo(false)
+    }
+  }
+
+  const handleCreateTask = async () => {
+    if (!canEdit) {
+      setTaskError('You have read-only access.')
+      return
+    }
+    const trimmedName = taskForm.name.trim()
+    if (!trimmedName) {
+      setTaskError('Enter a task name.')
+      return
+    }
+    if (!taskForm.start) {
+      setTaskError('Choose a start date and time.')
+      return
+    }
+    if (!taskForm.end) {
+      setTaskError('Choose an end date and time.')
+      return
+    }
+    const startIso = fromDateTimeLocal(taskForm.start)
+    if (!startIso) {
+      setTaskError('Enter a valid start date and time.')
+      return
+    }
+    const endIso = fromDateTimeLocal(taskForm.end)
+    if (!endIso) {
+      setTaskError('Enter a valid end date and time.')
+      return
+    }
+    if (Date.parse(endIso) < Date.parse(startIso)) {
+      setTaskError('The end time must be after the start time.')
+      return
+    }
+
+    setIsSavingTask(true)
+    try {
+      const error = await onCreateTask({
+        name: trimmedName,
+        start: startIso,
+        end: endIso,
+        assignee: taskForm.assignee.trim() || undefined,
+        status: taskForm.status,
+      })
+      if (error) {
+        setTaskError(error)
+        return
+      }
+      setTaskForm({ name: '', start: '', end: '', assignee: '', status: PROJECT_TASK_STATUSES[0] })
+      setTaskError(null)
+    } finally {
+      setIsSavingTask(false)
+    }
+  }
+
+  const beginEditingTask = (task: ProjectTask) => {
+    setEditingTaskId(task.id)
+    setTaskEditDraft({
+      name: task.name,
+      start: toDateTimeLocal(task.start),
+      end: toDateTimeLocal(task.end),
+      assignee: task.assignee ?? '',
+      status: task.status,
+    })
+    setTaskEditError(null)
+  }
+
+  const cancelTaskEdit = () => {
+    setEditingTaskId(null)
+    setTaskEditError(null)
+    setIsSavingTaskEdit(false)
+  }
+
+  const handleSaveTaskEdit = async () => {
+    if (!editingTaskId) {
+      return
+    }
+    if (!canEdit) {
+      setTaskEditError('You have read-only access.')
+      return
+    }
+    const trimmedName = taskEditDraft.name.trim()
+    if (!trimmedName) {
+      setTaskEditError('Enter a task name.')
+      return
+    }
+    if (!taskEditDraft.start) {
+      setTaskEditError('Choose a start date and time.')
+      return
+    }
+    if (!taskEditDraft.end) {
+      setTaskEditError('Choose an end date and time.')
+      return
+    }
+    const startIso = fromDateTimeLocal(taskEditDraft.start)
+    if (!startIso) {
+      setTaskEditError('Enter a valid start date and time.')
+      return
+    }
+    const endIso = fromDateTimeLocal(taskEditDraft.end)
+    if (!endIso) {
+      setTaskEditError('Enter a valid end date and time.')
+      return
+    }
+    if (Date.parse(endIso) < Date.parse(startIso)) {
+      setTaskEditError('The end time must be after the start time.')
+      return
+    }
+
+    setIsSavingTaskEdit(true)
+    try {
+      const error = await onUpdateTask(editingTaskId, {
+        name: trimmedName,
+        start: startIso,
+        end: endIso,
+        assignee: taskEditDraft.assignee.trim() || undefined,
+        status: taskEditDraft.status,
+      })
+      if (error) {
+        setTaskEditError(error)
+        return
+      }
+      setEditingTaskId(null)
+      setTaskEditError(null)
+    } finally {
+      setIsSavingTaskEdit(false)
+    }
+  }
+
+  const handleDeleteTaskClick = (taskId: string) => {
+    if (!canEdit) {
+      setTaskEditError('You have read-only access.')
+      return
+    }
+    const confirmed = window.confirm('Delete this task?')
+    if (!confirmed) {
+      return
+    }
+    void onDeleteTask(taskId)
+    if (editingTaskId === taskId) {
+      setEditingTaskId(null)
+      setTaskEditError(null)
     }
   }
 
@@ -1282,6 +1569,269 @@ export default function ProjectPage({
     )
   }
 
+  const renderTasks = () => {
+    const hasTasks = tasks.length > 0
+
+    return (
+      <div className='space-y-6'>
+        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
+          <div className='mb-4 flex flex-wrap items-center justify-between gap-3'>
+            <div className='text-sm font-semibold text-slate-800'>Project timeline</div>
+            <div className='flex flex-wrap items-center gap-3 text-xs text-slate-500'>
+              {PROJECT_TASK_STATUSES.map(status => (
+                <span key={status} className='inline-flex items-center gap-1'>
+                  <span className={`h-2.5 w-2.5 rounded-full ${TASK_STATUS_META[status].swatchClass}`} aria-hidden />
+                  {status}
+                </span>
+              ))}
+            </div>
+          </div>
+          {hasTasks ? (
+            <TaskGanttChart tasks={tasks} />
+          ) : (
+            <p className='text-sm text-slate-500'>Add a task with a start and end time to see it on the timeline.</p>
+          )}
+        </section>
+
+        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
+          <div className='mb-3 text-sm font-semibold text-slate-800'>Create task</div>
+          <div className='grid gap-3 md:grid-cols-2'>
+            <div>
+              <Label htmlFor='task-name'>Task name</Label>
+              <Input
+                id='task-name'
+                value={taskForm.name}
+                onChange={event => {
+                  setTaskForm(prev => ({ ...prev, name: event.target.value }))
+                  if (taskError) setTaskError(null)
+                }}
+                placeholder='e.g. Install conveyors'
+                disabled={!canEdit}
+              />
+            </div>
+            <div>
+              <Label htmlFor='task-assignee'>Assignee</Label>
+              <Input
+                id='task-assignee'
+                value={taskForm.assignee}
+                onChange={event => {
+                  setTaskForm(prev => ({ ...prev, assignee: event.target.value }))
+                  if (taskError) setTaskError(null)
+                }}
+                placeholder='e.g. Jamie Lee'
+                disabled={!canEdit}
+              />
+            </div>
+            <div>
+              <Label htmlFor='task-start'>Start</Label>
+              <input
+                id='task-start'
+                type='datetime-local'
+                className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                value={taskForm.start}
+                onChange={event => {
+                  setTaskForm(prev => ({ ...prev, start: (event.target as HTMLInputElement).value }))
+                  if (taskError) setTaskError(null)
+                }}
+                disabled={!canEdit}
+              />
+            </div>
+            <div>
+              <Label htmlFor='task-end'>End</Label>
+              <input
+                id='task-end'
+                type='datetime-local'
+                className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                value={taskForm.end}
+                onChange={event => {
+                  setTaskForm(prev => ({ ...prev, end: (event.target as HTMLInputElement).value }))
+                  if (taskError) setTaskError(null)
+                }}
+                disabled={!canEdit}
+              />
+            </div>
+            <div>
+              <Label htmlFor='task-status'>Status</Label>
+              <select
+                id='task-status'
+                className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                value={taskForm.status}
+                onChange={event => {
+                  setTaskForm(prev => ({ ...prev, status: event.target.value as ProjectTaskStatus }))
+                  if (taskError) setTaskError(null)
+                }}
+                disabled={!canEdit}
+              >
+                {PROJECT_TASK_STATUSES.map(status => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {taskError && (
+            <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
+              <AlertCircle size={14} /> {taskError}
+            </p>
+          )}
+          <div className='mt-3 flex justify-end'>
+            <Button onClick={() => void handleCreateTask()} disabled={isSavingTask || !canEdit}>
+              <Plus size={16} /> Add Task
+            </Button>
+          </div>
+        </section>
+
+        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
+          <div className='mb-3 flex flex-wrap items-center justify-between gap-2'>
+            <div className='text-sm font-semibold text-slate-800'>Existing tasks</div>
+            <span className='text-xs text-slate-500'>
+              {tasks.length === 1 ? '1 task scheduled' : `${tasks.length} tasks scheduled`}
+            </span>
+          </div>
+          {!hasTasks ? (
+            <p className='text-sm text-slate-500'>Use the form above to add the first task for this project.</p>
+          ) : (
+            <div className='space-y-3'>
+              {tasks.map(task => {
+                const isEditing = editingTaskId === task.id
+                return (
+                  <div
+                    key={task.id}
+                    className='rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm'
+                  >
+                    {!isEditing ? (
+                      <div className='flex flex-col gap-3 md:flex-row md:items-start md:justify-between'>
+                        <div className='space-y-1'>
+                          <div className='text-sm font-semibold text-slate-900'>{task.name}</div>
+                          <div className='text-xs text-slate-500'>{formatTaskRange(task)}</div>
+                          {task.assignee ? (
+                            <div className='flex items-center gap-1 text-xs text-slate-500'>
+                              <User size={12} className='text-slate-400' />
+                              <span>{task.assignee}</span>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className='flex flex-wrap items-center gap-2'>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-semibold ${TASK_STATUS_META[task.status].badgeClass}`}
+                          >
+                            {task.status}
+                          </span>
+                          <Button
+                            variant='outline'
+                            onClick={() => beginEditingTask(task)}
+                            disabled={!canEdit}
+                            title={canEdit ? 'Edit task' : 'Read-only access'}
+                          >
+                            <Pencil size={14} /> Edit
+                          </Button>
+                          <Button
+                            variant='ghost'
+                            className='text-rose-600 hover:bg-rose-50'
+                            onClick={() => handleDeleteTaskClick(task.id)}
+                            disabled={!canEdit}
+                            title={canEdit ? 'Delete task' : 'Read-only access'}
+                          >
+                            <Trash2 size={14} /> Delete
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className='space-y-3'>
+                        <div className='grid gap-3 md:grid-cols-2'>
+                          <div>
+                            <Label>Task name</Label>
+                            <Input
+                              value={taskEditDraft.name}
+                              onChange={event => {
+                                setTaskEditDraft(prev => ({ ...prev, name: event.target.value }))
+                                if (taskEditError) setTaskEditError(null)
+                              }}
+                              disabled={!canEdit}
+                            />
+                          </div>
+                          <div>
+                            <Label>Assignee</Label>
+                            <Input
+                              value={taskEditDraft.assignee}
+                              onChange={event => {
+                                setTaskEditDraft(prev => ({ ...prev, assignee: event.target.value }))
+                                if (taskEditError) setTaskEditError(null)
+                              }}
+                              disabled={!canEdit}
+                            />
+                          </div>
+                          <div>
+                            <Label>Start</Label>
+                            <input
+                              type='datetime-local'
+                              className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                              value={taskEditDraft.start}
+                              onChange={event => {
+                                setTaskEditDraft(prev => ({ ...prev, start: (event.target as HTMLInputElement).value }))
+                                if (taskEditError) setTaskEditError(null)
+                              }}
+                              disabled={!canEdit}
+                            />
+                          </div>
+                          <div>
+                            <Label>End</Label>
+                            <input
+                              type='datetime-local'
+                              className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                              value={taskEditDraft.end}
+                              onChange={event => {
+                                setTaskEditDraft(prev => ({ ...prev, end: (event.target as HTMLInputElement).value }))
+                                if (taskEditError) setTaskEditError(null)
+                              }}
+                              disabled={!canEdit}
+                            />
+                          </div>
+                          <div>
+                            <Label>Status</Label>
+                            <select
+                              className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                              value={taskEditDraft.status}
+                              onChange={event => {
+                                setTaskEditDraft(prev => ({ ...prev, status: event.target.value as ProjectTaskStatus }))
+                                if (taskEditError) setTaskEditError(null)
+                              }}
+                              disabled={!canEdit}
+                            >
+                              {PROJECT_TASK_STATUSES.map(status => (
+                                <option key={status} value={status}>
+                                  {status}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                        {taskEditError && (
+                          <p className='flex items-center gap-1 text-sm text-rose-600'>
+                            <AlertCircle size={14} /> {taskEditError}
+                          </p>
+                        )}
+                        <div className='flex flex-wrap justify-end gap-2'>
+                          <Button variant='outline' onClick={cancelTaskEdit} disabled={isSavingTaskEdit}>
+                            Cancel
+                          </Button>
+                          <Button onClick={() => void handleSaveTaskEdit()} disabled={isSavingTaskEdit || !canEdit}>
+                            {isSavingTaskEdit ? 'Saving…' : 'Save task'}
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      </div>
+    )
+  }
+
   return (
     <>
       <Card className='panel'>
@@ -1435,7 +1985,11 @@ export default function ProjectPage({
           {PROJECT_TABS.map(tab => {
             const isActive = activeTab === tab.value
             const count =
-              tab.value === 'files' ? documentsCount : project.wos.length
+              tab.value === 'files'
+                ? documentsCount
+                : tab.value === 'workOrders'
+                ? project.wos.length
+                : tasks.length
             return (
               <button
                 key={tab.value}
@@ -1456,7 +2010,13 @@ export default function ProjectPage({
           })}
         </div>
 
-        <div className='pt-2'>{activeTab === 'files' ? renderProjectFiles() : renderWorkOrders()}</div>
+        <div className='pt-2'>
+          {activeTab === 'files'
+            ? renderProjectFiles()
+            : activeTab === 'workOrders'
+            ? renderWorkOrders()
+            : renderTasks()}
+        </div>
       </CardContent>
       </Card>
       <AnimatePresence>
