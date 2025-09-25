@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ChangeEvent } from 'react'
 import {
   Plus,
   Trash2,
@@ -11,6 +12,8 @@ import {
   ChevronRight,
   AlertCircle,
   Menu,
+  Download,
+  Upload,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type {
@@ -41,6 +44,8 @@ import {
   createWO as createWORecord,
   deleteWO as deleteWORecord,
   updateProject as updateProjectRecord,
+  exportDatabase as exportDatabaseRecords,
+  importDatabase as importDatabaseRecords,
 } from '../lib/storage'
 import { createId } from '../lib/id'
 import { generateCustomerSignOffPdf } from '../lib/signOff'
@@ -184,7 +189,7 @@ function AppContent() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [activePage, setActivePage] = useState<
-    'home' | 'customers' | 'projects' | 'customerDetail' | 'projectDetail'
+    'home' | 'customers' | 'projects' | 'customerDetail' | 'projectDetail' | 'settings'
   >('home')
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
@@ -192,6 +197,11 @@ function AppContent() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [isSyncing, setIsSyncing] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null)
+  const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [isExportingData, setIsExportingData] = useState(false)
+  const [isImportingData, setIsImportingData] = useState(false)
+  const importFileInputRef = useRef<HTMLInputElement | null>(null)
   const storageLabel = 'Local browser storage'
   const storageTitle = 'Data is stored locally in this browser for testing.'
   const storageBadgeClass = 'border-slate-300 bg-white text-slate-700'
@@ -285,6 +295,13 @@ function AppContent() {
   useEffect(() => {
     void refreshCustomers(true)
   }, [refreshCustomers])
+
+  useEffect(() => {
+    if (activePage !== 'settings') {
+      setSettingsSuccess(null)
+      setSettingsError(null)
+    }
+  }, [activePage])
 
 
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
@@ -516,6 +533,130 @@ function AppContent() {
   }, [setProjectSearchQuery, setSelectedCustomerId, setSelectedProjectId])
 
   const canClearProjectSearch = hasProjectSearch || selectedProjectId !== null || selectedCustomerId !== null
+
+  const handleExportData = useCallback(async () => {
+    setSettingsError(null)
+    setSettingsSuccess(null)
+    setIsExportingData(true)
+    try {
+      const data = await exportDatabaseRecords()
+      const timestamp = new Date().toISOString().replace(/[:]/g, '-')
+      const fileName = `customer-project-db-${timestamp}.json`
+      const payload = JSON.stringify(data, null, 2)
+      const blob = new Blob([payload], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = fileName
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      URL.revokeObjectURL(url)
+
+      const customerTotal = data.customers.length
+      const projectTotal = data.customers.reduce(
+        (sum, customer) => sum + customer.projects.length,
+        0,
+      )
+      const workOrderTotal = data.customers.reduce(
+        (sum, customer) =>
+          sum + customer.projects.reduce((projectSum, project) => projectSum + project.wos.length, 0),
+        0,
+      )
+
+      setSettingsSuccess(
+        `Saved ${fileName} with ${customerTotal} ${
+          customerTotal === 1 ? 'customer' : 'customers'
+        }, ${projectTotal} ${projectTotal === 1 ? 'project' : 'projects'}, and ${workOrderTotal} ${
+          workOrderTotal === 1 ? 'work order' : 'work orders'
+        }.`,
+      )
+    } catch (error) {
+      console.error('Failed to export data', error)
+      setSettingsError(toErrorMessage(error, 'Failed to export data.'))
+    } finally {
+      setIsExportingData(false)
+    }
+  }, [toErrorMessage])
+
+  const handleImportData = useCallback(
+    async (file: File) => {
+      setSettingsError(null)
+      setSettingsSuccess(null)
+      setIsImportingData(true)
+      try {
+        const fileText = await file.text()
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(fileText) as unknown
+        } catch {
+          throw new Error('The selected file is not valid JSON.')
+        }
+
+        const customers = await importDatabaseRecords(parsed)
+        setDb(customers)
+        setSelectedCustomerId(null)
+        setSelectedProjectId(null)
+        closeContactEditor()
+        setLoadError(null)
+        setActionError(null)
+        setActivePage('settings')
+
+        const projectTotal = customers.reduce(
+          (sum, customer) => sum + customer.projects.length,
+          0,
+        )
+        const workOrderTotal = customers.reduce(
+          (sum, customer) =>
+            sum + customer.projects.reduce((projectSum, project) => projectSum + project.wos.length, 0),
+          0,
+        )
+
+        setSettingsSuccess(
+          `Imported ${customers.length} ${
+            customers.length === 1 ? 'customer' : 'customers'
+          }, ${projectTotal} ${projectTotal === 1 ? 'project' : 'projects'}, and ${workOrderTotal} ${
+            workOrderTotal === 1 ? 'work order' : 'work orders'
+          }.`,
+        )
+      } catch (error) {
+        console.error('Failed to import data', error)
+        setSettingsError(toErrorMessage(error, 'Failed to import data.'))
+      } finally {
+        setIsImportingData(false)
+      }
+    },
+    [
+      closeContactEditor,
+      importDatabaseRecords,
+      setDb,
+      setSelectedCustomerId,
+      setSelectedProjectId,
+      setActivePage,
+      toErrorMessage,
+      setLoadError,
+      setActionError,
+    ],
+  )
+
+  const handleImportChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      if (!file) {
+        return
+      }
+      event.target.value = ''
+      void handleImportData(file)
+    },
+    [handleImportData],
+  )
+
+  const triggerImportDialog = useCallback(() => {
+    if (isImportingData) {
+      return
+    }
+    importFileInputRef.current?.click()
+  }, [isImportingData])
 
   async function handleCreateProject() {
     if (!hasCustomers) {
@@ -1500,6 +1641,45 @@ function AppContent() {
     </div>
   )
 
+  const renderSettingsSidebar = () => (
+    <div className='space-y-4'>
+      <Card className='panel'>
+        <CardHeader>
+          <div className='text-lg font-semibold text-slate-900'>Current totals</div>
+        </CardHeader>
+        <CardContent>
+          <div className='space-y-3'>
+            {[
+              { label: 'Customers', value: customerCount },
+              { label: 'Projects', value: totalProjects },
+              { label: 'Work Orders', value: totalWorkOrders },
+            ].map(item => (
+              <div key={item.label} className='rounded-xl border border-slate-200 bg-white/70 p-3'>
+                <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{item.label}</div>
+                <div className='mt-1 text-lg font-semibold text-slate-900'>{item.value}</div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className='panel'>
+        <CardHeader>
+          <div className='text-sm font-semibold text-slate-700'>Before you import</div>
+        </CardHeader>
+        <CardContent>
+          <p className='text-sm text-slate-600'>
+            Export a copy of your data before importing a new file. Imports replace everything stored in this browser.
+          </p>
+          <div className='mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700'>
+            <AlertCircle size={14} className='mt-0.5 flex-shrink-0' />
+            <span>Only JSON exports generated by CustomerProjectDB are supported.</span>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+
   const renderDashboardView = () => {
     const averageWorkOrders = totalProjects > 0 ? totalWorkOrders / totalProjects : 0
     const pieChartData = activeProjectStatusData.map(status => ({ value: status.count, color: status.color }))
@@ -1612,6 +1792,94 @@ function AppContent() {
       </div>
     )
   }
+
+  const renderSettingsPage = () => (
+    <div className='space-y-6'>
+      {settingsError ? (
+        <div className='rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
+          <div className='flex items-start gap-2'>
+            <AlertCircle size={16} className='mt-0.5 flex-shrink-0' />
+            <span>{settingsError}</span>
+          </div>
+        </div>
+      ) : null}
+      {settingsSuccess ? (
+        <div className='rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700'>
+          {settingsSuccess}
+        </div>
+      ) : null}
+
+      <Card className='panel'>
+        <CardHeader className='flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between'>
+          <div>
+            <div className='text-lg font-semibold text-slate-900'>Export workspace data</div>
+            <p className='mt-1 text-sm text-slate-600'>Download every customer, project, work order, document, and sign-off.</p>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className='flex flex-col gap-3 sm:flex-row sm:items-center'>
+            <Button onClick={handleExportData} disabled={isExportingData} className='w-full sm:w-auto'>
+              {isExportingData ? (
+                <>
+                  <span
+                    className='h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white'
+                    aria-hidden
+                  />
+                  <span>Preparing export…</span>
+                </>
+              ) : (
+                <>
+                  <Download size={16} /> Export data
+                </>
+              )}
+            </Button>
+            <p className='text-sm text-slate-500'>A JSON file will be saved to your device.</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className='panel'>
+        <CardHeader className='flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between'>
+          <div>
+            <div className='text-lg font-semibold text-slate-900'>Import workspace data</div>
+            <p className='mt-1 text-sm text-slate-600'>Replace the current data with a JSON export you previously downloaded.</p>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <input
+            ref={importFileInputRef}
+            type='file'
+            accept='application/json,.json'
+            className='hidden'
+            onChange={handleImportChange}
+          />
+          <div className='flex flex-col gap-3 sm:flex-row sm:items-center'>
+            <Button onClick={triggerImportDialog} disabled={isImportingData} className='w-full sm:w-auto'>
+              {isImportingData ? (
+                <>
+                  <span
+                    className='h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white'
+                    aria-hidden
+                  />
+                  <span>Importing…</span>
+                </>
+              ) : (
+                <>
+                  <Upload size={16} /> Import data
+                </>
+              )}
+            </Button>
+            <p className='text-sm text-slate-500'>Imports immediately overwrite the current workspace.</p>
+          </div>
+          <div className='mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700'>
+            <AlertCircle size={16} className='mt-0.5 flex-shrink-0' />
+            <span>Only use files exported from CustomerProjectDB. Existing data will be replaced.</span>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+
 
   const selectedProjectData = useMemo(() => {
     if (!selectedProjectId) return null
@@ -2582,7 +2850,7 @@ function AppContent() {
     )
   }
 
-  const resolvedPage: 'home' | 'customers' | 'projects' =
+  const resolvedPage: 'home' | 'customers' | 'projects' | 'settings' =
     activePage === 'customerDetail'
       ? 'customers'
       : activePage === 'projectDetail'
@@ -2594,15 +2862,19 @@ function AppContent() {
       ? renderHomeSidebar()
       : resolvedPage === 'customers'
       ? renderCustomersSidebar()
-      : renderProjectsSidebar()
+      : resolvedPage === 'projects'
+      ? renderProjectsSidebar()
+      : renderSettingsSidebar()
 
-  const handleNavigate = (page: 'home' | 'customers' | 'projects') => {
+  const handleNavigate = (page: 'home' | 'customers' | 'projects' | 'settings') => {
     setIsSidebarOpen(false)
     if (page === 'projects') {
       setSelectedProjectId(null)
       setActivePage('projects')
     } else if (page === 'customers') {
       setActivePage('customers')
+    } else if (page === 'settings') {
+      setActivePage('settings')
     } else {
       setActivePage(page)
     }
@@ -2628,6 +2900,8 @@ function AppContent() {
       ? 'Customer Details'
       : activePage === 'projects'
       ? 'Projects'
+      : activePage === 'settings'
+      ? 'Workspace Settings'
       : 'Project Overview'
 
   const pageDescription =
@@ -2639,6 +2913,8 @@ function AppContent() {
       ? 'Review contacts, addresses, and linked projects for the selected customer.'
       : activePage === 'projects'
       ? 'Choose a project from the index to manage its lifecycle and documents.'
+      : activePage === 'settings'
+      ? 'Export a backup or import data into this workspace.'
       : 'Manage documents, work orders, and final acceptance for this project.'
 
   const sidebarPanels = (
@@ -2652,9 +2928,16 @@ function AppContent() {
         </CardHeader>
         <CardContent>
           <nav className='flex flex-col gap-1'>
-            {(['home', 'customers', 'projects'] as const).map(page => {
+            {(['home', 'customers', 'projects', 'settings'] as const).map(page => {
               const isActive = resolvedPage === page
-              const label = page === 'home' ? 'Home' : page === 'customers' ? 'Customers' : 'Projects'
+              const label =
+                page === 'home'
+                  ? 'Home'
+                  : page === 'customers'
+                  ? 'Customers'
+                  : page === 'projects'
+                  ? 'Projects'
+                  : 'Settings'
               return (
                 <button
                   key={page}
@@ -2779,6 +3062,8 @@ function AppContent() {
             ? renderCustomerDetailPage()
             : activePage === 'projects'
             ? renderProjectsIndex()
+            : activePage === 'settings'
+            ? renderSettingsPage()
             : renderProjectDetailPage()}
         </main>
       </div>
