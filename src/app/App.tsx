@@ -24,6 +24,7 @@ import type {
   ProjectFile,
   ProjectFileCategory,
   ProjectInfo,
+  ProjectOnsiteReport,
   ProjectStatus,
   ProjectStatusLogEntry,
   WOType,
@@ -34,8 +35,11 @@ import type {
   User,
   TwoFactorMethod,
   AppRole,
+  BusinessSettings,
+  BusinessDay,
 } from '../types'
 import {
+  DEFAULT_BUSINESS_SETTINGS,
   DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
   PROJECT_FILE_CATEGORIES,
   PROJECT_TASK_STATUSES,
@@ -60,6 +64,7 @@ import {
   deleteUser as deleteUserRecord,
   exportDatabase as exportDatabaseRecords,
   importDatabase as importDatabaseRecords,
+  getBusinessSettings,
 } from '../lib/storage'
 import { createId } from '../lib/id'
 import { generateCustomerSignOffPdf } from '../lib/signOff'
@@ -73,6 +78,7 @@ import {
   createProjectInfoDraft,
   parseProjectInfoDraft,
   type ProjectInfoDraft,
+  type ProjectInfoDraftDefaults,
 } from '../lib/projectInfo'
 
 const PROJECT_FILE_MIME_BY_EXTENSION: Record<string, string> = {
@@ -121,6 +127,105 @@ function stripPrefix(value: string, pattern: RegExp): string {
   const trimmed = value.trim()
   const match = trimmed.match(pattern)
   return match ? match[1].trim() : trimmed
+}
+
+const JS_DAY_TO_BUSINESS_DAY: BusinessDay[] = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+]
+
+const BUSINESS_DAY_ORDER: Array<{ key: BusinessDay; label: string }> = [
+  { key: 'monday', label: 'Monday' },
+  { key: 'tuesday', label: 'Tuesday' },
+  { key: 'wednesday', label: 'Wednesday' },
+  { key: 'thursday', label: 'Thursday' },
+  { key: 'friday', label: 'Friday' },
+  { key: 'saturday', label: 'Saturday' },
+  { key: 'sunday', label: 'Sunday' },
+]
+
+function getBusinessDayKey(date: Date): BusinessDay {
+  return JS_DAY_TO_BUSINESS_DAY[date.getDay()] ?? 'monday'
+}
+
+function isWorkingDay(settings: BusinessSettings, date: Date): boolean {
+  const entry = settings.hours[getBusinessDayKey(date)]
+  return Boolean(entry && entry.enabled)
+}
+
+function findNextWorkingDate(
+  settings: BusinessSettings,
+  start: Date,
+  includeCurrent: boolean,
+): Date {
+  for (let offset = includeCurrent ? 0 : 1; offset < 21; offset += 1) {
+    const candidate = new Date(start.getTime())
+    candidate.setDate(candidate.getDate() + offset)
+    if (isWorkingDay(settings, candidate)) {
+      return candidate
+    }
+  }
+  return new Date(start.getTime())
+}
+
+function formatDateForInput(date: Date): string {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 10)
+}
+
+function formatDateTimeForInput(date: Date): string {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+  return local.toISOString().slice(0, 16)
+}
+
+function applyTimeToDate(base: Date, time: string): Date {
+  const [hours, minutes] = time.split(':').map(part => Number.parseInt(part, 10))
+  const result = new Date(base.getTime())
+  if (!Number.isNaN(hours) && !Number.isNaN(minutes)) {
+    result.setHours(hours, minutes, 0, 0)
+  }
+  return result
+}
+
+function addMonths(date: Date, months: number): Date {
+  const result = new Date(date.getTime())
+  const originalDate = result.getDate()
+  result.setMonth(result.getMonth() + months)
+  if (result.getDate() !== originalDate) {
+    result.setDate(0)
+  }
+  return result
+}
+
+function computeProjectDateDefaults(settings: BusinessSettings): ProjectInfoDraftDefaults {
+  const today = new Date()
+  const startDate = findNextWorkingDate(settings, today, true)
+  const completionBase = addMonths(startDate, 1)
+  const completionDate = findNextWorkingDate(settings, completionBase, true)
+  return {
+    startDate: formatDateForInput(startDate),
+    proposedCompletionDate: formatDateForInput(completionDate),
+  }
+}
+
+function computeTaskScheduleDefaults(settings: BusinessSettings): { start: string; end: string } {
+  const today = new Date()
+  const startDate = findNextWorkingDate(settings, today, true)
+  const startHours = settings.hours[getBusinessDayKey(startDate)] ?? DEFAULT_BUSINESS_SETTINGS.hours.monday
+  const startDateTime = applyTimeToDate(startDate, startHours.start)
+  const completionBase = addMonths(startDate, 1)
+  const completionDate = findNextWorkingDate(settings, completionBase, true)
+  const completionHours = settings.hours[getBusinessDayKey(completionDate)] ?? DEFAULT_BUSINESS_SETTINGS.hours.monday
+  const endDateTime = applyTimeToDate(completionDate, completionHours.end)
+  return {
+    start: formatDateTimeForInput(startDateTime),
+    end: formatDateTimeForInput(endDateTime),
+  }
 }
 
 type ProjectStatusBucket =
@@ -333,6 +438,7 @@ function AppContent() {
     'home' | 'myTasks' | 'customers' | 'projects' | 'customerDetail' | 'projectDetail' | 'settings'
   >('home')
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
+  const [businessSettings, setBusinessSettings] = useState<BusinessSettings>(DEFAULT_BUSINESS_SETTINGS)
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -340,7 +446,7 @@ function AppContent() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null)
   const [settingsError, setSettingsError] = useState<string | null>(null)
-  const [settingsSection, setSettingsSection] = useState<'users' | 'data'>('users')
+  const [settingsSection, setSettingsSection] = useState<'users' | 'data' | 'business'>('users')
   const [isExportingData, setIsExportingData] = useState(false)
   const [isImportingData, setIsImportingData] = useState(false)
   const importFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -397,7 +503,7 @@ function AppContent() {
   const [newProjectError, setNewProjectError] = useState<string | null>(null)
   const [isCreatingProject, setIsCreatingProject] = useState(false)
   const [newProjectInfoDraft, setNewProjectInfoDraft] = useState<ProjectInfoDraft>(() =>
-    createProjectInfoDraft(undefined, users),
+    createProjectInfoDraft(undefined, users, computeProjectDateDefaults(DEFAULT_BUSINESS_SETTINGS)),
   )
   const [newProjectTaskSelections, setNewProjectTaskSelections] =
     useState<DefaultTaskSelectionMap>(createDefaultTaskSelectionMap)
@@ -423,6 +529,9 @@ function AppContent() {
     },
     [newProjectError],
   )
+  const [taskStatusFilter, setTaskStatusFilter] = useState<'all' | ProjectTaskStatus>('all')
+  const [taskAssigneeFilter, setTaskAssigneeFilter] =
+    useState<'current' | 'all' | 'unassigned' | string>('current')
   const [newUserDraft, setNewUserDraft] = useState({
     name: '',
     email: '',
@@ -482,9 +591,14 @@ function AppContent() {
       }
 
       try {
-        const [customers, usersResult] = await Promise.all([listCustomers(), listUsers()])
+        const [customers, usersResult, settingsResult] = await Promise.all([
+          listCustomers(),
+          listUsers(),
+          getBusinessSettings(),
+        ])
         setDb(customers)
         setUsers(usersResult)
+        setBusinessSettings(settingsResult)
         setLoadError(null)
       } catch (error) {
         console.error('Failed to load customers', error)
@@ -845,9 +959,18 @@ function AppContent() {
           throw new Error('The selected file is not valid JSON.')
         }
 
-        const { customers, users: importedUsers } = await importDatabaseRecords(parsed)
+        const { customers, users: importedUsers, businessSettings: importedSettings } =
+          await importDatabaseRecords(parsed)
         setDb(customers)
         setUsers(importedUsers)
+        setBusinessSettings(importedSettings)
+        setNewProjectInfoDraft(
+          createProjectInfoDraft(
+            undefined,
+            importedUsers,
+            computeProjectDateDefaults(importedSettings),
+          ),
+        )
         setSelectedCustomerId(null)
         setSelectedProjectId(null)
         closeContactEditor()
@@ -961,7 +1084,7 @@ function AppContent() {
       setShowNewProject(false)
       setNewProjectNumber('')
       setNewProjectError(null)
-      setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+      setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, computeProjectDateDefaults(businessSettings)))
       setNewProjectTaskSelections(createDefaultTaskSelectionMap())
       setSelectedCustomerId(result.customerId)
       setSelectedProjectId(result.projectId)
@@ -1612,8 +1735,9 @@ function AppContent() {
     )
   }
 
+
   const renderMyTasksPage = () => {
-    const hasTasks = myTasks.length > 0
+    const hasTasks = filteredTasks.length > 0
 
     return (
       <div className='space-y-6'>
@@ -1637,7 +1761,7 @@ function AppContent() {
                         <span className={`h-2.5 w-2.5 rounded-full ${TASK_STATUS_META[status].swatchClass}`} aria-hidden />
                         {status}
                       </span>
-                      <span className='text-base font-semibold text-slate-900'>{myTaskCounts[status]}</span>
+                      <span className='text-base font-semibold text-slate-900'>{taskCounts[status]}</span>
                     </div>
                   </div>
                 ))}
@@ -1647,76 +1771,117 @@ function AppContent() {
         </Card>
 
         <Card className='panel'>
-          <CardHeader className='flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between'>
-            <div>
+          <CardHeader className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
+            <div className='space-y-1'>
               <div className='text-lg font-semibold text-slate-900'>Assigned tasks</div>
-              <p className='text-sm text-slate-500'>All work items currently assigned to {currentUserName}.</p>
+              <p className='text-sm text-slate-500'>Review and filter project work in a familiar table layout.</p>
             </div>
-            {hasTasks ? (
-              <span className='text-xs font-medium text-slate-500'>
-                {myTasks.length === 1 ? '1 task assigned' : `${myTasks.length} tasks assigned`}
+            <div className='flex flex-wrap gap-2 text-xs font-medium text-slate-500'>
+              <span className='rounded-full bg-slate-900 px-3 py-1 text-white shadow'>
+                {filteredTasks.length === 1 ? '1 task shown' : `${filteredTasks.length} tasks shown`}
               </span>
-            ) : null}
+            </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className='space-y-4'>
+            <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
+              <div className='flex flex-wrap items-center gap-2 text-sm text-slate-500'>
+                <span className='font-medium text-slate-600'>Status</span>
+                <select
+                  value={taskStatusFilter}
+                  onChange={event => setTaskStatusFilter(event.target.value as typeof taskStatusFilter)}
+                  className='rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100'
+                >
+                  <option value='all'>All statuses</option>
+                  {PROJECT_TASK_STATUSES.map(status => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+                <span className='font-medium text-slate-600'>Assignee</span>
+                <select
+                  value={taskAssigneeFilter}
+                  onChange={event => setTaskAssigneeFilter(event.target.value)}
+                  className='rounded-full border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100'
+                >
+                  <option value='current'>Assigned to me</option>
+                  <option value='all'>All assignees</option>
+                  <option value='unassigned'>Unassigned</option>
+                  {taskAssigneeOptions.map(option => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
             {!hasTasks ? (
-              <p className='text-sm text-slate-500'>No tasks have been assigned to you yet.</p>
+              <p className='text-sm text-slate-500'>No tasks meet the selected filters.</p>
             ) : (
-              <div className='space-y-3'>
-                {myTasks.map(entry => {
-                  const scheduleLabel = formatTaskRange(entry.task)
-                  const projectStatusStyle: CSSProperties = {
-                    color: entry.projectStatusColor,
-                    backgroundColor: `${entry.projectStatusColor}1a`,
-                    borderColor: `${entry.projectStatusColor}33`,
-                  }
-                  return (
-                    <div
-                      key={entry.id}
-                      className='rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm'
-                    >
-                      <div className='flex flex-col gap-3 md:flex-row md:items-start md:justify-between'>
-                        <div className='space-y-2'>
-                          <div className='flex flex-wrap items-center gap-2'>
-                            <span className='text-sm font-semibold text-slate-900'>{entry.task.name}</span>
-                            <span
-                              className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
-                                TASK_STATUS_META[entry.task.status].badgeClass
-                              }`}
-                            >
-                              {entry.task.status}
-                            </span>
-                          </div>
-                          <div className='text-xs text-slate-500'>{scheduleLabel}</div>
-                          <div className='flex flex-wrap items-center gap-2 text-xs text-slate-500'>
-                            <span className='font-medium text-slate-600'>{entry.customerName}</span>
-                            <span aria-hidden className='text-slate-400'>•</span>
-                            <span>Project {entry.projectNumber}</span>
-                            <span aria-hidden className='text-slate-400'>•</span>
-                            <span
-                              className='inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold'
-                              style={projectStatusStyle}
-                            >
-                              {entry.projectStatusLabel}
-                            </span>
-                          </div>
-                        </div>
-                        <div className='flex flex-wrap items-center gap-2 md:justify-end'>
-                          <Button
-                            variant='outline'
-                            onClick={() => {
-                              setSelectedCustomerId(entry.customerId)
-                              setSelectedProjectId(entry.projectId)
-                              setActivePage('projectDetail')
-                            }}
-                          >
-                            View project
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
+              <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
+                <div className='overflow-x-auto'>
+                  <table className='min-w-full divide-y divide-slate-200 bg-white text-sm text-slate-700'>
+                    <thead className='bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500'>
+                      <tr>
+                        <th scope='col' className='px-4 py-3 text-left font-semibold'>Status</th>
+                        <th scope='col' className='px-4 py-3 text-left font-semibold'>Task</th>
+                        <th scope='col' className='px-4 py-3 text-left font-semibold'>Project</th>
+                        <th scope='col' className='px-4 py-3 text-left font-semibold'>Schedule</th>
+                        <th scope='col' className='px-4 py-3 text-left font-semibold'>Assignee</th>
+                      </tr>
+                    </thead>
+                    <tbody className='divide-y divide-slate-100'>
+                      {filteredTasks.map(entry => {
+                        const statusMeta = TASK_STATUS_META[entry.task.status]
+                        const projectStatusStyle: CSSProperties = {
+                          color: entry.projectStatusColor,
+                          backgroundColor: `${entry.projectStatusColor}1a`,
+                          borderColor: `${entry.projectStatusColor}33`,
+                        }
+                        return (
+                          <tr key={entry.id} className='hover:bg-slate-50/70'>
+                            <td className='whitespace-nowrap px-4 py-3'>
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium ${statusMeta.badgeClass}`}
+                              >
+                                <span className={`h-2 w-2 rounded-full ${statusMeta.swatchClass}`} aria-hidden />
+                                {entry.task.status}
+                              </span>
+                            </td>
+                            <td className='min-w-[200px] px-4 py-3'>
+                              <div className='flex flex-col gap-1'>
+                                <span className='font-semibold text-slate-900'>{entry.task.name}</span>
+                                <span className='text-xs text-slate-500'>
+                                  <span
+                                    className='inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium'
+                                    style={projectStatusStyle}
+                                  >
+                                    {entry.projectStatusLabel}
+                                  </span>
+                                </span>
+                              </div>
+                            </td>
+                            <td className='min-w-[220px] px-4 py-3'>
+                              <div className='flex flex-col gap-1'>
+                                <span className='font-medium text-slate-800'>{entry.projectNumber}</span>
+                                <span className='text-xs text-slate-500'>{entry.customerName}</span>
+                              </div>
+                            </td>
+                            <td className='min-w-[220px] px-4 py-3 text-xs text-slate-600'>
+                              {entry.task.start && entry.task.end
+                                ? formatTaskRange(entry.task)
+                                : 'No schedule recorded'}
+                            </td>
+                            <td className='min-w-[160px] px-4 py-3 text-xs text-slate-600'>
+                              {entry.task.assigneeName || 'Unassigned'}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
           </CardContent>
@@ -1847,6 +2012,7 @@ function AppContent() {
 
   const renderProjectsSidebar = () => null
 
+
   const renderMyTasksSidebar = () => (
     <Card className='panel'>
       <CardHeader className='flex-col items-start gap-3'>
@@ -1854,14 +2020,14 @@ function AppContent() {
           <div className='text-lg font-semibold text-slate-900'>Your tasks</div>
           <p className='text-sm text-slate-500'>Quick overview of work assigned to you.</p>
         </div>
-        {myTasks.length > 0 ? (
+        {filteredTasks.length > 0 ? (
           <span className='rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white shadow'>
-            {myTasks.length === 1 ? '1 task' : `${myTasks.length} tasks`}
+            {filteredTasks.length === 1 ? '1 task' : `${filteredTasks.length} tasks`}
           </span>
         ) : null}
       </CardHeader>
       <CardContent>
-        {myTasks.length === 0 ? (
+        {filteredTasks.length === 0 ? (
           <p className='text-sm text-slate-500'>Tasks assigned to you will appear here.</p>
         ) : (
           <div className='space-y-4'>
@@ -1872,7 +2038,7 @@ function AppContent() {
                     <span className={`h-2.5 w-2.5 rounded-full ${TASK_STATUS_META[status].swatchClass}`} aria-hidden />
                     {status}
                   </span>
-                  <span className='text-sm font-semibold text-slate-900'>{myTaskCounts[status]}</span>
+                  <span className='text-sm font-semibold text-slate-900'>{taskCounts[status]}</span>
                 </div>
               ))}
             </div>
@@ -2094,11 +2260,20 @@ function AppContent() {
     )
   }
 
-  const settingsTabs: Array<{ id: 'users' | 'data'; label: string; description: string }> = [
+  const settingsTabs: Array<{
+    id: 'users' | 'business' | 'data'
+    label: string
+    description: string
+  }> = [
     {
       id: 'users',
       label: 'User management',
       description: 'Create accounts, assign roles, and configure authentication.',
+    },
+    {
+      id: 'business',
+      label: 'Business settings',
+      description: 'Set the operating name and working hours for scheduling defaults.',
     },
     {
       id: 'data',
@@ -2584,60 +2759,122 @@ function AppContent() {
     projectNumber: string
     projectStatusLabel: string
     projectStatusColor: string
+    assigneeId?: string
+    assigneeName?: string
   }
 
-  const myTasks = useMemo<AssignedTaskEntry[]>(() => {
-    const userId = currentUser?.id ?? null
-    const normalizedName = currentUserName.trim().toLowerCase()
-    if (!userId && !normalizedName) {
-      return []
-    }
-
+  const allAssignedTasks = useMemo<AssignedTaskEntry[]>(() => {
     const tasks: AssignedTaskEntry[] = []
     for (const customer of db) {
       for (const project of customer.projects) {
         const projectTasks = project.tasks ?? []
         for (const task of projectTasks) {
-          const matchesId = userId && task.assigneeId === userId
-          const matchesName =
-            !matchesId && normalizedName
-              ? (task.assigneeName ?? '').trim().toLowerCase() === normalizedName
-              : false
-          if (matchesId || matchesName) {
-            const statusBucket = resolveProjectStatusBucket(project)
-            const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
-            tasks.push({
-              id: `${project.id}:${task.id}`,
-              task,
-              customerId: customer.id,
-              projectId: project.id,
-              customerName: customer.name,
-              projectNumber: project.number,
-              projectStatusLabel: formatProjectStatus(project.status, project.activeSubStatus),
-              projectStatusColor: statusMeta.color,
-            })
-          }
+          const statusBucket = resolveProjectStatusBucket(project)
+          const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
+          tasks.push({
+            id: `${project.id}:${task.id}`,
+            task,
+            customerId: customer.id,
+            projectId: project.id,
+            customerName: customer.name,
+            projectNumber: project.number,
+            projectStatusLabel: formatProjectStatus(project.status, project.activeSubStatus),
+            projectStatusColor: statusMeta.color,
+            assigneeId: task.assigneeId,
+            assigneeName: task.assigneeName,
+          })
         }
       }
     }
 
     return tasks.sort((a, b) => compareTasksBySchedule(a.task, b.task))
-  }, [currentUser, currentUserName, db])
+  }, [db])
 
-  const myTaskCounts = useMemo(() => {
+  const normalizedCurrentUserName = useMemo(
+    () => currentUserName.trim().toLowerCase(),
+    [currentUserName],
+  )
+  const currentUserId = currentUser?.id ?? null
+
+  const matchesCurrentAssignee = useCallback(
+    (entry: AssignedTaskEntry) => {
+      if (currentUserId && entry.task.assigneeId === currentUserId) {
+        return true
+      }
+      if (!normalizedCurrentUserName) {
+        return false
+      }
+      const candidate = (entry.task.assigneeName ?? entry.assigneeName ?? '').trim().toLowerCase()
+      return candidate === normalizedCurrentUserName
+    },
+    [currentUserId, normalizedCurrentUserName],
+  )
+  const taskAssigneeOptions = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const user of users) {
+      map.set(user.id, user.name)
+    }
+    for (const entry of allAssignedTasks) {
+      const id = entry.task.assigneeId ?? entry.assigneeId ?? null
+      const name = (entry.task.assigneeName ?? entry.assigneeName ?? '').trim()
+      if (id) {
+        if (!map.has(id)) {
+          map.set(id, name || id)
+        }
+      } else if (name) {
+        const key = `name:${name.toLowerCase()}`
+        if (!map.has(key)) {
+          map.set(key, name)
+        }
+      }
+    }
+    return Array.from(map.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [allAssignedTasks, users])
+
+  const filteredTasks = useMemo(() => {
+    let tasks = allAssignedTasks
+    if (taskAssigneeFilter === 'current') {
+      tasks = tasks.filter(matchesCurrentAssignee)
+    } else if (taskAssigneeFilter === 'all') {
+      tasks = tasks
+    } else if (taskAssigneeFilter === 'unassigned') {
+      tasks = tasks.filter(entry => {
+        const name = (entry.task.assigneeName ?? entry.assigneeName ?? '').trim()
+        return !entry.task.assigneeId && !name
+      })
+    } else if (taskAssigneeFilter.startsWith('name:')) {
+      const nameKey = taskAssigneeFilter.slice(5)
+      tasks = tasks.filter(entry => {
+        const name = (entry.task.assigneeName ?? entry.assigneeName ?? '').trim().toLowerCase()
+        return name === nameKey
+      })
+    } else {
+      tasks = tasks.filter(entry => entry.task.assigneeId === taskAssigneeFilter)
+    }
+
+    if (taskStatusFilter !== 'all') {
+      tasks = tasks.filter(entry => entry.task.status === taskStatusFilter)
+    }
+
+    return tasks
+  }, [allAssignedTasks, matchesCurrentAssignee, taskAssigneeFilter, taskStatusFilter])
+
+  const taskCounts = useMemo(() => {
     const counts: Record<ProjectTaskStatus, number> = {
       'Not started': 0,
       Started: 0,
       Complete: 0,
     }
-    for (const entry of myTasks) {
+    for (const entry of filteredTasks) {
       counts[entry.task.status] += 1
     }
     return counts
-  }, [myTasks])
+  }, [filteredTasks])
 
   const nextScheduledTask = useMemo(() => {
-    for (const entry of myTasks) {
+    for (const entry of filteredTasks) {
       const startValue = entry.task.start
       const endValue = entry.task.end
       if (!startValue || !endValue) continue
@@ -2648,7 +2885,7 @@ function AppContent() {
       }
     }
     return null
-  }, [myTasks])
+  }, [filteredTasks])
 
   // Helpers
   const customerNameExists = (name: string, excludeId?: string) =>
@@ -4173,7 +4410,7 @@ function AppContent() {
       setNewProjectNumber('')
       setNewProjectError(null)
       setIsCreatingProject(false)
-      setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+      setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, computeProjectDateDefaults(businessSettings)))
       setNewProjectTaskSelections(createDefaultTaskSelectionMap())
     }
     if (page !== 'customers') {
@@ -4392,7 +4629,7 @@ function AppContent() {
                     setShowNewProject(true)
                     setNewProjectError(null)
                     setNewProjectNumber('')
-                    setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+                    setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, computeProjectDateDefaults(businessSettings)))
                     setNewProjectTaskSelections(createDefaultTaskSelectionMap())
                     const fallbackCustomerId = sortedCustomers[0]?.id ?? ''
                     const validSelectedCustomerId =
@@ -4736,7 +4973,7 @@ function AppContent() {
                       setNewProjectError(null)
                       setNewProjectNumber('')
                       setIsCreatingProject(false)
-                      setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+                      setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, computeProjectDateDefaults(businessSettings)))
                       setNewProjectTaskSelections(createDefaultTaskSelectionMap())
                     }}
                     title='Close'
@@ -4937,7 +5174,7 @@ function AppContent() {
                             setNewProjectError(null)
                             setNewProjectNumber('')
                             setIsCreatingProject(false)
-                            setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+                            setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, computeProjectDateDefaults(businessSettings)))
                             setNewProjectTaskSelections(createDefaultTaskSelectionMap())
                           }}
                           disabled={isCreatingProject}
