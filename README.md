@@ -32,7 +32,8 @@ npm run preview
 ```
 
 ## Data
-All data is stored in the browser `localStorage` under key `cpdb.v1`. Clearing browser storage resets the demo database.
+All data is stored in the browser `localStorage` under key `customer-project-db` (older `cpdb.v1` data is migrated automatically).
+Clearing browser storage resets the demo database.
 
 
 ## GitHub Setup
