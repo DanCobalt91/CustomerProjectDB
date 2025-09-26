@@ -527,13 +527,13 @@ function AppContent() {
   }, [sessionUserId, isSessionReady])
 
   useEffect(() => {
-    if (!sessionUserId) {
+    if (!sessionUserId || isLoading) {
       return
     }
     if (!users.some(user => user.id === sessionUserId)) {
       setSessionUserId(null)
     }
-  }, [users, sessionUserId])
+  }, [users, sessionUserId, isLoading])
 
   useEffect(() => {
     if (sessionUserId) {
