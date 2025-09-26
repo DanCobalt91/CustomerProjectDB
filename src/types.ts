@@ -52,6 +52,18 @@ export type ProjectStatusLogEntry = {
   changedBy: string;
 };
 
+export type ProjectInfo = {
+  lineReference?: string;
+  machineSerialNumbers?: string[];
+  toolSerialNumbers?: string[];
+  cobaltOrderNumber?: string;
+  customerOrderNumber?: string;
+  salespersonId?: string;
+  salespersonName?: string;
+  startDate?: string;
+  proposedCompletionDate?: string;
+};
+
 export type CustomerSignOffDecision = 'option1' | 'option2' | 'option3';
 
 export const CUSTOMER_SIGN_OFF_DECISIONS: CustomerSignOffDecision[] = ['option1', 'option2', 'option3'];
@@ -72,6 +84,7 @@ export type ProjectCustomerSignOff = {
   decision?: CustomerSignOffDecision;
   snags?: string[];
   signatureDataUrl?: string;
+  projectInfo?: ProjectInfo;
 };
 
 export type CustomerSignOffSubmission = {
@@ -94,7 +107,8 @@ export type ProjectTask = {
   status: ProjectTaskStatus;
   start?: string;
   end?: string;
-  assignee?: string;
+  assigneeId?: string;
+  assigneeName?: string;
 };
 
 export type Project = {
@@ -108,6 +122,7 @@ export type Project = {
   statusHistory?: ProjectStatusLogEntry[];
   customerSignOff?: ProjectCustomerSignOff;
   tasks?: ProjectTask[];
+  info?: ProjectInfo;
 };
 
 export type CustomerContact = {
@@ -127,6 +142,17 @@ export type Customer = {
 };
 
 export type AppRole = 'viewer' | 'editor' | 'admin';
+
+export type TwoFactorMethod = 'authenticator' | 'sms';
+
+export type User = {
+  id: string;
+  name: string;
+  email?: string;
+  role: AppRole;
+  twoFactorEnabled: boolean;
+  twoFactorMethod?: TwoFactorMethod;
+};
 
 export function formatProjectStatus(status: ProjectStatus, activeSubStatus?: ProjectActiveSubStatus): string {
   if (status === 'Active') {

@@ -23,6 +23,7 @@ import type {
   ProjectCustomerSignOff,
   ProjectFile,
   ProjectFileCategory,
+  ProjectInfo,
   ProjectStatus,
   ProjectStatusLogEntry,
   WOType,
@@ -30,6 +31,9 @@ import type {
   CustomerSignOffSubmission,
   ProjectTask,
   ProjectTaskStatus,
+  User,
+  TwoFactorMethod,
+  AppRole,
 } from '../types'
 import {
   DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
@@ -39,6 +43,7 @@ import {
 } from '../types'
 import {
   listCustomers,
+  listUsers,
   createCustomer as createCustomerRecord,
   updateCustomer as updateCustomerRecord,
   deleteCustomer as deleteCustomerRecord,
@@ -50,6 +55,9 @@ import {
   createTask as createTaskRecord,
   updateTask as updateTaskRecord,
   deleteTask as deleteTaskRecord,
+  createUser as createUserRecord,
+  updateUser as updateUserRecord,
+  deleteUser as deleteUserRecord,
   exportDatabase as exportDatabaseRecords,
   importDatabase as importDatabaseRecords,
 } from '../lib/storage'
@@ -61,6 +69,11 @@ import Label from '../components/ui/Label'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import ProjectPage from './ProjectPage'
 import PieChart from '../components/ui/PieChart'
+import {
+  createProjectInfoDraft,
+  parseProjectInfoDraft,
+  type ProjectInfoDraft,
+} from '../lib/projectInfo'
 
 const PROJECT_FILE_MIME_BY_EXTENSION: Record<string, string> = {
   pdf: 'application/pdf',
@@ -169,7 +182,8 @@ const PROJECT_STATUS_BUCKET_META: Record<
   },
 }
 
-const CURRENT_USER_NAME = 'Demo User'
+const CURRENT_USER_ID = 'user-demo'
+const DEFAULT_CURRENT_USER_NAME = 'Demo User'
 
 const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchClass: string }> = {
   'Not started': {
@@ -184,6 +198,22 @@ const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchCl
     badgeClass: 'bg-emerald-100 text-emerald-700',
     swatchClass: 'bg-emerald-500',
   },
+}
+
+const DEFAULT_PROJECT_TASK_OPTIONS = [
+  { id: 'design', name: 'Design' },
+  { id: 'build', name: 'Build' },
+  { id: 'install', name: 'Install' },
+] as const
+
+type DefaultTaskOption = (typeof DEFAULT_PROJECT_TASK_OPTIONS)[number]
+type DefaultTaskSelectionMap = Record<DefaultTaskOption['id'], boolean>
+
+function createDefaultTaskSelectionMap(): DefaultTaskSelectionMap {
+  return DEFAULT_PROJECT_TASK_OPTIONS.reduce((acc, option) => {
+    acc[option.id] = true
+    return acc
+  }, {} as DefaultTaskSelectionMap)
 }
 
 function resolveProjectStatusBucket(project: Project): ProjectStatusBucket {
@@ -247,6 +277,7 @@ function formatTaskRange(task: ProjectTask): string {
 
 function AppContent() {
   const [db, setDb] = useState<Customer[]>([])
+  const [users, setUsers] = useState<User[]>([])
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [activePage, setActivePage] = useState<
@@ -315,6 +346,61 @@ function AppContent() {
   const [newProjectNumber, setNewProjectNumber] = useState('')
   const [newProjectError, setNewProjectError] = useState<string | null>(null)
   const [isCreatingProject, setIsCreatingProject] = useState(false)
+  const [newProjectInfoDraft, setNewProjectInfoDraft] = useState<ProjectInfoDraft>(() =>
+    createProjectInfoDraft(undefined, users),
+  )
+  const [newProjectTaskSelections, setNewProjectTaskSelections] =
+    useState<DefaultTaskSelectionMap>(createDefaultTaskSelectionMap)
+  const updateNewProjectInfoField = useCallback(
+    (field: keyof ProjectInfoDraft, value: string) => {
+      setNewProjectInfoDraft(prev => ({ ...prev, [field]: value }))
+      if (newProjectError) {
+        setNewProjectError(null)
+      }
+    },
+    [newProjectError],
+  )
+  const toggleNewProjectTaskSelection = useCallback(
+    (id: DefaultTaskOption['id']) => {
+      setNewProjectTaskSelections(prev => {
+        const next = { ...prev }
+        next[id] = !prev[id]
+        return next
+      })
+      if (newProjectError) {
+        setNewProjectError(null)
+      }
+    },
+    [newProjectError],
+  )
+  const [newUserDraft, setNewUserDraft] = useState({
+    name: '',
+    email: '',
+    role: 'viewer' as AppRole,
+    twoFactorEnabled: false,
+    twoFactorMethod: 'authenticator' as TwoFactorMethod,
+  })
+  const [userFormError, setUserFormError] = useState<string | null>(null)
+  const [isSavingUser, setIsSavingUser] = useState(false)
+  const [editingUserId, setEditingUserId] = useState<string | null>(null)
+  const [userEditDraft, setUserEditDraft] = useState({
+    name: '',
+    email: '',
+    role: 'viewer' as AppRole,
+    twoFactorEnabled: false,
+    twoFactorMethod: 'authenticator' as TwoFactorMethod,
+  })
+  const [userEditError, setUserEditError] = useState<string | null>(null)
+  const [isSavingUserEdit, setIsSavingUserEdit] = useState(false)
+  const [deletingUserId, setDeletingUserId] = useState<string | null>(null)
+  const resetNewUserDraft = () =>
+    setNewUserDraft({
+      name: '',
+      email: '',
+      role: 'viewer',
+      twoFactorEnabled: false,
+      twoFactorMethod: 'authenticator',
+    })
   const [contactEditor, setContactEditor] = useState<{
     customerId: string
     contactId: string
@@ -340,8 +426,9 @@ function AppContent() {
       }
 
       try {
-        const customers = await listCustomers()
+        const [customers, usersResult] = await Promise.all([listCustomers(), listUsers()])
         setDb(customers)
+        setUsers(usersResult)
         setLoadError(null)
       } catch (error) {
         console.error('Failed to load customers', error)
@@ -362,6 +449,18 @@ function AppContent() {
   }, [refreshCustomers])
 
   useEffect(() => {
+    setNewProjectInfoDraft(prev => {
+      if (!prev.salespersonId) {
+        return prev
+      }
+      if (users.some(user => user.id === prev.salespersonId)) {
+        return prev
+      }
+      return { ...prev, salespersonId: '' }
+    })
+  }, [users])
+
+  useEffect(() => {
     if (activePage !== 'settings') {
       setSettingsSuccess(null)
       setSettingsError(null)
@@ -374,6 +473,9 @@ function AppContent() {
   const sortedCustomers = useMemo(() => [...db].sort((a, b) => a.name.localeCompare(b.name)), [db])
   const hasCustomers = sortedCustomers.length > 0
   const canEdit = true
+
+  const currentUser = useMemo(() => users.find(user => user.id === CURRENT_USER_ID) ?? null, [users])
+  const currentUserName = currentUser?.name ?? DEFAULT_CURRENT_USER_NAME
 
 
   useEffect(() => {
@@ -675,8 +777,9 @@ function AppContent() {
           throw new Error('The selected file is not valid JSON.')
         }
 
-        const customers = await importDatabaseRecords(parsed)
+        const { customers, users: importedUsers } = await importDatabaseRecords(parsed)
         setDb(customers)
+        setUsers(importedUsers)
         setSelectedCustomerId(null)
         setSelectedProjectId(null)
         closeContactEditor()
@@ -762,9 +865,26 @@ function AppContent() {
       setNewProjectCustomerId(customerId)
     }
 
+    const { info, error: infoError } = parseProjectInfoDraft(newProjectInfoDraft, users)
+    if (infoError) {
+      setNewProjectError(infoError)
+      return
+    }
+
+    const selectedTaskTemplates = DEFAULT_PROJECT_TASK_OPTIONS.filter(
+      option => newProjectTaskSelections[option.id],
+    )
+    const initialTasks = selectedTaskTemplates.length
+      ? selectedTaskTemplates.map(option => ({ name: option.name, status: 'Not started' as ProjectTaskStatus }))
+      : undefined
+
     setIsCreatingProject(true)
     try {
-      const result = await addProject(customerId, trimmedNumber)
+      const result = await addProject(customerId, {
+        number: trimmedNumber,
+        info: info ?? null,
+        tasks: initialTasks,
+      })
       if (typeof result === 'string') {
         setNewProjectError(result)
         return
@@ -773,6 +893,8 @@ function AppContent() {
       setShowNewProject(false)
       setNewProjectNumber('')
       setNewProjectError(null)
+      setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+      setNewProjectTaskSelections(createDefaultTaskSelectionMap())
       setSelectedCustomerId(result.customerId)
       setSelectedProjectId(result.projectId)
       setActivePage('projectDetail')
@@ -1194,7 +1316,7 @@ function AppContent() {
             {showInlineProjectForm && (
               <div>
                 <AddProjectForm
-                  onAdd={(num) => addProject(selectedCustomer.id, num)}
+                  onAdd={(num) => addProject(selectedCustomer.id, { number: num })}
                   disabled={!canEdit}
                   onAdded={() => setShowInlineProjectForm(false)}
                 />
@@ -1460,7 +1582,7 @@ function AppContent() {
           <CardHeader className='flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between'>
             <div>
               <div className='text-lg font-semibold text-slate-900'>Assigned tasks</div>
-              <p className='text-sm text-slate-500'>All work items currently assigned to {CURRENT_USER_NAME}.</p>
+              <p className='text-sm text-slate-500'>All work items currently assigned to {currentUserName}.</p>
             </div>
             {hasTasks ? (
               <span className='text-xs font-medium text-slate-500'>
@@ -1580,7 +1702,9 @@ function AppContent() {
         customer={selectedProjectData.customer}
         project={selectedProjectData.project}
         canEdit={canEdit}
-        currentUser={CURRENT_USER_NAME}
+        currentUserName={currentUserName}
+        currentUserId={currentUser?.id ?? null}
+        users={users}
         onUpdateProjectNote={(note) =>
           updateProjectNote(selectedProjectData.customer.id, selectedProjectData.project.id, note)
         }
@@ -1592,6 +1716,9 @@ function AppContent() {
             activeSubStatus,
             context,
           )
+        }
+        onUpdateProjectInfo={(info) =>
+          updateProjectInfo(selectedProjectData.customer.id, selectedProjectData.project.id, info)
         }
         onAddWO={(data) => addWO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
         onDeleteWO={(woId) => deleteWO(selectedProjectData.customer.id, selectedProjectData.project.id, woId)}
@@ -1918,6 +2045,247 @@ function AppContent() {
       <Card className='panel'>
         <CardHeader className='flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between'>
           <div>
+            <div className='text-lg font-semibold text-slate-900'>Manage users</div>
+            <p className='mt-1 text-sm text-slate-600'>Create accounts, assign roles, and configure two-factor authentication.</p>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <div className='grid gap-6 lg:grid-cols-[minmax(0,320px)_1fr]'>
+            <div className='rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-sm'>
+              <div className='mb-3 text-sm font-semibold text-slate-800'>Add user</div>
+              <div className='space-y-3'>
+                <div>
+                  <Label htmlFor='new-user-name'>Name</Label>
+                  <Input
+                    id='new-user-name'
+                    value={newUserDraft.name}
+                    onChange={event =>
+                      setNewUserDraft(prev => ({ ...prev, name: (event.target as HTMLInputElement).value }))
+                    }
+                    placeholder='e.g. Jamie Lee'
+                    disabled={isSavingUser || !canEdit}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor='new-user-email'>Email</Label>
+                  <Input
+                    id='new-user-email'
+                    type='email'
+                    value={newUserDraft.email}
+                    onChange={event =>
+                      setNewUserDraft(prev => ({ ...prev, email: (event.target as HTMLInputElement).value }))
+                    }
+                    placeholder='Optional'
+                    disabled={isSavingUser || !canEdit}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor='new-user-role'>Role</Label>
+                  <select
+                    id='new-user-role'
+                    className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                    value={newUserDraft.role}
+                    onChange={event =>
+                      setNewUserDraft(prev => ({ ...prev, role: event.target.value as AppRole }))
+                    }
+                    disabled={isSavingUser || !canEdit}
+                  >
+                    <option value='viewer'>Viewer</option>
+                    <option value='editor'>Editor</option>
+                    <option value='admin'>Admin</option>
+                  </select>
+                </div>
+                <div className='flex items-center gap-2'>
+                  <input
+                    id='new-user-2fa'
+                    type='checkbox'
+                    className='h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 disabled:cursor-not-allowed'
+                    checked={newUserDraft.twoFactorEnabled}
+                    onChange={event =>
+                      setNewUserDraft(prev => ({ ...prev, twoFactorEnabled: event.target.checked }))
+                    }
+                    disabled={isSavingUser || !canEdit}
+                  />
+                  <label htmlFor='new-user-2fa' className='text-sm text-slate-700'>Require two-factor authentication</label>
+                </div>
+                {newUserDraft.twoFactorEnabled && (
+                  <div>
+                    <Label htmlFor='new-user-2fa-method'>Two-factor method</Label>
+                    <select
+                      id='new-user-2fa-method'
+                      className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                      value={newUserDraft.twoFactorMethod}
+                      onChange={event =>
+                        setNewUserDraft(prev => ({
+                          ...prev,
+                          twoFactorMethod: event.target.value as TwoFactorMethod,
+                        }))
+                      }
+                      disabled={isSavingUser || !canEdit}
+                    >
+                      <option value='authenticator'>Authenticator app</option>
+                      <option value='sms'>SMS</option>
+                    </select>
+                  </div>
+                )}
+                {userFormError && (
+                  <p className='flex items-center gap-1 text-sm text-rose-600'>
+                    <AlertCircle size={14} /> {userFormError}
+                  </p>
+                )}
+                <Button onClick={() => void handleCreateUser()} disabled={isSavingUser || !canEdit}>
+                  {isSavingUser ? 'Saving…' : 'Add user'}
+                </Button>
+              </div>
+            </div>
+            <div className='space-y-3'>
+              <div className='text-sm font-semibold text-slate-800'>Existing users</div>
+              {users.length === 0 ? (
+                <p className='text-sm text-slate-500'>Add a user to begin assigning tasks and sales ownership.</p>
+              ) : (
+                <div className='space-y-3'>
+                  {[...users].sort((a, b) => a.name.localeCompare(b.name)).map(user => {
+                    const isEditing = editingUserId === user.id
+                    const twoFactorLabel = user.twoFactorEnabled
+                      ? `Enabled (${user.twoFactorMethod === 'sms' ? 'SMS' : 'Authenticator'})`
+                      : 'Disabled'
+                    return (
+                      <div key={user.id} className='rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm'>
+                        {!isEditing ? (
+                          <div className='flex flex-wrap items-start justify-between gap-3'>
+                            <div>
+                              <div className='text-sm font-semibold text-slate-900'>{user.name}</div>
+                              {user.email && <div className='text-xs text-slate-500'>{user.email}</div>}
+                              <div className='mt-1 text-xs text-slate-500'>Role: <span className='font-medium text-slate-700 capitalize'>{user.role}</span></div>
+                              <div className='text-xs text-slate-500'>Two-factor: {twoFactorLabel}</div>
+                            </div>
+                            <div className='flex items-center gap-2'>
+                              <Button
+                                variant='outline'
+                                onClick={() => beginEditingUser(user)}
+                                disabled={!canEdit || isSavingUserEdit}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                variant='ghost'
+                                className='text-rose-600 hover:bg-rose-50'
+                                onClick={() => {
+                                  if (!canEdit) {
+                                    setUserFormError('Not authorized to manage users.')
+                                    return
+                                  }
+                                  const confirmed = window.confirm('Remove this user?')
+                                  if (!confirmed) {
+                                    return
+                                  }
+                                  void handleDeleteUser(user.id)
+                                }}
+                                disabled={!canEdit || deletingUserId === user.id}
+                              >
+                                {deletingUserId === user.id ? 'Removing…' : 'Remove'}
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className='space-y-3'>
+                            <div className='grid gap-3 md:grid-cols-2'>
+                              <div>
+                                <Label>Name</Label>
+                                <Input
+                                  value={userEditDraft.name}
+                                  onChange={event =>
+                                    setUserEditDraft(prev => ({ ...prev, name: (event.target as HTMLInputElement).value }))
+                                  }
+                                  disabled={!canEdit || isSavingUserEdit}
+                                />
+                              </div>
+                              <div>
+                                <Label>Email</Label>
+                                <Input
+                                  value={userEditDraft.email}
+                                  onChange={event =>
+                                    setUserEditDraft(prev => ({ ...prev, email: (event.target as HTMLInputElement).value }))
+                                  }
+                                  disabled={!canEdit || isSavingUserEdit}
+                                />
+                              </div>
+                              <div>
+                                <Label>Role</Label>
+                                <select
+                                  className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                                  value={userEditDraft.role}
+                                  onChange={event =>
+                                    setUserEditDraft(prev => ({ ...prev, role: event.target.value as AppRole }))
+                                  }
+                                  disabled={!canEdit || isSavingUserEdit}
+                                >
+                                  <option value='viewer'>Viewer</option>
+                                  <option value='editor'>Editor</option>
+                                  <option value='admin'>Admin</option>
+                                </select>
+                              </div>
+                              <div className='flex items-center gap-2'>
+                                <input
+                                  id={`edit-user-2fa-${user.id}`}
+                                  type='checkbox'
+                                  className='h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 disabled:cursor-not-allowed'
+                                  checked={userEditDraft.twoFactorEnabled}
+                                  onChange={event =>
+                                    setUserEditDraft(prev => ({ ...prev, twoFactorEnabled: event.target.checked }))
+                                  }
+                                  disabled={!canEdit || isSavingUserEdit}
+                                />
+                                <label htmlFor={`edit-user-2fa-${user.id}`} className='text-sm text-slate-700'>Require two-factor authentication</label>
+                              </div>
+                              {userEditDraft.twoFactorEnabled && (
+                                <div>
+                                  <Label>Two-factor method</Label>
+                                  <select
+                                    className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                                    value={userEditDraft.twoFactorMethod}
+                                    onChange={event =>
+                                      setUserEditDraft(prev => ({
+                                        ...prev,
+                                        twoFactorMethod: event.target.value as TwoFactorMethod,
+                                      }))
+                                    }
+                                    disabled={!canEdit || isSavingUserEdit}
+                                  >
+                                    <option value='authenticator'>Authenticator app</option>
+                                    <option value='sms'>SMS</option>
+                                  </select>
+                                </div>
+                              )}
+                            </div>
+                            {userEditError && (
+                              <p className='flex items-center gap-1 text-sm text-rose-600'>
+                                <AlertCircle size={14} /> {userEditError}
+                              </p>
+                            )}
+                            <div className='flex justify-end gap-2'>
+                              <Button variant='ghost' onClick={cancelUserEdit} disabled={isSavingUserEdit}>
+                                Cancel
+                              </Button>
+                              <Button onClick={() => void handleSaveUserEdit()} disabled={isSavingUserEdit || !canEdit}>
+                                {isSavingUserEdit ? 'Saving…' : 'Save changes'}
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className='panel'>
+        <CardHeader className='flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between'>
+          <div>
             <div className='text-lg font-semibold text-slate-900'>Export workspace data</div>
             <p className='mt-1 text-sm text-slate-600'>Download every customer, project, work order, document, and sign-off.</p>
           </div>
@@ -2010,8 +2378,9 @@ function AppContent() {
   }
 
   const myTasks = useMemo<AssignedTaskEntry[]>(() => {
-    const normalizedAssignee = CURRENT_USER_NAME.trim().toLowerCase()
-    if (!normalizedAssignee) {
+    const userId = currentUser?.id ?? null
+    const normalizedName = currentUserName.trim().toLowerCase()
+    if (!userId && !normalizedName) {
       return []
     }
 
@@ -2020,8 +2389,12 @@ function AppContent() {
       for (const project of customer.projects) {
         const projectTasks = project.tasks ?? []
         for (const task of projectTasks) {
-          const assignee = task.assignee?.trim().toLowerCase()
-          if (assignee && assignee === normalizedAssignee) {
+          const matchesId = userId && task.assigneeId === userId
+          const matchesName =
+            !matchesId && normalizedName
+              ? (task.assigneeName ?? '').trim().toLowerCase() === normalizedName
+              : false
+          if (matchesId || matchesName) {
             const statusBucket = resolveProjectStatusBucket(project)
             const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
             tasks.push({
@@ -2040,7 +2413,7 @@ function AppContent() {
     }
 
     return tasks.sort((a, b) => compareTasksBySchedule(a.task, b.task))
-  }, [db])
+  }, [currentUser, currentUserName, db])
 
   const myTaskCounts = useMemo(() => {
     const counts: Record<ProjectTaskStatus, number> = {
@@ -2069,7 +2442,6 @@ function AppContent() {
   }, [myTasks])
 
   // Helpers
-  const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2,9)}${Date.now().toString(36).slice(-4)}`
   const customerNameExists = (name: string, excludeId?: string) =>
     db.some(c => c.id !== excludeId && c.name.trim().toLowerCase() === name.trim().toLowerCase())
   const projectNumberExists = (number: string, excludeProjectId?: string) => {
@@ -2081,8 +2453,190 @@ function AppContent() {
     return db.some(c => c.projects.some(p => p.wos.some(w => w.id !== excludeWoId && w.number.trim().toLowerCase() === norm)))
   }
   const sortTasksForUi = (tasks: ProjectTask[]): ProjectTask[] => [...tasks].sort(compareTasksBySchedule)
+  const hasProjectInfoValues = (info?: ProjectInfo): boolean => {
+    if (!info) {
+      return false
+    }
+    return Object.values(info).some(value => {
+      if (Array.isArray(value)) {
+        return value.length > 0
+      }
+      return value !== undefined
+    })
+  }
+
+  function applyUserChangeToProjects(userId: string, action: 'rename' | 'remove', name?: string) {
+    setDb(prev =>
+      prev.map(customer => {
+        let projectsChanged = false
+        const projects = customer.projects.map(project => {
+          let updatedProject = project
+          let infoChanged = false
+
+          if (project.info?.salespersonId === userId) {
+            if (action === 'rename' && name) {
+              updatedProject = {
+                ...updatedProject,
+                info: { ...project.info, salespersonName: name },
+              }
+              infoChanged = true
+            } else if (action === 'remove') {
+              const { salespersonId: _omitId, salespersonName: _omitName, ...rest } = project.info
+              const restInfo: ProjectInfo = { ...rest }
+              const cleanedInfo = hasProjectInfoValues(restInfo) ? restInfo : undefined
+              updatedProject = { ...updatedProject, info: cleanedInfo }
+              infoChanged = true
+            }
+          }
+
+          let tasksChanged = false
+          if (project.tasks && project.tasks.length > 0) {
+            const nextTasks = project.tasks.map(task => {
+              if (task.assigneeId !== userId) {
+                return task
+              }
+              tasksChanged = true
+              if (action === 'rename' && name) {
+                return { ...task, assigneeName: name }
+              }
+              if (action === 'remove') {
+                return { ...task, assigneeId: undefined, assigneeName: undefined }
+              }
+              return task
+            })
+            if (tasksChanged) {
+              updatedProject = { ...updatedProject, tasks: nextTasks }
+            }
+          }
+
+          if (infoChanged || tasksChanged) {
+            projectsChanged = true
+          }
+
+          return updatedProject
+        })
+        return projectsChanged ? { ...customer, projects } : customer
+      }),
+    )
+  }
 
   // Mutators
+  async function handleCreateUser() {
+    if (!canEdit) {
+      setUserFormError('Not authorized to manage users.')
+      return
+    }
+
+    const name = newUserDraft.name.trim()
+    if (!name) {
+      setUserFormError('Enter a user name.')
+      return
+    }
+
+    const email = newUserDraft.email.trim()
+    const payload = {
+      name,
+      email: email ? email : undefined,
+      role: newUserDraft.role,
+      twoFactorEnabled: newUserDraft.twoFactorEnabled,
+      twoFactorMethod: newUserDraft.twoFactorEnabled ? newUserDraft.twoFactorMethod : undefined,
+    }
+
+    setIsSavingUser(true)
+    try {
+      const user = await createUserRecord(payload)
+      setUsers(prev => [...prev, user].sort((a, b) => a.name.localeCompare(b.name)))
+      resetNewUserDraft()
+      setUserFormError(null)
+    } catch (error) {
+      console.error('Failed to create user', error)
+      setUserFormError(toErrorMessage(error, 'Failed to create user.'))
+    } finally {
+      setIsSavingUser(false)
+    }
+  }
+
+  const beginEditingUser = (user: User) => {
+    setEditingUserId(user.id)
+    setUserEditDraft({
+      name: user.name,
+      email: user.email ?? '',
+      role: user.role,
+      twoFactorEnabled: user.twoFactorEnabled,
+      twoFactorMethod: user.twoFactorMethod ?? 'authenticator',
+    })
+    setUserEditError(null)
+  }
+
+  const cancelUserEdit = () => {
+    setEditingUserId(null)
+    setUserEditError(null)
+    setIsSavingUserEdit(false)
+  }
+
+  async function handleSaveUserEdit() {
+    if (!editingUserId) {
+      return
+    }
+    if (!canEdit) {
+      setUserEditError('Not authorized to manage users.')
+      return
+    }
+
+    const name = userEditDraft.name.trim()
+    if (!name) {
+      setUserEditError('Enter a user name.')
+      return
+    }
+
+    const email = userEditDraft.email.trim()
+    const payload = {
+      name,
+      email: email ? email : undefined,
+      role: userEditDraft.role,
+      twoFactorEnabled: userEditDraft.twoFactorEnabled,
+      twoFactorMethod: userEditDraft.twoFactorEnabled ? userEditDraft.twoFactorMethod : undefined,
+    }
+
+    setIsSavingUserEdit(true)
+    try {
+      const updated = await updateUserRecord(editingUserId, payload)
+      setUsers(prev =>
+        [...prev.filter(user => user.id !== updated.id), updated].sort((a, b) => a.name.localeCompare(b.name)),
+      )
+      applyUserChangeToProjects(updated.id, 'rename', updated.name)
+      setUserEditError(null)
+      setEditingUserId(null)
+    } catch (error) {
+      console.error('Failed to update user', error)
+      setUserEditError(toErrorMessage(error, 'Failed to update user.'))
+    } finally {
+      setIsSavingUserEdit(false)
+    }
+  }
+
+  async function handleDeleteUser(userId: string) {
+    if (!canEdit) {
+      setUserFormError('Not authorized to manage users.')
+      return
+    }
+
+    setDeletingUserId(userId)
+    try {
+      await deleteUserRecord(userId)
+      setUsers(prev => prev.filter(user => user.id !== userId))
+      applyUserChangeToProjects(userId, 'remove')
+      setUserFormError(null)
+    } catch (error) {
+      console.error('Failed to delete user', error)
+      setUserFormError(toErrorMessage(error, 'Failed to delete user.'))
+    } finally {
+      setDeletingUserId(null)
+      if (editingUserId === userId) {
+        cancelUserEdit()
+      }
+    }
+  }
   async function saveCustomerDetails(
     customerId: string,
     updates: {
@@ -2312,7 +2866,7 @@ function AppContent() {
   async function saveCustomerSignOff(
     customerId: string,
     projectId: string,
-    signOff: ProjectCustomerSignOff,
+    signOffInput: ProjectCustomerSignOff,
     options: {
       nextStatus?: { status: ProjectStatus; activeSubStatus?: ProjectActiveSubStatus }
       changedBy?: string
@@ -2335,6 +2889,23 @@ function AppContent() {
 
     const desiredStatus = options.nextStatus
     let statusUpdate: ReturnType<typeof buildStatusUpdate> | null = null
+
+    const infoSnapshot = existingProject.info
+      ? {
+          ...existingProject.info,
+          machineSerialNumbers: existingProject.info.machineSerialNumbers
+            ? [...existingProject.info.machineSerialNumbers]
+            : undefined,
+          toolSerialNumbers: existingProject.info.toolSerialNumbers
+            ? [...existingProject.info.toolSerialNumbers]
+            : undefined,
+        }
+      : undefined
+
+    const signOff: ProjectCustomerSignOff = {
+      ...signOffInput,
+      projectInfo: infoSnapshot,
+    }
 
     if (desiredStatus) {
       const currentStatus = existingProject.status
@@ -2467,9 +3038,18 @@ function AppContent() {
     const completedAt = new Date().toISOString()
 
     try {
+      const info = project.info
       const pdfDataUrl = await generateCustomerSignOffPdf({
         projectNumber: project.number,
         customerName: customer.name,
+        lineReference: info?.lineReference,
+        machineSerialNumbers: info?.machineSerialNumbers,
+        toolSerialNumbers: info?.toolSerialNumbers,
+        cobaltOrderNumber: info?.cobaltOrderNumber,
+        customerOrderNumber: info?.customerOrderNumber,
+        salespersonName: info?.salespersonName,
+        startDate: info?.startDate,
+        proposedCompletionDate: info?.proposedCompletionDate,
         signedByName: submission.name,
         signedByPosition: submission.position,
         decision: submission.decision,
@@ -2777,6 +3357,37 @@ function AppContent() {
     })()
   }
 
+  function updateProjectInfo(customerId: string, projectId: string, info: ProjectInfo | null) {
+    if (!canEdit) {
+      setActionError('Not authorized to update project information.')
+      return
+    }
+
+    setDb(prev =>
+      prev.map(c =>
+        c.id !== customerId
+          ? c
+          : {
+              ...c,
+              projects: c.projects.map(p =>
+                p.id !== projectId ? p : { ...p, info: info ?? undefined },
+              ),
+            },
+      ),
+    )
+
+    void (async () => {
+      try {
+        await updateProjectRecord(projectId, { info })
+        setActionError(null)
+      } catch (error) {
+        console.error('Failed to update project information', error)
+        const message = toErrorMessage(error, 'Failed to update project information.')
+        setActionError(message)
+      }
+    })()
+  }
+
   function buildStatusUpdate(
     project: Project,
     status: ProjectStatus,
@@ -2793,7 +3404,7 @@ function AppContent() {
       status,
       activeSubStatus: status === 'Active' ? normalizedActiveSubStatus : undefined,
       changedAt: new Date().toISOString(),
-      changedBy: changedBy?.trim() || CURRENT_USER_NAME,
+      changedBy: changedBy?.trim() || currentUserName,
     }
 
     const history = [...(project.statusHistory ?? []), entry]
@@ -2870,7 +3481,7 @@ function AppContent() {
   async function addTask(
     customerId: string,
     projectId: string,
-    data: { name: string; start: string; end: string; assignee?: string; status: ProjectTaskStatus },
+    data: { name: string; start: string; end: string; assigneeId?: string; status: ProjectTaskStatus },
   ): Promise<string | null> {
     if (!canEdit) {
       const message = 'Not authorized to create tasks.'
@@ -2893,14 +3504,23 @@ function AppContent() {
       return 'The end time must be after the start time.'
     }
 
-    const assignee = data.assignee?.trim()
+    const assigneeId = data.assigneeId?.trim()
+    let assigneeName: string | undefined
+    if (assigneeId) {
+      const user = users.find(entry => entry.id === assigneeId)
+      if (!user) {
+        return 'Select a valid assignee.'
+      }
+      assigneeName = user.name
+    }
 
     try {
       const createdTask = await createTaskRecord(projectId, {
         name: trimmedName,
         start: new Date(startMs).toISOString(),
         end: new Date(endMs).toISOString(),
-        assignee: assignee || undefined,
+        assigneeId: assigneeId || undefined,
+        assigneeName,
         status: data.status,
       })
 
@@ -2939,7 +3559,8 @@ function AppContent() {
       name?: string
       start?: string
       end?: string
-      assignee?: string
+      assigneeId?: string
+      assigneeName?: string
       status?: ProjectTaskStatus
     },
   ): Promise<string | null> {
@@ -2985,12 +3606,37 @@ function AppContent() {
       return 'The end time must be after the start time.'
     }
 
-    let normalizedAssignee: string | undefined
-    if (updates.assignee !== undefined) {
-      const trimmedAssignee = updates.assignee.trim()
-      normalizedAssignee = trimmedAssignee ? trimmedAssignee : undefined
-    } else {
-      normalizedAssignee = existingTask.assignee
+    let nextAssigneeId = existingTask.assigneeId
+    let nextAssigneeName = existingTask.assigneeName
+
+    if (updates.assigneeId !== undefined) {
+      const trimmedId = updates.assigneeId?.trim()
+      if (trimmedId) {
+        const user = users.find(entry => entry.id === trimmedId)
+        if (!user) {
+          return 'Select a valid assignee.'
+        }
+        nextAssigneeId = trimmedId
+        nextAssigneeName = user.name
+      } else {
+        nextAssigneeId = undefined
+        nextAssigneeName = undefined
+      }
+    } else if (updates.assigneeName !== undefined) {
+      const trimmedName = updates.assigneeName?.trim()
+      if (!trimmedName) {
+        nextAssigneeId = undefined
+        nextAssigneeName = undefined
+      } else {
+        const user = users.find(
+          entry => entry.name.trim().toLowerCase() === trimmedName.toLowerCase(),
+        )
+        if (!user) {
+          return 'Select a valid assignee.'
+        }
+        nextAssigneeId = user.id
+        nextAssigneeName = user.name
+      }
     }
 
     const nextStatus = updates.status ?? existingTask.status
@@ -3000,7 +3646,8 @@ function AppContent() {
         name: nextName,
         start: new Date(startMs).toISOString(),
         end: new Date(endMs).toISOString(),
-        assignee: normalizedAssignee ?? null,
+        assigneeId: nextAssigneeId ?? null,
+        assigneeName: nextAssigneeName ?? null,
         status: nextStatus,
       })
 
@@ -3108,20 +3755,28 @@ function AppContent() {
 
   async function addProject(
     customerId: string,
-    projectNumber: string,
+    data: {
+      number: string
+      info?: ProjectInfo | null
+      tasks?: Array<{ name: string; status?: ProjectTaskStatus; assigneeId?: string }>
+    },
   ): Promise<{ projectId: string; customerId: string } | string> {
     if (!canEdit) {
       const message = 'Not authorized to create projects.'
       setActionError(message)
       return message
     }
-    const trimmed = projectNumber.trim()
+    const trimmed = data.number.trim()
     if (!trimmed) return 'Enter a project number.'
     const normalized = trimmed.toUpperCase()
     const finalNumber = normalized.startsWith('P') ? normalized : `P${normalized}`
     if (projectNumberExists(finalNumber)) return 'A project with this number already exists.'
     try {
-      const project = await createProjectRecord(customerId, finalNumber)
+      const project = await createProjectRecord(customerId, {
+        number: finalNumber,
+        info: data.info ?? null,
+        tasks: data.tasks,
+      })
       setDb(prev =>
         prev.map(c =>
           c.id !== customerId ? c : { ...c, projects: [...c.projects, project] },
@@ -3264,6 +3919,8 @@ function AppContent() {
       setNewProjectNumber('')
       setNewProjectError(null)
       setIsCreatingProject(false)
+      setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+      setNewProjectTaskSelections(createDefaultTaskSelectionMap())
     }
     if (page !== 'customers') {
       setShowNewCustomer(false)
@@ -3316,7 +3973,6 @@ function AppContent() {
         <CardHeader>
           <div>
             <h1 className='text-2xl font-semibold tracking-tight text-slate-900'>CustomerProjectDB</h1>
-            <p className='mt-1 text-sm text-slate-500'>Keep track of customers, projects, and their work orders.</p>
           </div>
         </CardHeader>
         <CardContent>
@@ -3478,6 +4134,8 @@ function AppContent() {
                     setShowNewProject(true)
                     setNewProjectError(null)
                     setNewProjectNumber('')
+                    setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+                    setNewProjectTaskSelections(createDefaultTaskSelectionMap())
                     const fallbackCustomerId = sortedCustomers[0]?.id ?? ''
                     const validSelectedCustomerId =
                       selectedCustomerId && db.some(customer => customer.id === selectedCustomerId)
@@ -3811,6 +4469,8 @@ function AppContent() {
                     setNewProjectError(null)
                     setNewProjectNumber('')
                     setIsCreatingProject(false)
+                    setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+                    setNewProjectTaskSelections(createDefaultTaskSelectionMap())
                   }}
                   title='Close'
                 >
@@ -3856,6 +4516,147 @@ function AppContent() {
                         />
                       </div>
                     </div>
+                    <div className='grid gap-3 md:grid-cols-2'>
+                      <div>
+                        <Label htmlFor='new-project-line'>Line No/Name</Label>
+                        <Input
+                          id='new-project-line'
+                          value={newProjectInfoDraft.lineReference}
+                          onChange={event =>
+                            updateNewProjectInfoField('lineReference', (event.target as HTMLInputElement).value)
+                          }
+                          placeholder='e.g. Line 2 — Packing'
+                          disabled={isCreatingProject || !canEdit}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor='new-project-salesperson'>Salesperson</Label>
+                        <select
+                          id='new-project-salesperson'
+                          className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                          value={newProjectInfoDraft.salespersonId}
+                          onChange={event =>
+                            updateNewProjectInfoField('salespersonId', (event.target as HTMLSelectElement).value)
+                          }
+                          disabled={isCreatingProject || !canEdit}
+                        >
+                          <option value=''>Unassigned</option>
+                          {users
+                            .slice()
+                            .sort((a, b) => a.name.localeCompare(b.name))
+                            .map(user => (
+                              <option key={user.id} value={user.id}>
+                                {user.name}
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+                      <div className='md:col-span-2'>
+                        <Label htmlFor='new-project-machine-serials'>Machine Serial Numbers</Label>
+                        <textarea
+                          id='new-project-machine-serials'
+                          className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                          rows={3}
+                          value={newProjectInfoDraft.machineSerialNumbers}
+                          onChange={event =>
+                            updateNewProjectInfoField(
+                              'machineSerialNumbers',
+                              (event.target as HTMLTextAreaElement).value,
+                            )
+                          }
+                          placeholder='Enter each serial number on a new line'
+                          disabled={isCreatingProject || !canEdit}
+                        />
+                      </div>
+                      <div className='md:col-span-2'>
+                        <Label htmlFor='new-project-tool-serials'>Tool Serial Numbers</Label>
+                        <textarea
+                          id='new-project-tool-serials'
+                          className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                          rows={3}
+                          value={newProjectInfoDraft.toolSerialNumbers}
+                          onChange={event =>
+                            updateNewProjectInfoField(
+                              'toolSerialNumbers',
+                              (event.target as HTMLTextAreaElement).value,
+                            )
+                          }
+                          placeholder='Enter each serial number on a new line'
+                          disabled={isCreatingProject || !canEdit}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor='new-project-cobalt-order'>Cobalt Order Number</Label>
+                        <Input
+                          id='new-project-cobalt-order'
+                          value={newProjectInfoDraft.cobaltOrderNumber}
+                          onChange={event =>
+                            updateNewProjectInfoField('cobaltOrderNumber', (event.target as HTMLInputElement).value)
+                          }
+                          placeholder='e.g. CO-12345'
+                          disabled={isCreatingProject || !canEdit}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor='new-project-customer-order'>Customer Order Number</Label>
+                        <Input
+                          id='new-project-customer-order'
+                          value={newProjectInfoDraft.customerOrderNumber}
+                          onChange={event =>
+                            updateNewProjectInfoField('customerOrderNumber', (event.target as HTMLInputElement).value)
+                          }
+                          placeholder='e.g. PO-90876'
+                          disabled={isCreatingProject || !canEdit}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor='new-project-start-date'>Project Start Date</Label>
+                        <input
+                          id='new-project-start-date'
+                          type='date'
+                          className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                          value={newProjectInfoDraft.startDate}
+                          onChange={event =>
+                            updateNewProjectInfoField('startDate', (event.target as HTMLInputElement).value)
+                          }
+                          disabled={isCreatingProject || !canEdit}
+                        />
+                      </div>
+                      <div>
+                        <Label htmlFor='new-project-proposed-completion'>Proposed Completion Date</Label>
+                        <input
+                          id='new-project-proposed-completion'
+                          type='date'
+                          className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                          value={newProjectInfoDraft.proposedCompletionDate}
+                          onChange={event =>
+                            updateNewProjectInfoField(
+                              'proposedCompletionDate',
+                              (event.target as HTMLInputElement).value,
+                            )
+                          }
+                          disabled={isCreatingProject || !canEdit}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <Label>Default Tasks</Label>
+                      <p className='mt-1 text-xs text-slate-500'>Select preset tasks to add when the project is created.</p>
+                      <div className='mt-2 space-y-2'>
+                        {DEFAULT_PROJECT_TASK_OPTIONS.map(option => (
+                          <label key={option.id} className='flex items-center gap-2 text-sm text-slate-700'>
+                            <input
+                              type='checkbox'
+                              className='h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 disabled:cursor-not-allowed'
+                              checked={Boolean(newProjectTaskSelections[option.id])}
+                              onChange={() => toggleNewProjectTaskSelection(option.id)}
+                              disabled={isCreatingProject || !canEdit}
+                            />
+                            <span>{option.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
                     {newProjectError && (
                       <p className='flex items-center gap-1 text-sm text-rose-600'>
                         <AlertCircle size={14} /> {newProjectError}
@@ -3869,6 +4670,8 @@ function AppContent() {
                           setNewProjectError(null)
                           setNewProjectNumber('')
                           setIsCreatingProject(false)
+                          setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+                          setNewProjectTaskSelections(createDefaultTaskSelectionMap())
                         }}
                         disabled={isCreatingProject}
                       >

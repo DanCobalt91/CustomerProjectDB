@@ -13,7 +13,7 @@ import {
   Trash2,
   Upload,
   X,
-  User,
+  User as UserIcon,
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import type {
@@ -23,12 +23,14 @@ import type {
   ProjectCustomerSignOff,
   ProjectFile,
   ProjectFileCategory,
+  ProjectInfo,
   ProjectStatus,
   WOType,
   CustomerSignOffDecision,
   CustomerSignOffSubmission,
   ProjectTask,
   ProjectTaskStatus,
+  User,
 } from '../types'
 import {
   DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
@@ -43,18 +45,26 @@ import Label from '../components/ui/Label'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { CUSTOMER_SIGN_OFF_OPTIONS, CUSTOMER_SIGN_OFF_OPTION_COPY } from '../lib/signOff'
 import TaskGanttChart from '../components/ui/TaskGanttChart'
+import {
+  createProjectInfoDraft,
+  parseProjectInfoDraft,
+  type ProjectInfoDraft,
+} from '../lib/projectInfo'
 
 export type ProjectPageProps = {
   customer: Customer
   project: Project
   canEdit: boolean
-  currentUser: string
+  currentUserName: string
+  currentUserId: string | null
+  users: User[]
   onUpdateProjectNote: (note: string) => void
   onUpdateProjectStatus: (
     status: ProjectStatus,
     activeSubStatus?: ProjectActiveSubStatus,
     context?: { changedBy: string },
   ) => void
+  onUpdateProjectInfo: (info: ProjectInfo | null) => void
   onAddWO: (data: { number: string; type: WOType; note?: string }) => Promise<string | null>
   onDeleteWO: (woId: string) => void
   onUploadDocument: (category: ProjectFileCategory, file: File) => Promise<string | null>
@@ -70,7 +80,7 @@ export type ProjectPageProps = {
     name: string
     start: string
     end: string
-    assignee?: string
+    assigneeId?: string
     status: ProjectTaskStatus
   }) => Promise<string | null>
   onUpdateTask: (
@@ -79,7 +89,8 @@ export type ProjectPageProps = {
       name?: string
       start?: string
       end?: string
-      assignee?: string
+      assigneeId?: string
+      assigneeName?: string
       status?: ProjectTaskStatus
     },
   ) => Promise<string | null>
@@ -135,9 +146,10 @@ const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchCl
 }
 
 const PROJECT_TABS = [
+  { value: 'tasks', label: 'Tasks' },
+  { value: 'info', label: 'Project Info' },
   { value: 'files', label: 'Project Files' },
   { value: 'workOrders', label: 'Work Orders' },
-  { value: 'tasks', label: 'Tasks' },
 ] as const
 
 type ProjectTab = (typeof PROJECT_TABS)[number]['value']
@@ -146,7 +158,7 @@ type TaskFormState = {
   name: string
   start: string
   end: string
-  assignee: string
+  assigneeId: string
   status: ProjectTaskStatus
 }
 
@@ -311,9 +323,12 @@ export default function ProjectPage({
   customer,
   project,
   canEdit,
-  currentUser,
+  currentUserName,
+  currentUserId,
+  users,
   onUpdateProjectNote,
   onUpdateProjectStatus,
+  onUpdateProjectInfo,
   onAddWO,
   onDeleteWO,
   onUploadDocument,
@@ -335,7 +350,13 @@ export default function ProjectPage({
   )
   const [noteDraft, setNoteDraft] = useState(project.note ?? '')
   const [isNoteDialogOpen, setIsNoteDialogOpen] = useState(false)
-  const [activeTab, setActiveTab] = useState<ProjectTab>('files')
+  const [activeTab, setActiveTab] = useState<ProjectTab>('tasks')
+  const [infoDraft, setInfoDraft] = useState<ProjectInfoDraft>(() =>
+    createProjectInfoDraft(project.info, users),
+  )
+  const [infoError, setInfoError] = useState<string | null>(null)
+  const [infoStatus, setInfoStatus] = useState<string | null>(null)
+  const [isSavingInfo, setIsSavingInfo] = useState(false)
   const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
   const [woError, setWoError] = useState<string | null>(null)
   const [isAddingWo, setIsAddingWo] = useState(false)
@@ -379,7 +400,7 @@ export default function ProjectPage({
     name: '',
     start: '',
     end: '',
-    assignee: '',
+    assigneeId: '',
     status: PROJECT_TASK_STATUSES[0],
   })
   const [taskError, setTaskError] = useState<string | null>(null)
@@ -389,11 +410,18 @@ export default function ProjectPage({
     name: '',
     start: '',
     end: '',
-    assignee: '',
+    assigneeId: '',
     status: PROJECT_TASK_STATUSES[0],
   })
   const [taskEditError, setTaskEditError] = useState<string | null>(null)
   const [isSavingTaskEdit, setIsSavingTaskEdit] = useState(false)
+
+  const currentUser = useMemo(
+    () => (currentUserId ? users.find(user => user.id === currentUserId) ?? null : null),
+    [currentUserId, users],
+  )
+  const currentUserDisplayName = currentUser?.name ?? currentUserName
+  const sortedUsers = useMemo(() => [...users].sort((a, b) => a.name.localeCompare(b.name)), [users])
 
   const documents = project.documents ?? {}
   const documentsCount = useMemo(() => {
@@ -403,6 +431,18 @@ export default function ProjectPage({
     )
     return projectFilesCount + (project.customerSignOff ? 1 : 0)
   }, [project.customerSignOff, project.documents])
+  const hasProjectInfo = useMemo(() => {
+    const info = project.info
+    if (!info) {
+      return false
+    }
+    return Object.values(info).some(value => {
+      if (Array.isArray(value)) {
+        return value.length > 0
+      }
+      return value !== undefined
+    })
+  }, [project.info])
   const statusHistory = useMemo(() => {
     const history = project.statusHistory ?? []
     return [...history].sort(
@@ -432,10 +472,10 @@ export default function ProjectPage({
   }, [])
 
   useEffect(() => {
-    setTaskForm({ name: '', start: '', end: '', assignee: '', status: PROJECT_TASK_STATUSES[0] })
+    setTaskForm({ name: '', start: '', end: '', assigneeId: '', status: PROJECT_TASK_STATUSES[0] })
     setTaskError(null)
     setEditingTaskId(null)
-    setTaskEditDraft({ name: '', start: '', end: '', assignee: '', status: PROJECT_TASK_STATUSES[0] })
+    setTaskEditDraft({ name: '', start: '', end: '', assigneeId: '', status: PROJECT_TASK_STATUSES[0] })
     setTaskEditError(null)
     setIsSavingTask(false)
     setIsSavingTaskEdit(false)
@@ -463,7 +503,7 @@ export default function ProjectPage({
     setFileErrors({ fds: null, electrical: null, mechanical: null, installation: null })
     setRemovingFile(null)
     setExpandedPreviews(new Set())
-    setActiveTab('files')
+    setActiveTab('tasks')
     setIsUploadingSignOff(false)
     setIsRemovingSignOff(false)
     setIsGeneratingSignOff(false)
@@ -489,6 +529,11 @@ export default function ProjectPage({
       setActiveSubStatusDraft(project.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS)
     }
   }, [project.status, project.activeSubStatus])
+
+  useEffect(() => {
+    setInfoDraft(createProjectInfoDraft(project.info, users))
+    setInfoError(null)
+  }, [project.info, users])
 
   useEffect(() => {
     if (!isGeneratingSignOff) {
@@ -609,6 +654,53 @@ export default function ProjectPage({
     })
   }
 
+  const updateInfoField = (field: keyof ProjectInfoDraft, value: string) => {
+    setInfoDraft(prev => ({ ...prev, [field]: value }))
+    if (infoError) {
+      setInfoError(null)
+    }
+    if (infoStatus) {
+      setInfoStatus(null)
+    }
+  }
+
+  const handleSaveProjectInfo = () => {
+    if (!canEdit) {
+      setInfoError('You have read-only access.')
+      return
+    }
+    const { info, error } = parseProjectInfoDraft(infoDraft, users)
+    if (error) {
+      setInfoError(error)
+      setInfoStatus(null)
+      return
+    }
+    setIsSavingInfo(true)
+    try {
+      onUpdateProjectInfo(info)
+      setInfoError(null)
+      setInfoStatus(info ? 'Project information saved.' : 'Project information cleared.')
+    } finally {
+      setIsSavingInfo(false)
+    }
+  }
+
+  const handleClearProjectInfo = () => {
+    if (!canEdit) {
+      setInfoError('You have read-only access.')
+      return
+    }
+    setIsSavingInfo(true)
+    try {
+      onUpdateProjectInfo(null)
+      setInfoDraft(createProjectInfoDraft(undefined, users))
+      setInfoError(null)
+      setInfoStatus('Project information cleared.')
+    } finally {
+      setIsSavingInfo(false)
+    }
+  }
+
   const handleStatusSelectionChange = (value: string) => {
     const selection = STATUS_SELECTIONS.find(option => option.key === value)
     if (!selection) {
@@ -640,7 +732,7 @@ export default function ProjectPage({
       selection.status === 'Active'
         ? selection.activeSubStatus ?? DEFAULT_PROJECT_ACTIVE_SUB_STATUS
         : undefined,
-      { changedBy: currentUser },
+      { changedBy: currentUserDisplayName },
     )
   }
 
@@ -896,18 +988,19 @@ export default function ProjectPage({
 
     setIsSavingTask(true)
     try {
+      const assigneeId = taskForm.assigneeId.trim()
       const error = await onCreateTask({
         name: trimmedName,
         start: startIso,
         end: endIso,
-        assignee: taskForm.assignee.trim() || undefined,
+        assigneeId: assigneeId || undefined,
         status: taskForm.status,
       })
       if (error) {
         setTaskError(error)
         return
       }
-      setTaskForm({ name: '', start: '', end: '', assignee: '', status: PROJECT_TASK_STATUSES[0] })
+      setTaskForm({ name: '', start: '', end: '', assigneeId: '', status: PROJECT_TASK_STATUSES[0] })
       setTaskError(null)
     } finally {
       setIsSavingTask(false)
@@ -920,7 +1013,7 @@ export default function ProjectPage({
       name: task.name,
       start: toDateTimeLocal(task.start),
       end: toDateTimeLocal(task.end),
-      assignee: task.assignee ?? '',
+      assigneeId: task.assigneeId ?? '',
       status: task.status,
     })
     setTaskEditError(null)
@@ -970,11 +1063,12 @@ export default function ProjectPage({
 
     setIsSavingTaskEdit(true)
     try {
+      const assigneeId = taskEditDraft.assigneeId.trim()
       const error = await onUpdateTask(editingTaskId, {
         name: trimmedName,
         start: startIso,
         end: endIso,
-        assignee: taskEditDraft.assignee.trim() || undefined,
+        assigneeId: assigneeId || undefined,
         status: taskEditDraft.status,
       })
       if (error) {
@@ -1266,6 +1360,244 @@ export default function ProjectPage({
     </div>
   )
 
+
+  const renderProjectInfo = () => {
+    const info = project.info
+    const machineSerialNumbers = info?.machineSerialNumbers ?? []
+    const toolSerialNumbers = info?.toolSerialNumbers ?? []
+    const salespersonName = info?.salespersonId
+      ? users.find(user => user.id === info.salespersonId)?.name ?? info.salespersonName ?? null
+      : info?.salespersonName ?? null
+
+    return (
+      <div className='space-y-6'>
+        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
+          <div className='mb-4 space-y-2'>
+            <div className='text-sm font-semibold text-slate-800'>Recorded project info</div>
+            <p className='text-xs text-slate-500'>This metadata is included when generating customer final acceptance PDFs.</p>
+          </div>
+          {hasProjectInfo ? (
+            <div className='space-y-4'>
+              <div className='grid gap-4 md:grid-cols-2'>
+                <div>
+                  <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>General</div>
+                  <dl className='mt-2 space-y-1 text-sm text-slate-700'>
+                    <div className='flex justify-between gap-3'>
+                      <dt className='text-slate-500'>Line No/Name</dt>
+                      <dd className='text-right font-medium text-slate-800'>
+                        {info?.lineReference ?? '—'}
+                      </dd>
+                    </div>
+                    <div className='flex justify-between gap-3'>
+                      <dt className='text-slate-500'>Cobalt Order #</dt>
+                      <dd className='text-right font-medium text-slate-800'>
+                        {info?.cobaltOrderNumber ?? '—'}
+                      </dd>
+                    </div>
+                    <div className='flex justify-between gap-3'>
+                      <dt className='text-slate-500'>Customer Order #</dt>
+                      <dd className='text-right font-medium text-slate-800'>
+                        {info?.customerOrderNumber ?? '—'}
+                      </dd>
+                    </div>
+                    <div className='flex justify-between gap-3'>
+                      <dt className='text-slate-500'>Salesperson</dt>
+                      <dd className='text-right font-medium text-slate-800'>
+                        {salespersonName ?? '—'}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+                <div>
+                  <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Schedule</div>
+                  <dl className='mt-2 space-y-1 text-sm text-slate-700'>
+                    <div className='flex justify-between gap-3'>
+                      <dt className='text-slate-500'>Start date</dt>
+                      <dd className='text-right font-medium text-slate-800'>
+                        {info?.startDate ?? '—'}
+                      </dd>
+                    </div>
+                    <div className='flex justify-between gap-3'>
+                      <dt className='text-slate-500'>Proposed completion</dt>
+                      <dd className='text-right font-medium text-slate-800'>
+                        {info?.proposedCompletionDate ?? '—'}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+              </div>
+              <div className='grid gap-4 md:grid-cols-2'>
+                <div>
+                  <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Machine serial numbers</div>
+                  {machineSerialNumbers.length > 0 ? (
+                    <ul className='mt-2 space-y-1 text-xs text-slate-600'>
+                      {machineSerialNumbers.map((serial, index) => (
+                        <li key={`${serial}-${index}`} className='flex items-center gap-2'>
+                          <span className='h-1.5 w-1.5 rounded-full bg-slate-400' aria-hidden />
+                          <span>{serial}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className='mt-2 text-xs text-slate-400'>No machine serial numbers recorded.</p>
+                  )}
+                </div>
+                <div>
+                  <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Tool serial numbers</div>
+                  {toolSerialNumbers.length > 0 ? (
+                    <ul className='mt-2 space-y-1 text-xs text-slate-600'>
+                      {toolSerialNumbers.map((serial, index) => (
+                        <li key={`${serial}-${index}`} className='flex items-center gap-2'>
+                          <span className='h-1.5 w-1.5 rounded-full bg-slate-400' aria-hidden />
+                          <span>{serial}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className='mt-2 text-xs text-slate-400'>No tool serial numbers recorded.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className='rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
+              No project information recorded yet.
+            </div>
+          )}
+        </section>
+
+        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
+          <div className='mb-4 space-y-1'>
+            <div className='text-sm font-semibold text-slate-800'>Edit project info</div>
+            <p className='text-xs text-slate-500'>Provide project metadata, serial numbers, and sales context.</p>
+          </div>
+          <div className='grid gap-3 md:grid-cols-2'>
+            <div>
+              <Label htmlFor='info-line'>Line No/Name</Label>
+              <Input
+                id='info-line'
+                value={infoDraft.lineReference}
+                onChange={event => updateInfoField('lineReference', (event.target as HTMLInputElement).value)}
+                placeholder='e.g. Line 3 — Bottling'
+                disabled={!canEdit || isSavingInfo}
+              />
+            </div>
+            <div>
+              <Label htmlFor='info-salesperson'>Salesperson</Label>
+              <select
+                id='info-salesperson'
+                className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                value={infoDraft.salespersonId}
+                onChange={event =>
+                  updateInfoField('salespersonId', (event.target as HTMLSelectElement).value)
+                }
+                disabled={!canEdit || isSavingInfo}
+              >
+                <option value=''>Unassigned</option>
+                {sortedUsers.map(user => (
+                  <option key={user.id} value={user.id}>
+                    {user.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className='md:col-span-2'>
+              <Label htmlFor='info-machine-serials'>Machine Serial Numbers</Label>
+              <textarea
+                id='info-machine-serials'
+                className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                rows={3}
+                value={infoDraft.machineSerialNumbers}
+                onChange={event =>
+                  updateInfoField('machineSerialNumbers', (event.target as HTMLTextAreaElement).value)
+                }
+                placeholder='Enter each serial number on a new line'
+                disabled={!canEdit || isSavingInfo}
+              />
+            </div>
+            <div className='md:col-span-2'>
+              <Label htmlFor='info-tool-serials'>Tool Serial Numbers</Label>
+              <textarea
+                id='info-tool-serials'
+                className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                rows={3}
+                value={infoDraft.toolSerialNumbers}
+                onChange={event =>
+                  updateInfoField('toolSerialNumbers', (event.target as HTMLTextAreaElement).value)
+                }
+                placeholder='Enter each serial number on a new line'
+                disabled={!canEdit || isSavingInfo}
+              />
+            </div>
+            <div>
+              <Label htmlFor='info-cobalt-order'>Cobalt Order Number</Label>
+              <Input
+                id='info-cobalt-order'
+                value={infoDraft.cobaltOrderNumber}
+                onChange={event => updateInfoField('cobaltOrderNumber', (event.target as HTMLInputElement).value)}
+                placeholder='e.g. CO-12345'
+                disabled={!canEdit || isSavingInfo}
+              />
+            </div>
+            <div>
+              <Label htmlFor='info-customer-order'>Customer Order Number</Label>
+              <Input
+                id='info-customer-order'
+                value={infoDraft.customerOrderNumber}
+                onChange={event => updateInfoField('customerOrderNumber', (event.target as HTMLInputElement).value)}
+                placeholder='e.g. PO-90876'
+                disabled={!canEdit || isSavingInfo}
+              />
+            </div>
+            <div>
+              <Label htmlFor='info-start-date'>Project Start Date</Label>
+              <input
+                id='info-start-date'
+                type='date'
+                className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                value={infoDraft.startDate}
+                onChange={event => updateInfoField('startDate', (event.target as HTMLInputElement).value)}
+                disabled={!canEdit || isSavingInfo}
+              />
+            </div>
+            <div>
+              <Label htmlFor='info-proposed-completion'>Proposed Completion Date</Label>
+              <input
+                id='info-proposed-completion'
+                type='date'
+                className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                value={infoDraft.proposedCompletionDate}
+                onChange={event =>
+                  updateInfoField('proposedCompletionDate', (event.target as HTMLInputElement).value)
+                }
+                disabled={!canEdit || isSavingInfo}
+              />
+            </div>
+          </div>
+          {infoError && (
+            <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
+              <AlertCircle size={14} /> {infoError}
+            </p>
+          )}
+          {infoStatus && !infoError && (
+            <p className='mt-3 text-sm text-emerald-600'>{infoStatus}</p>
+          )}
+          <div className='mt-4 flex flex-wrap justify-end gap-2'>
+            <Button
+              variant='ghost'
+              onClick={handleClearProjectInfo}
+              disabled={!canEdit || isSavingInfo}
+            >
+              Clear
+            </Button>
+            <Button onClick={handleSaveProjectInfo} disabled={!canEdit || isSavingInfo}>
+              {isSavingInfo ? 'Saving…' : 'Save info'}
+            </Button>
+          </div>
+        </section>
+      </div>
+    )
+  }
 
   const renderProjectFiles = () => {
     const categoriesWithFiles = PROJECT_FILE_CATEGORIES.filter(
@@ -1611,16 +1943,23 @@ export default function ProjectPage({
             </div>
             <div>
               <Label htmlFor='task-assignee'>Assignee</Label>
-              <Input
+              <select
                 id='task-assignee'
-                value={taskForm.assignee}
+                className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                value={taskForm.assigneeId}
                 onChange={event => {
-                  setTaskForm(prev => ({ ...prev, assignee: event.target.value }))
+                  setTaskForm(prev => ({ ...prev, assigneeId: (event.target as HTMLSelectElement).value }))
                   if (taskError) setTaskError(null)
                 }}
-                placeholder='e.g. Jamie Lee'
                 disabled={!canEdit}
-              />
+              >
+                <option value=''>Unassigned</option>
+                {sortedUsers.map(user => (
+                  <option key={user.id} value={user.id}>
+                    {user.name}
+                  </option>
+                ))}
+              </select>
             </div>
             <div>
               <Label htmlFor='task-start'>Start</Label>
@@ -1695,6 +2034,8 @@ export default function ProjectPage({
             <div className='space-y-3'>
               {tasks.map(task => {
                 const isEditing = editingTaskId === task.id
+                const assigneeName = task.assigneeName ??
+                  (task.assigneeId ? users.find(user => user.id === task.assigneeId)?.name ?? null : null)
                 return (
                   <div
                     key={task.id}
@@ -1705,10 +2046,10 @@ export default function ProjectPage({
                         <div className='space-y-1'>
                           <div className='text-sm font-semibold text-slate-900'>{task.name}</div>
                           <div className='text-xs text-slate-500'>{formatTaskRange(task)}</div>
-                          {task.assignee ? (
+                          {assigneeName ? (
                             <div className='flex items-center gap-1 text-xs text-slate-500'>
-                              <User size={12} className='text-slate-400' />
-                              <span>{task.assignee}</span>
+                              <UserIcon size={12} className='text-slate-400' />
+                              <span>{assigneeName}</span>
                             </div>
                           ) : null}
                         </div>
@@ -1751,17 +2092,28 @@ export default function ProjectPage({
                               disabled={!canEdit}
                             />
                           </div>
-                          <div>
-                            <Label>Assignee</Label>
-                            <Input
-                              value={taskEditDraft.assignee}
-                              onChange={event => {
-                                setTaskEditDraft(prev => ({ ...prev, assignee: event.target.value }))
-                                if (taskEditError) setTaskEditError(null)
-                              }}
-                              disabled={!canEdit}
-                            />
-                          </div>
+                        <div>
+                          <Label>Assignee</Label>
+                          <select
+                            className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            value={taskEditDraft.assigneeId}
+                            onChange={event => {
+                              setTaskEditDraft(prev => ({
+                                ...prev,
+                                assigneeId: (event.target as HTMLSelectElement).value,
+                              }))
+                              if (taskEditError) setTaskEditError(null)
+                            }}
+                            disabled={!canEdit}
+                          >
+                            <option value=''>Unassigned</option>
+                            {sortedUsers.map(user => (
+                              <option key={user.id} value={user.id}>
+                                {user.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                           <div>
                             <Label>Start</Label>
                             <input
@@ -1987,8 +2339,10 @@ export default function ProjectPage({
             const count =
               tab.value === 'files'
                 ? documentsCount
-                : tab.value === 'workOrders'
+              : tab.value === 'workOrders'
                 ? project.wos.length
+                : tab.value === 'info'
+                ? (hasProjectInfo ? 1 : 0)
                 : tasks.length
             return (
               <button
@@ -2011,11 +2365,13 @@ export default function ProjectPage({
         </div>
 
         <div className='pt-2'>
-          {activeTab === 'files'
+          {activeTab === 'tasks'
+            ? renderTasks()
+            : activeTab === 'info'
+            ? renderProjectInfo()
+            : activeTab === 'files'
             ? renderProjectFiles()
-            : activeTab === 'workOrders'
-            ? renderWorkOrders()
-            : renderTasks()}
+            : renderWorkOrders()}
         </div>
       </CardContent>
       </Card>
