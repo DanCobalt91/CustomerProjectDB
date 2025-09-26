@@ -304,6 +304,7 @@ function createLocalStorageStorage(): StorageApi {
   }
 
   const STORAGE_KEY = 'customer-project-db'
+  const LEGACY_STORAGE_KEYS = ['cpdb.v1'] as const
   const memoryStorage: StorageLike = (() => {
     const store = new Map<string, string>()
     return {
@@ -1038,17 +1039,49 @@ function createLocalStorageStorage(): StorageApi {
     return { customers: sortCustomers(customers), users: normalizedUsers }
   }
 
+  function readStoredDatabase(storage: StorageLike): { key: string; value: string } | null {
+    const currentValue = storage.getItem(STORAGE_KEY)
+    if (currentValue) {
+      return { key: STORAGE_KEY, value: currentValue }
+    }
+
+    for (const legacyKey of LEGACY_STORAGE_KEYS) {
+      const legacyValue = storage.getItem(legacyKey)
+      if (legacyValue) {
+        return { key: legacyKey, value: legacyValue }
+      }
+    }
+
+    return null
+  }
+
   function loadDatabase(): Database {
     const storage = resolveStorage()
-    const raw = storage.getItem(STORAGE_KEY)
-    if (!raw) {
+    const stored = readStoredDatabase(storage)
+    if (!stored) {
       return { customers: [], users: ensureDefaultUsers([]) }
     }
 
     try {
-      const parsed = JSON.parse(raw) as unknown
-      return normalizeDatabase(parsed)
+      const parsed = JSON.parse(stored.value) as unknown
+      const normalized = normalizeDatabase(parsed)
+      if (stored.key !== STORAGE_KEY) {
+        try {
+          storage.setItem(STORAGE_KEY, JSON.stringify(normalized))
+          storage.removeItem(stored.key)
+        } catch {
+          // Ignore migration write failures so the session can continue with in-memory data.
+        }
+      }
+      return normalized
     } catch {
+      if (stored.key !== STORAGE_KEY) {
+        try {
+          storage.removeItem(stored.key)
+        } catch {
+          // Ignore failures to clean up invalid legacy data.
+        }
+      }
       return { customers: [], users: ensureDefaultUsers([]) }
     }
   }
@@ -1057,6 +1090,13 @@ function createLocalStorageStorage(): StorageApi {
     const storage = resolveStorage()
     const normalized = normalizeDatabase(db)
     storage.setItem(STORAGE_KEY, JSON.stringify(normalized))
+    for (const legacyKey of LEGACY_STORAGE_KEYS) {
+      try {
+        storage.removeItem(legacyKey)
+      } catch {
+        // Ignore removal errors; they only affect optional clean-up of legacy data.
+      }
+    }
   }
 
   function cloneWorkOrder(wo: WO): WO {
