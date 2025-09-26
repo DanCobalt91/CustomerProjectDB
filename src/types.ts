@@ -148,10 +148,11 @@ export type TwoFactorMethod = 'authenticator' | 'sms';
 export type User = {
   id: string;
   name: string;
-  email?: string;
+  email: string;
   role: AppRole;
   twoFactorEnabled: boolean;
   twoFactorMethod?: TwoFactorMethod;
+  passwordHash: string;
 };
 
 export function formatProjectStatus(status: ProjectStatus, activeSubStatus?: ProjectActiveSubStatus): string {

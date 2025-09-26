@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, KeyboardEvent, CSSProperties } from 'react'
+import type { ChangeEvent, KeyboardEvent, CSSProperties, FormEvent } from 'react'
 import {
   Plus,
   Trash2,
@@ -14,6 +14,8 @@ import {
   Menu,
   Download,
   Upload,
+  LogIn,
+  LogOut,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type {
@@ -58,6 +60,7 @@ import {
   createUser as createUserRecord,
   updateUser as updateUserRecord,
   deleteUser as deleteUserRecord,
+  authenticateUser as authenticateUserRecord,
   exportDatabase as exportDatabaseRecords,
   importDatabase as importDatabaseRecords,
 } from '../lib/storage'
@@ -182,8 +185,8 @@ const PROJECT_STATUS_BUCKET_META: Record<
   },
 }
 
-const CURRENT_USER_ID = 'user-demo'
-const DEFAULT_CURRENT_USER_NAME = 'Demo User'
+const FALLBACK_CURRENT_USER_NAME = 'Team Member'
+const SESSION_STORAGE_KEY = 'customer-project-db-session'
 
 const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchClass: string }> = {
   'Not started': {
@@ -275,9 +278,56 @@ function formatTaskRange(task: ProjectTask): string {
   return `${startLabel} – ${endLabel}`
 }
 
+function passwordMeetsRequirements(password: string): boolean {
+  if (password.length < 8) {
+    return false
+  }
+  if (!/[A-Z]/.test(password)) {
+    return false
+  }
+  if (!/\d/.test(password)) {
+    return false
+  }
+  if (!/[^A-Za-z0-9]/.test(password)) {
+    return false
+  }
+  return true
+}
+
+function calculatePasswordScore(password: string): number {
+  if (!password) {
+    return 0
+  }
+  let score = 0
+  if (password.length >= 8) score += 1
+  if (password.length >= 12) score += 1
+  if (/[A-Z]/.test(password)) score += 1
+  if (/\d/.test(password)) score += 1
+  if (/[^A-Za-z0-9]/.test(password)) score += 1
+  return Math.min(score, 4)
+}
+
+function getPasswordStrengthMeta(password: string): { label: string; className: string; width: string } {
+  const score = calculatePasswordScore(password)
+  const scale = [
+    { label: 'Very weak', className: 'bg-rose-500', width: '5%' },
+    { label: 'Weak', className: 'bg-amber-500', width: '30%' },
+    { label: 'Fair', className: 'bg-yellow-500', width: '55%' },
+    { label: 'Good', className: 'bg-emerald-500', width: '80%' },
+    { label: 'Strong', className: 'bg-emerald-600', width: '100%' },
+  ] as const
+  return scale[score]
+}
+
 function AppContent() {
   const [db, setDb] = useState<Customer[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const [sessionUserId, setSessionUserId] = useState<string | null>(null)
+  const [isSessionReady, setIsSessionReady] = useState(false)
+  const [loginEmail, setLoginEmail] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [loginError, setLoginError] = useState<string | null>(null)
+  const [isLoggingIn, setIsLoggingIn] = useState(false)
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [activePage, setActivePage] = useState<
@@ -291,6 +341,7 @@ function AppContent() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null)
   const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [settingsSection, setSettingsSection] = useState<'users' | 'data'>('users')
   const [isExportingData, setIsExportingData] = useState(false)
   const [isImportingData, setIsImportingData] = useState(false)
   const importFileInputRef = useRef<HTMLInputElement | null>(null)
@@ -376,6 +427,8 @@ function AppContent() {
   const [newUserDraft, setNewUserDraft] = useState({
     name: '',
     email: '',
+    password: '',
+    confirmPassword: '',
     role: 'viewer' as AppRole,
     twoFactorEnabled: false,
     twoFactorMethod: 'authenticator' as TwoFactorMethod,
@@ -386,6 +439,8 @@ function AppContent() {
   const [userEditDraft, setUserEditDraft] = useState({
     name: '',
     email: '',
+    password: '',
+    confirmPassword: '',
     role: 'viewer' as AppRole,
     twoFactorEnabled: false,
     twoFactorMethod: 'authenticator' as TwoFactorMethod,
@@ -397,6 +452,8 @@ function AppContent() {
     setNewUserDraft({
       name: '',
       email: '',
+      password: '',
+      confirmPassword: '',
       role: 'viewer',
       twoFactorEnabled: false,
       twoFactorMethod: 'authenticator',
@@ -449,6 +506,43 @@ function AppContent() {
   }, [refreshCustomers])
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      setIsSessionReady(true)
+      return
+    }
+    const stored = window.localStorage.getItem(SESSION_STORAGE_KEY)
+    setSessionUserId(stored)
+    setIsSessionReady(true)
+  }, [])
+
+  useEffect(() => {
+    if (!isSessionReady || typeof window === 'undefined') {
+      return
+    }
+    if (sessionUserId) {
+      window.localStorage.setItem(SESSION_STORAGE_KEY, sessionUserId)
+    } else {
+      window.localStorage.removeItem(SESSION_STORAGE_KEY)
+    }
+  }, [sessionUserId, isSessionReady])
+
+  useEffect(() => {
+    if (!sessionUserId) {
+      return
+    }
+    if (!users.some(user => user.id === sessionUserId)) {
+      setSessionUserId(null)
+    }
+  }, [users, sessionUserId])
+
+  useEffect(() => {
+    if (sessionUserId) {
+      setLoginError(null)
+      setLoginPassword('')
+    }
+  }, [sessionUserId])
+
+  useEffect(() => {
     setNewProjectInfoDraft(prev => {
       if (!prev.salespersonId) {
         return prev
@@ -467,15 +561,25 @@ function AppContent() {
     }
   }, [activePage])
 
+  useEffect(() => {
+    if (settingsSection !== 'data') {
+      setSettingsError(null)
+      setSettingsSuccess(null)
+    }
+  }, [settingsSection])
+
 
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
   const selectedCustomerAddressForMap = selectedCustomer?.address?.trim() || null
   const sortedCustomers = useMemo(() => [...db].sort((a, b) => a.name.localeCompare(b.name)), [db])
   const hasCustomers = sortedCustomers.length > 0
-  const canEdit = true
-
-  const currentUser = useMemo(() => users.find(user => user.id === CURRENT_USER_ID) ?? null, [users])
-  const currentUserName = currentUser?.name ?? DEFAULT_CURRENT_USER_NAME
+  const currentUser = useMemo(
+    () => (sessionUserId ? users.find(user => user.id === sessionUserId) ?? null : null),
+    [sessionUserId, users],
+  )
+  const currentUserName = currentUser?.name ?? FALLBACK_CURRENT_USER_NAME
+  const currentUserEmail = currentUser?.email ?? null
+  const canEdit = currentUser ? currentUser.role !== 'viewer' : false
 
 
   useEffect(() => {
@@ -1913,6 +2017,84 @@ function AppContent() {
     </div>
   )
 
+  const renderLoginPage = () => {
+    const strength = getPasswordStrengthMeta(loginPassword)
+
+    return (
+      <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-10 text-slate-900'>
+        <div className='mx-auto flex min-h-[60vh] max-w-lg items-center justify-center'>
+          <Card className='panel w-full max-w-lg'>
+            <CardHeader className='flex-col items-start gap-2'>
+              <div className='flex items-center gap-2 text-lg font-semibold text-slate-900'>
+                <LogIn size={20} /> Sign in
+              </div>
+              <p className='text-sm text-slate-600'>Enter your credentials to access CustomerProjectDB.</p>
+            </CardHeader>
+            <CardContent>
+              <form className='space-y-4' onSubmit={event => void handleLogin(event)}>
+                <div>
+                  <Label htmlFor='login-email'>Email</Label>
+                  <Input
+                    id='login-email'
+                    type='email'
+                    autoComplete='email'
+                    value={loginEmail}
+                    onChange={event => setLoginEmail((event.target as HTMLInputElement).value)}
+                    placeholder='you@example.com'
+                    required
+                  />
+                </div>
+                <div>
+                  <Label htmlFor='login-password'>Password</Label>
+                  <Input
+                    id='login-password'
+                    type='password'
+                    autoComplete='current-password'
+                    value={loginPassword}
+                    onChange={event => setLoginPassword((event.target as HTMLInputElement).value)}
+                    placeholder='Enter your password'
+                    required
+                  />
+                  {loginPassword ? (
+                    <div className='mt-2'>
+                      <div className='h-1.5 w-full rounded-full bg-slate-200'>
+                        <div
+                          className={`h-full rounded-full ${strength.className}`}
+                          style={{ width: strength.width }}
+                        />
+                      </div>
+                      <p className='mt-1 text-xs font-medium text-slate-500'>Strength: {strength.label}</p>
+                    </div>
+                  ) : null}
+                </div>
+                <p className='text-xs text-slate-500'>Passwords must be at least 8 characters long and include a symbol, number, and uppercase letter.</p>
+                {loginError ? (
+                  <div className='rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-600'>
+                    {loginError}
+                  </div>
+                ) : null}
+                <Button type='submit' className='w-full' disabled={isLoggingIn}>
+                  {isLoggingIn ? (
+                    'Signing in…'
+                  ) : (
+                    <span className='flex items-center justify-center gap-2'>
+                      <LogIn size={16} /> Sign in
+                    </span>
+                  )}
+                </Button>
+              </form>
+              <div className='mt-6 rounded-2xl border border-slate-200 bg-white/80 p-4 text-xs text-slate-600'>
+                <p className='font-semibold text-slate-700'>Demo account</p>
+                <p>Email: demo@example.com</p>
+                <p>Password: Demo@123</p>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    )
+  }
+
   const renderDashboardView = () => {
     const averageWorkOrders = totalProjects > 0 ? totalWorkOrders / totalProjects : 0
     const pieChartData = activeProjectStatusData.map(status => ({ value: status.count, color: status.color }))
@@ -2026,22 +2208,26 @@ function AppContent() {
     )
   }
 
-  const renderSettingsPage = () => (
-    <div className='space-y-6'>
-      {settingsError ? (
-        <div className='rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
-          <div className='flex items-start gap-2'>
-            <AlertCircle size={16} className='mt-0.5 flex-shrink-0' />
-            <span>{settingsError}</span>
-          </div>
-        </div>
-      ) : null}
-      {settingsSuccess ? (
-        <div className='rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700'>
-          {settingsSuccess}
-        </div>
-      ) : null}
+  const settingsTabs: Array<{ id: 'users' | 'data'; label: string; description: string }> = [
+    {
+      id: 'users',
+      label: 'User management',
+      description: 'Create accounts, assign roles, and configure authentication.',
+    },
+    {
+      id: 'data',
+      label: 'Import & export',
+      description: 'Back up or restore workspace data from JSON files.',
+    },
+  ]
 
+  const activeSettingsTab = settingsTabs.find(tab => tab.id === settingsSection) ?? settingsTabs[0]
+
+  const renderUserManagementSection = () => {
+    const newUserStrength = getPasswordStrengthMeta(newUserDraft.password)
+    const editPasswordStrength = getPasswordStrengthMeta(userEditDraft.password)
+
+    return (
       <Card className='panel'>
         <CardHeader className='flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between'>
           <div>
@@ -2071,14 +2257,58 @@ function AppContent() {
                   <Input
                     id='new-user-email'
                     type='email'
+                    autoComplete='email'
                     value={newUserDraft.email}
                     onChange={event =>
                       setNewUserDraft(prev => ({ ...prev, email: (event.target as HTMLInputElement).value }))
                     }
-                    placeholder='Optional'
+                    placeholder='name@example.com'
                     disabled={isSavingUser || !canEdit}
+                    required
                   />
                 </div>
+                <div>
+                  <Label htmlFor='new-user-password'>Password</Label>
+                  <Input
+                    id='new-user-password'
+                    type='password'
+                    autoComplete='new-password'
+                    value={newUserDraft.password}
+                    onChange={event =>
+                      setNewUserDraft(prev => ({ ...prev, password: (event.target as HTMLInputElement).value }))
+                    }
+                    placeholder='Create a password'
+                    disabled={isSavingUser || !canEdit}
+                    required
+                  />
+                  {newUserDraft.password && (
+                    <div className='mt-2'>
+                      <div className='h-1.5 w-full rounded-full bg-slate-200'>
+                        <div
+                          className={`h-full rounded-full ${newUserStrength.className}`}
+                          style={{ width: newUserStrength.width }}
+                        />
+                      </div>
+                      <p className='mt-1 text-xs font-medium text-slate-500'>Strength: {newUserStrength.label}</p>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <Label htmlFor='new-user-confirm'>Confirm password</Label>
+                  <Input
+                    id='new-user-confirm'
+                    type='password'
+                    autoComplete='new-password'
+                    value={newUserDraft.confirmPassword}
+                    onChange={event =>
+                      setNewUserDraft(prev => ({ ...prev, confirmPassword: (event.target as HTMLInputElement).value }))
+                    }
+                    placeholder='Re-enter the password'
+                    disabled={isSavingUser || !canEdit}
+                    required
+                  />
+                </div>
+                <p className='text-xs text-slate-500'>Passwords must be at least 8 characters with a symbol, number, and uppercase letter.</p>
                 <div>
                   <Label htmlFor='new-user-role'>Role</Label>
                   <select
@@ -2134,7 +2364,7 @@ function AppContent() {
                   </p>
                 )}
                 <Button onClick={() => void handleCreateUser()} disabled={isSavingUser || !canEdit}>
-                  {isSavingUser ? 'Saving…' : 'Add user'}
+                  {isSavingUser ? 'Saving…' : 'Create user'}
                 </Button>
               </div>
             </div>
@@ -2155,7 +2385,7 @@ function AppContent() {
                           <div className='flex flex-wrap items-start justify-between gap-3'>
                             <div>
                               <div className='text-sm font-semibold text-slate-900'>{user.name}</div>
-                              {user.email && <div className='text-xs text-slate-500'>{user.email}</div>}
+                              <div className='text-xs text-slate-500'>{user.email}</div>
                               <div className='mt-1 text-xs text-slate-500'>Role: <span className='font-medium text-slate-700 capitalize'>{user.role}</span></div>
                               <div className='text-xs text-slate-500'>Two-factor: {twoFactorLabel}</div>
                             </div>
@@ -2203,12 +2433,54 @@ function AppContent() {
                               <div>
                                 <Label>Email</Label>
                                 <Input
+                                  type='email'
                                   value={userEditDraft.email}
                                   onChange={event =>
                                     setUserEditDraft(prev => ({ ...prev, email: (event.target as HTMLInputElement).value }))
                                   }
                                   disabled={!canEdit || isSavingUserEdit}
                                 />
+                              </div>
+                              <div>
+                                <Label>New password</Label>
+                                <Input
+                                  type='password'
+                                  autoComplete='new-password'
+                                  value={userEditDraft.password}
+                                  onChange={event =>
+                                    setUserEditDraft(prev => ({ ...prev, password: (event.target as HTMLInputElement).value }))
+                                  }
+                                  placeholder='Leave blank to keep current password'
+                                  disabled={!canEdit || isSavingUserEdit}
+                                />
+                                {userEditDraft.password && (
+                                  <div className='mt-2'>
+                                    <div className='h-1.5 w-full rounded-full bg-slate-200'>
+                                      <div
+                                        className={`h-full rounded-full ${editPasswordStrength.className}`}
+                                        style={{ width: editPasswordStrength.width }}
+                                      />
+                                    </div>
+                                    <p className='mt-1 text-xs font-medium text-slate-500'>Strength: {editPasswordStrength.label}</p>
+                                  </div>
+                                )}
+                              </div>
+                              <div>
+                                <Label>Confirm password</Label>
+                                <Input
+                                  type='password'
+                                  autoComplete='new-password'
+                                  value={userEditDraft.confirmPassword}
+                                  onChange={event =>
+                                    setUserEditDraft(prev => ({
+                                      ...prev,
+                                      confirmPassword: (event.target as HTMLInputElement).value,
+                                    }))
+                                  }
+                                  placeholder='Re-enter new password'
+                                  disabled={!canEdit || isSavingUserEdit}
+                                />
+                                <p className='mt-1 text-xs text-slate-500'>Leave blank to retain the current password.</p>
                               </div>
                               <div>
                                 <Label>Role</Label>
@@ -2282,6 +2554,24 @@ function AppContent() {
           </div>
         </CardContent>
       </Card>
+    )
+  }
+
+  const renderDataSection = () => (
+    <div className='space-y-6'>
+      {settingsError ? (
+        <div className='rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
+          <div className='flex items-start gap-2'>
+            <AlertCircle size={16} className='mt-0.5 flex-shrink-0' />
+            <span>{settingsError}</span>
+          </div>
+        </div>
+      ) : null}
+      {settingsSuccess ? (
+        <div className='rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700'>
+          {settingsSuccess}
+        </div>
+      ) : null}
 
       <Card className='panel'>
         <CardHeader className='flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between'>
@@ -2351,6 +2641,39 @@ function AppContent() {
           </div>
         </CardContent>
       </Card>
+    </div>
+  )
+
+  const renderSettingsPage = () => (
+    <div className='space-y-6'>
+      <div className='rounded-3xl border border-slate-200/70 bg-white/80 p-4 shadow-sm'>
+        <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
+          <div>
+            <div className='text-sm font-semibold text-slate-700'>Settings</div>
+            <p className='text-xs text-slate-500'>{activeSettingsTab.description}</p>
+          </div>
+          <div className='flex flex-wrap gap-2'>
+            {settingsTabs.map(tab => {
+              const isActive = tab.id === settingsSection
+              return (
+                <button
+                  key={tab.id}
+                  type='button'
+                  onClick={() => setSettingsSection(tab.id)}
+                  className={`rounded-full px-4 py-1.5 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-sky-200 ${
+                    isActive
+                      ? 'bg-sky-600 text-white shadow'
+                      : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+      {settingsSection === 'users' ? renderUserManagementSection() : renderDataSection()}
     </div>
   )
 
@@ -2533,10 +2856,30 @@ function AppContent() {
       return
     }
 
-    const email = newUserDraft.email.trim()
+    const email = newUserDraft.email.trim().toLowerCase()
+    if (!email) {
+      setUserFormError('Enter an email address.')
+      return
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setUserFormError('Enter a valid email address.')
+      return
+    }
+
+    const password = newUserDraft.password
+    if (!passwordMeetsRequirements(password)) {
+      setUserFormError('Password must be at least 8 characters with a symbol, number, and uppercase letter.')
+      return
+    }
+    if (password !== newUserDraft.confirmPassword) {
+      setUserFormError('Passwords do not match.')
+      return
+    }
+
     const payload = {
       name,
-      email: email ? email : undefined,
+      email,
+      password,
       role: newUserDraft.role,
       twoFactorEnabled: newUserDraft.twoFactorEnabled,
       twoFactorMethod: newUserDraft.twoFactorEnabled ? newUserDraft.twoFactorMethod : undefined,
@@ -2561,6 +2904,8 @@ function AppContent() {
     setUserEditDraft({
       name: user.name,
       email: user.email ?? '',
+      password: '',
+      confirmPassword: '',
       role: user.role,
       twoFactorEnabled: user.twoFactorEnabled,
       twoFactorMethod: user.twoFactorMethod ?? 'authenticator',
@@ -2589,10 +2934,32 @@ function AppContent() {
       return
     }
 
-    const email = userEditDraft.email.trim()
+    const email = userEditDraft.email.trim().toLowerCase()
+    if (!email) {
+      setUserEditError('Enter an email address.')
+      return
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setUserEditError('Enter a valid email address.')
+      return
+    }
+
+    const password = userEditDraft.password
+    if (password) {
+      if (password !== userEditDraft.confirmPassword) {
+        setUserEditError('Passwords do not match.')
+        return
+      }
+      if (!passwordMeetsRequirements(password)) {
+        setUserEditError('New passwords must be at least 8 characters with a symbol, number, and uppercase letter.')
+        return
+      }
+    }
+
     const payload = {
       name,
-      email: email ? email : undefined,
+      email,
+      password: password ? password : undefined,
       role: userEditDraft.role,
       twoFactorEnabled: userEditDraft.twoFactorEnabled,
       twoFactorMethod: userEditDraft.twoFactorEnabled ? userEditDraft.twoFactorMethod : undefined,
@@ -2626,6 +2993,10 @@ function AppContent() {
       await deleteUserRecord(userId)
       setUsers(prev => prev.filter(user => user.id !== userId))
       applyUserChangeToProjects(userId, 'remove')
+      if (sessionUserId === userId) {
+        setSessionUserId(null)
+        setActivePage('home')
+      }
       setUserFormError(null)
     } catch (error) {
       console.error('Failed to delete user', error)
@@ -2636,6 +3007,36 @@ function AppContent() {
         cancelUserEdit()
       }
     }
+  }
+
+  async function handleLogin(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault()
+    const email = loginEmail.trim().toLowerCase()
+    const password = loginPassword
+    if (!email || !password) {
+      setLoginError('Enter your email and password.')
+      return
+    }
+
+    setIsLoggingIn(true)
+    try {
+      const user = await authenticateUserRecord({ email, password })
+      setSessionUserId(user.id)
+      setActivePage('home')
+      setLoginEmail('')
+      setLoginPassword('')
+      setLoginError(null)
+    } catch (error) {
+      console.error('Failed to sign in', error)
+      setLoginError(toErrorMessage(error, 'Unable to sign in with those credentials.'))
+    } finally {
+      setIsLoggingIn(false)
+    }
+  }
+
+  const handleLogout = () => {
+    setSessionUserId(null)
+    setActivePage('home')
   }
   async function saveCustomerDetails(
     customerId: string,
@@ -3870,6 +4271,32 @@ function AppContent() {
     )
   }
 
+  if (!isSessionReady) {
+    return (
+      <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
+        <div className='mx-auto flex min-h-[60vh] max-w-6xl flex-col items-center justify-center gap-4 text-center text-slate-600'>
+          <span className='h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-sky-500' aria-hidden />
+          <p className='text-sm font-medium text-slate-500'>Preparing your workspace…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (sessionUserId && !currentUser) {
+    return (
+      <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
+        <div className='mx-auto flex min-h-[60vh] max-w-6xl flex-col items-center justify-center gap-4 text-center text-slate-600'>
+          <span className='h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-sky-500' aria-hidden />
+          <p className='text-sm font-medium text-slate-500'>Loading your account…</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!currentUser) {
+    return renderLoginPage()
+  }
+
   if (isLoading) {
     return (
       <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
@@ -4116,6 +4543,18 @@ function AppContent() {
                   Syncing…
                 </span>
               )}
+              <div className='flex flex-col items-end text-[11px] text-slate-500 sm:text-xs'>
+                <span className='font-semibold text-slate-700'>Signed in as {currentUserName}</span>
+                {currentUserEmail && <span className='truncate text-slate-500'>{currentUserEmail}</span>}
+              </div>
+              <Button
+                variant='outline'
+                onClick={handleLogout}
+                className='gap-2 text-xs font-semibold text-slate-600'
+                title='Sign out'
+              >
+                <LogOut size={14} /> Log out
+              </Button>
               {resolvedPage === 'customers' && (
                 <Button
                   onClick={() => {
@@ -4222,145 +4661,149 @@ function AppContent() {
       <AnimatePresence>
         {showNewCustomer && (
           <motion.div
-            className='fixed inset-0 z-20 flex items-center justify-center bg-black/60 p-4'
+            className='fixed inset-0 z-20 overflow-y-auto bg-black/60 p-4'
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <Card className='w-full max-w-2xl panel'>
-              <CardHeader>
-                <div className='flex items-center gap-2'><Plus size={18} /> <span className='font-medium'>Create New Customer</span></div>
-                <Button
-                  variant='ghost'
-                  onClick={() => {
-                    setShowNewCustomer(false)
-                    setNewCustomerError(null)
-                    setIsCreatingCustomer(false)
-                  }}
-                  title='Close'
-                >
-                  <X size={16} />
-                </Button>
-              </CardHeader>
-              <CardContent>
-                <div className='grid gap-3 md:grid-cols-2'>
-                  <div>
-                    <Label>Customer Name</Label>
-                    <Input
-                      value={newCust.name}
-                      onChange={(e) => {
-                        setNewCust({ ...newCust, name: (e.target as HTMLInputElement).value })
-                        if (newCustomerError) setNewCustomerError(null)
-                      }}
-                      placeholder='e.g. Globex Ltd'
-                      disabled={!canEdit}
-                    />
+            <div className='flex min-h-full items-center justify-center'>
+              <Card className='panel flex w-full max-w-2xl max-h-[90vh] flex-col overflow-hidden'>
+                <CardHeader className='flex items-center justify-between gap-3 border-b border-slate-200/60 bg-slate-50/60'>
+                  <div className='flex items-center gap-2'>
+                    <Plus size={18} /> <span className='font-medium'>Create New Customer</span>
                   </div>
-                  <div>
-                    <Label>Contact Name</Label>
-                    <Input
-                      value={newCust.contactName}
-                      onChange={(e) => setNewCust({ ...newCust, contactName: (e.target as HTMLInputElement).value })}
-                      placeholder='e.g. Alex Doe'
-                      disabled={!canEdit}
-                    />
-                  </div>
-                  <div>
-                    <Label>Contact Position</Label>
-                    <Input
-                      value={newCust.contactPosition}
-                      onChange={(e) => setNewCust({ ...newCust, contactPosition: (e.target as HTMLInputElement).value })}
-                      placeholder='e.g. Project Manager'
-                      disabled={!canEdit}
-                    />
-                  </div>
-                  <div>
-                    <Label>Contact Phone</Label>
-                    <Input
-                      value={newCust.contactPhone}
-                      onChange={(e) => setNewCust({ ...newCust, contactPhone: (e.target as HTMLInputElement).value })}
-                      placeholder='e.g. +44 20 7946 0000'
-                      disabled={!canEdit}
-                    />
-                  </div>
-                  <div>
-                    <Label>Contact Email</Label>
-                    <Input
-                      value={newCust.contactEmail}
-                      onChange={(e) => setNewCust({ ...newCust, contactEmail: (e.target as HTMLInputElement).value })}
-                      placeholder='e.g. alex@globex.co.uk'
-                      disabled={!canEdit}
-                    />
-                  </div>
-                  <div className='md:col-span-2'>
-                    <Label>Address</Label>
-                    <Input
-                      value={newCust.address}
-                      onChange={(e) => setNewCust({ ...newCust, address: (e.target as HTMLInputElement).value })}
-                      placeholder='e.g. 10 High Street, London'
-                      disabled={!canEdit}
-                    />
-                  </div>
-                </div>
-                {newCustomerError && (
-                  <p className='mt-2 flex items-center gap-1 text-sm text-rose-600'>
-                    <AlertCircle size={14} /> {newCustomerError}
-                  </p>
-                )}
-                <div className='mt-3 flex justify-end gap-2'>
                   <Button
-                    variant='outline'
+                    variant='ghost'
                     onClick={() => {
                       setShowNewCustomer(false)
                       setNewCustomerError(null)
                       setIsCreatingCustomer(false)
                     }}
+                    title='Close'
                   >
-                    Cancel
+                    <X size={16} />
                   </Button>
-                  <Button
-                    size='lg'
-                    disabled={isCreatingCustomer || !canEdit}
-                    onClick={async () => {
-                      setIsCreatingCustomer(true)
-                      try {
-                        const result = await createCustomer({
-                          name: newCust.name,
-                          address: newCust.address,
-                          contacts: [
-                            {
-                              name: newCust.contactName,
-                              position: newCust.contactPosition,
-                              phone: newCust.contactPhone,
-                              email: newCust.contactEmail,
-                            },
-                          ],
-                        })
-                        if (result) {
-                          setNewCustomerError(result)
-                          return
-                        }
-                        setNewCust({
-                          name: '',
-                          address: '',
-                          contactName: '',
-                          contactPosition: '',
-                          contactPhone: '',
-                          contactEmail: '',
-                        })
+                </CardHeader>
+                <CardContent className='max-h-full overflow-y-auto pr-1'>
+                  <div className='grid gap-3 md:grid-cols-2'>
+                    <div>
+                      <Label>Customer Name</Label>
+                      <Input
+                        value={newCust.name}
+                        onChange={(e) => {
+                          setNewCust({ ...newCust, name: (e.target as HTMLInputElement).value })
+                          if (newCustomerError) setNewCustomerError(null)
+                        }}
+                        placeholder='e.g. Globex Ltd'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                    <div>
+                      <Label>Contact Name</Label>
+                      <Input
+                        value={newCust.contactName}
+                        onChange={(e) => setNewCust({ ...newCust, contactName: (e.target as HTMLInputElement).value })}
+                        placeholder='e.g. Alex Doe'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                    <div>
+                      <Label>Contact Position</Label>
+                      <Input
+                        value={newCust.contactPosition}
+                        onChange={(e) => setNewCust({ ...newCust, contactPosition: (e.target as HTMLInputElement).value })}
+                        placeholder='e.g. Project Manager'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                    <div>
+                      <Label>Contact Phone</Label>
+                      <Input
+                        value={newCust.contactPhone}
+                        onChange={(e) => setNewCust({ ...newCust, contactPhone: (e.target as HTMLInputElement).value })}
+                        placeholder='e.g. +44 20 7946 0000'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                    <div>
+                      <Label>Contact Email</Label>
+                      <Input
+                        value={newCust.contactEmail}
+                        onChange={(e) => setNewCust({ ...newCust, contactEmail: (e.target as HTMLInputElement).value })}
+                        placeholder='e.g. alex@globex.co.uk'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                    <div className='md:col-span-2'>
+                      <Label>Address</Label>
+                      <Input
+                        value={newCust.address}
+                        onChange={(e) => setNewCust({ ...newCust, address: (e.target as HTMLInputElement).value })}
+                        placeholder='e.g. 10 High Street, London'
+                        disabled={!canEdit}
+                      />
+                    </div>
+                  </div>
+                  {newCustomerError && (
+                    <p className='mt-2 flex items-center gap-1 text-sm text-rose-600'>
+                      <AlertCircle size={14} /> {newCustomerError}
+                    </p>
+                  )}
+                  <div className='mt-3 flex justify-end gap-2'>
+                    <Button
+                      variant='outline'
+                      onClick={() => {
                         setShowNewCustomer(false)
                         setNewCustomerError(null)
-                      } finally {
                         setIsCreatingCustomer(false)
-                      }
-                    }}
-                    title={canEdit ? 'Create customer' : 'Read-only access'}
-                  >
-                    <Plus size={18} /> Create Customer
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size='lg'
+                      disabled={isCreatingCustomer || !canEdit}
+                      onClick={async () => {
+                        setIsCreatingCustomer(true)
+                        try {
+                          const result = await createCustomer({
+                            name: newCust.name,
+                            address: newCust.address,
+                            contacts: [
+                              {
+                                name: newCust.contactName,
+                                position: newCust.contactPosition,
+                                phone: newCust.contactPhone,
+                                email: newCust.contactEmail,
+                              },
+                            ],
+                          })
+                          if (result) {
+                            setNewCustomerError(result)
+                            return
+                          }
+                          setNewCust({
+                            name: '',
+                            address: '',
+                            contactName: '',
+                            contactPosition: '',
+                            contactPhone: '',
+                            contactEmail: '',
+                          })
+                          setShowNewCustomer(false)
+                          setNewCustomerError(null)
+                        } finally {
+                          setIsCreatingCustomer(false)
+                        }
+                      }}
+                      title={canEdit ? 'Create customer' : 'Read-only access'}
+                    >
+                      <Plus size={18} /> Create Customer
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -4369,83 +4812,85 @@ function AppContent() {
       <AnimatePresence>
         {showCustomerEditor && selectedCustomer && (
           <motion.div
-            className='fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4'
+            className='fixed inset-0 z-30 overflow-y-auto bg-black/60 p-4'
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <Card className='w-full max-w-xl panel'>
-              <CardHeader>
-                <div className='flex items-center gap-2'>
-                  <Pencil size={18} /> <span className='font-medium'>Edit Customer</span>
-                </div>
-                <Button
-                  variant='ghost'
-                  onClick={() => {
-                    setShowCustomerEditor(false)
-                    setCustomerEditorError(null)
-                    setIsSavingCustomerEditor(false)
-                  }}
-                  title='Close'
-                >
-                  <X size={16} />
-                </Button>
-              </CardHeader>
-              <CardContent>
-                <div className='space-y-3'>
-                  <div>
-                    <Label htmlFor='edit-customer-name'>Customer Name</Label>
-                    <Input
-                      id='edit-customer-name'
-                      value={customerEditorDraft.name}
-                      onChange={(e) =>
-                        setCustomerEditorDraft(prev => ({ ...prev, name: (e.target as HTMLInputElement).value }))
-                      }
-                      placeholder='Enter customer name'
-                      disabled={!canEdit || isSavingCustomerEditor}
-                    />
+            <div className='flex min-h-full items-center justify-center'>
+              <Card className='panel flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden'>
+                <CardHeader className='flex items-center justify-between gap-3 border-b border-slate-200/60 bg-slate-50/60'>
+                  <div className='flex items-center gap-2'>
+                    <Pencil size={18} /> <span className='font-medium'>Edit Customer</span>
                   </div>
-                  <div>
-                    <Label htmlFor='edit-customer-address'>Address</Label>
-                    <textarea
-                      id='edit-customer-address'
-                      value={customerEditorDraft.address}
-                      onChange={(e) =>
-                        setCustomerEditorDraft(prev => ({ ...prev, address: (e.target as HTMLTextAreaElement).value }))
-                      }
-                      placeholder='Enter address'
-                      rows={3}
-                      className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                      disabled={!canEdit || isSavingCustomerEditor}
-                    />
-                  </div>
-                </div>
-                {customerEditorError && (
-                  <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
-                    <AlertCircle size={14} /> {customerEditorError}
-                  </p>
-                )}
-                <div className='mt-4 flex justify-end gap-2'>
                   <Button
-                    variant='outline'
+                    variant='ghost'
                     onClick={() => {
                       setShowCustomerEditor(false)
                       setCustomerEditorError(null)
                       setIsSavingCustomerEditor(false)
                     }}
+                    title='Close'
                   >
-                    Cancel
+                    <X size={16} />
                   </Button>
-                  <Button
-                    onClick={() => void handleSaveCustomerEditor()}
-                    disabled={isSavingCustomerEditor || !canEdit}
-                    title={canEdit ? 'Save changes' : 'Read-only access'}
-                  >
-                    <Save size={16} /> Save Changes
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+                </CardHeader>
+                <CardContent className='max-h-full overflow-y-auto pr-1'>
+                  <div className='space-y-3'>
+                    <div>
+                      <Label htmlFor='edit-customer-name'>Customer Name</Label>
+                      <Input
+                        id='edit-customer-name'
+                        value={customerEditorDraft.name}
+                        onChange={(e) =>
+                          setCustomerEditorDraft(prev => ({ ...prev, name: (e.target as HTMLInputElement).value }))
+                        }
+                        placeholder='Enter customer name'
+                        disabled={!canEdit || isSavingCustomerEditor}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor='edit-customer-address'>Address</Label>
+                      <textarea
+                        id='edit-customer-address'
+                        value={customerEditorDraft.address}
+                        onChange={(e) =>
+                          setCustomerEditorDraft(prev => ({ ...prev, address: (e.target as HTMLTextAreaElement).value }))
+                        }
+                        placeholder='Enter address'
+                        rows={3}
+                        className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                        disabled={!canEdit || isSavingCustomerEditor}
+                      />
+                    </div>
+                  </div>
+                  {customerEditorError && (
+                    <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
+                      <AlertCircle size={14} /> {customerEditorError}
+                    </p>
+                  )}
+                  <div className='mt-4 flex justify-end gap-2'>
+                    <Button
+                      variant='outline'
+                      onClick={() => {
+                        setShowCustomerEditor(false)
+                        setCustomerEditorError(null)
+                        setIsSavingCustomerEditor(false)
+                      }}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => void handleSaveCustomerEditor()}
+                      disabled={isSavingCustomerEditor || !canEdit}
+                      title={canEdit ? 'Save changes' : 'Read-only access'}
+                    >
+                      <Save size={16} /> Save Changes
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -4454,245 +4899,249 @@ function AppContent() {
       <AnimatePresence>
         {showNewProject && (
           <motion.div
-            className='fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-4'
+            className='fixed inset-0 z-30 overflow-y-auto bg-black/60 p-4'
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <Card className='w-full max-w-xl panel'>
-              <CardHeader>
-                <div className='flex items-center gap-2'><Plus size={18} /> <span className='font-medium'>Create New Project</span></div>
-                <Button
-                  variant='ghost'
-                  onClick={() => {
-                    setShowNewProject(false)
-                    setNewProjectError(null)
-                    setNewProjectNumber('')
-                    setIsCreatingProject(false)
-                    setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
-                    setNewProjectTaskSelections(createDefaultTaskSelectionMap())
-                  }}
-                  title='Close'
-                >
-                  <X size={16} />
-                </Button>
-              </CardHeader>
-              <CardContent>
-                {hasCustomers ? (
-                  <div className='space-y-4'>
-                    <div>
-                      <Label htmlFor='new-project-customer'>Customer</Label>
-                      <select
-                        id='new-project-customer'
-                        className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2'
-                        value={newProjectCustomerId}
-                        onChange={(e) => {
-                          setNewProjectCustomerId((e.target as HTMLSelectElement).value)
-                          if (newProjectError) setNewProjectError(null)
-                        }}
-                        disabled={isCreatingProject || !canEdit}
-                      >
-                        {sortedCustomers.map(customer => (
-                          <option key={customer.id} value={customer.id}>
-                            {customer.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <Label htmlFor='new-project-number'>Project Number</Label>
-                      <div className='mt-1 flex'>
-                        <span className='flex items-center rounded-l-2xl border border-r-0 border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm font-semibold text-slate-500'>P</span>
-                        <Input
-                          id='new-project-number'
-                          className='rounded-l-none border-l-0'
-                          value={newProjectNumber}
+            <div className='flex min-h-full items-center justify-center'>
+              <Card className='panel flex w-full max-w-3xl max-h-[90vh] flex-col overflow-hidden'>
+                <CardHeader className='flex items-center justify-between gap-3 border-b border-slate-200/60 bg-slate-50/60'>
+                  <div className='flex items-center gap-2'>
+                    <Plus size={18} /> <span className='font-medium'>Create New Project</span>
+                  </div>
+                  <Button
+                    variant='ghost'
+                    onClick={() => {
+                      setShowNewProject(false)
+                      setNewProjectError(null)
+                      setNewProjectNumber('')
+                      setIsCreatingProject(false)
+                      setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+                      setNewProjectTaskSelections(createDefaultTaskSelectionMap())
+                    }}
+                    title='Close'
+                  >
+                    <X size={16} />
+                  </Button>
+                </CardHeader>
+                <CardContent className='max-h-full overflow-y-auto pr-1'>
+                  {hasCustomers ? (
+                    <div className='space-y-4'>
+                      <div>
+                        <Label htmlFor='new-project-customer'>Customer</Label>
+                        <select
+                          id='new-project-customer'
+                          className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2'
+                          value={newProjectCustomerId}
                           onChange={(e) => {
-                            setNewProjectNumber((e.target as HTMLInputElement).value)
+                            setNewProjectCustomerId((e.target as HTMLSelectElement).value)
                             if (newProjectError) setNewProjectError(null)
                           }}
-                          placeholder='e.g. 2040'
-                          disabled={isCreatingProject || !canEdit}
-                        />
-                      </div>
-                    </div>
-                    <div className='grid gap-3 md:grid-cols-2'>
-                      <div>
-                        <Label htmlFor='new-project-line'>Line No/Name</Label>
-                        <Input
-                          id='new-project-line'
-                          value={newProjectInfoDraft.lineReference}
-                          onChange={event =>
-                            updateNewProjectInfoField('lineReference', (event.target as HTMLInputElement).value)
-                          }
-                          placeholder='e.g. Line 2 — Packing'
-                          disabled={isCreatingProject || !canEdit}
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor='new-project-salesperson'>Salesperson</Label>
-                        <select
-                          id='new-project-salesperson'
-                          className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                          value={newProjectInfoDraft.salespersonId}
-                          onChange={event =>
-                            updateNewProjectInfoField('salespersonId', (event.target as HTMLSelectElement).value)
-                          }
                           disabled={isCreatingProject || !canEdit}
                         >
-                          <option value=''>Unassigned</option>
-                          {users
-                            .slice()
-                            .sort((a, b) => a.name.localeCompare(b.name))
-                            .map(user => (
-                              <option key={user.id} value={user.id}>
-                                {user.name}
-                              </option>
-                            ))}
+                          {sortedCustomers.map(customer => (
+                            <option key={customer.id} value={customer.id}>
+                              {customer.name}
+                            </option>
+                          ))}
                         </select>
                       </div>
-                      <div className='md:col-span-2'>
-                        <Label htmlFor='new-project-machine-serials'>Machine Serial Numbers</Label>
-                        <textarea
-                          id='new-project-machine-serials'
-                          className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                          rows={3}
-                          value={newProjectInfoDraft.machineSerialNumbers}
-                          onChange={event =>
-                            updateNewProjectInfoField(
-                              'machineSerialNumbers',
-                              (event.target as HTMLTextAreaElement).value,
-                            )
-                          }
-                          placeholder='Enter each serial number on a new line'
-                          disabled={isCreatingProject || !canEdit}
-                        />
+                      <div>
+                        <Label htmlFor='new-project-number'>Project Number</Label>
+                        <div className='mt-1 flex'>
+                          <span className='flex items-center rounded-l-2xl border border-r-0 border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm font-semibold text-slate-500'>P</span>
+                          <Input
+                            id='new-project-number'
+                            className='rounded-l-none border-l-0'
+                            value={newProjectNumber}
+                            onChange={(e) => {
+                              setNewProjectNumber((e.target as HTMLInputElement).value)
+                              if (newProjectError) setNewProjectError(null)
+                            }}
+                            placeholder='e.g. 2040'
+                            disabled={isCreatingProject || !canEdit}
+                          />
+                        </div>
                       </div>
-                      <div className='md:col-span-2'>
-                        <Label htmlFor='new-project-tool-serials'>Tool Serial Numbers</Label>
-                        <textarea
-                          id='new-project-tool-serials'
-                          className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                          rows={3}
-                          value={newProjectInfoDraft.toolSerialNumbers}
-                          onChange={event =>
-                            updateNewProjectInfoField(
-                              'toolSerialNumbers',
-                              (event.target as HTMLTextAreaElement).value,
-                            )
-                          }
-                          placeholder='Enter each serial number on a new line'
-                          disabled={isCreatingProject || !canEdit}
-                        />
+                      <div className='grid gap-3 md:grid-cols-2'>
+                        <div>
+                          <Label htmlFor='new-project-line'>Line No/Name</Label>
+                          <Input
+                            id='new-project-line'
+                            value={newProjectInfoDraft.lineReference}
+                            onChange={event =>
+                              updateNewProjectInfoField('lineReference', (event.target as HTMLInputElement).value)
+                            }
+                            placeholder='e.g. Line 2 — Packing'
+                            disabled={isCreatingProject || !canEdit}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor='new-project-salesperson'>Salesperson</Label>
+                          <select
+                            id='new-project-salesperson'
+                            className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            value={newProjectInfoDraft.salespersonId}
+                            onChange={event =>
+                              updateNewProjectInfoField('salespersonId', (event.target as HTMLSelectElement).value)
+                            }
+                            disabled={isCreatingProject || !canEdit}
+                          >
+                            <option value=''>Unassigned</option>
+                            {users
+                              .slice()
+                              .sort((a, b) => a.name.localeCompare(b.name))
+                              .map(user => (
+                                <option key={user.id} value={user.id}>
+                                  {user.name}
+                                </option>
+                              ))}
+                          </select>
+                        </div>
+                        <div className='md:col-span-2'>
+                          <Label htmlFor='new-project-machine-serials'>Machine Serial Numbers</Label>
+                          <textarea
+                            id='new-project-machine-serials'
+                            className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            rows={3}
+                            value={newProjectInfoDraft.machineSerialNumbers}
+                            onChange={event =>
+                              updateNewProjectInfoField(
+                                'machineSerialNumbers',
+                                (event.target as HTMLTextAreaElement).value,
+                              )
+                            }
+                            placeholder='Enter each serial number on a new line'
+                            disabled={isCreatingProject || !canEdit}
+                          />
+                        </div>
+                        <div className='md:col-span-2'>
+                          <Label htmlFor='new-project-tool-serials'>Tool Serial Numbers</Label>
+                          <textarea
+                            id='new-project-tool-serials'
+                            className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            rows={3}
+                            value={newProjectInfoDraft.toolSerialNumbers}
+                            onChange={event =>
+                              updateNewProjectInfoField(
+                                'toolSerialNumbers',
+                                (event.target as HTMLTextAreaElement).value,
+                              )
+                            }
+                            placeholder='Enter each serial number on a new line'
+                            disabled={isCreatingProject || !canEdit}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor='new-project-cobalt-order'>Cobalt Order Number</Label>
+                          <Input
+                            id='new-project-cobalt-order'
+                            value={newProjectInfoDraft.cobaltOrderNumber}
+                            onChange={event =>
+                              updateNewProjectInfoField('cobaltOrderNumber', (event.target as HTMLInputElement).value)
+                            }
+                            placeholder='e.g. CO-12345'
+                            disabled={isCreatingProject || !canEdit}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor='new-project-customer-order'>Customer Order Number</Label>
+                          <Input
+                            id='new-project-customer-order'
+                            value={newProjectInfoDraft.customerOrderNumber}
+                            onChange={event =>
+                              updateNewProjectInfoField('customerOrderNumber', (event.target as HTMLInputElement).value)
+                            }
+                            placeholder='e.g. PO-90876'
+                            disabled={isCreatingProject || !canEdit}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor='new-project-start-date'>Project Start Date</Label>
+                          <input
+                            id='new-project-start-date'
+                            type='date'
+                            className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            value={newProjectInfoDraft.startDate}
+                            onChange={event =>
+                              updateNewProjectInfoField('startDate', (event.target as HTMLInputElement).value)
+                            }
+                            disabled={isCreatingProject || !canEdit}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor='new-project-proposed-completion'>Proposed Completion Date</Label>
+                          <input
+                            id='new-project-proposed-completion'
+                            type='date'
+                            className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            value={newProjectInfoDraft.proposedCompletionDate}
+                            onChange={event =>
+                              updateNewProjectInfoField(
+                                'proposedCompletionDate',
+                                (event.target as HTMLInputElement).value,
+                              )
+                            }
+                            disabled={isCreatingProject || !canEdit}
+                          />
+                        </div>
                       </div>
                       <div>
-                        <Label htmlFor='new-project-cobalt-order'>Cobalt Order Number</Label>
-                        <Input
-                          id='new-project-cobalt-order'
-                          value={newProjectInfoDraft.cobaltOrderNumber}
-                          onChange={event =>
-                            updateNewProjectInfoField('cobaltOrderNumber', (event.target as HTMLInputElement).value)
-                          }
-                          placeholder='e.g. CO-12345'
-                          disabled={isCreatingProject || !canEdit}
-                        />
+                        <Label>Default Tasks</Label>
+                        <p className='mt-1 text-xs text-slate-500'>Select preset tasks to add when the project is created.</p>
+                        <div className='mt-2 space-y-2'>
+                          {DEFAULT_PROJECT_TASK_OPTIONS.map(option => (
+                            <label key={option.id} className='flex items-center gap-2 text-sm text-slate-700'>
+                              <input
+                                type='checkbox'
+                                className='h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 disabled:cursor-not-allowed'
+                                checked={Boolean(newProjectTaskSelections[option.id])}
+                                onChange={() => toggleNewProjectTaskSelection(option.id)}
+                                disabled={isCreatingProject || !canEdit}
+                              />
+                              <span>{option.name}</span>
+                            </label>
+                          ))}
+                        </div>
                       </div>
-                      <div>
-                        <Label htmlFor='new-project-customer-order'>Customer Order Number</Label>
-                        <Input
-                          id='new-project-customer-order'
-                          value={newProjectInfoDraft.customerOrderNumber}
-                          onChange={event =>
-                            updateNewProjectInfoField('customerOrderNumber', (event.target as HTMLInputElement).value)
-                          }
-                          placeholder='e.g. PO-90876'
+                      {newProjectError && (
+                        <p className='flex items-center gap-1 text-sm text-rose-600'>
+                          <AlertCircle size={14} /> {newProjectError}
+                        </p>
+                      )}
+                      <div className='flex justify-end gap-2'>
+                        <Button
+                          variant='outline'
+                          onClick={() => {
+                            setShowNewProject(false)
+                            setNewProjectError(null)
+                            setNewProjectNumber('')
+                            setIsCreatingProject(false)
+                            setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
+                            setNewProjectTaskSelections(createDefaultTaskSelectionMap())
+                          }}
+                          disabled={isCreatingProject}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          onClick={() => {
+                            void handleCreateProject()
+                          }}
                           disabled={isCreatingProject || !canEdit}
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor='new-project-start-date'>Project Start Date</Label>
-                        <input
-                          id='new-project-start-date'
-                          type='date'
-                          className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                          value={newProjectInfoDraft.startDate}
-                          onChange={event =>
-                            updateNewProjectInfoField('startDate', (event.target as HTMLInputElement).value)
-                          }
-                          disabled={isCreatingProject || !canEdit}
-                        />
-                      </div>
-                      <div>
-                        <Label htmlFor='new-project-proposed-completion'>Proposed Completion Date</Label>
-                        <input
-                          id='new-project-proposed-completion'
-                          type='date'
-                          className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                          value={newProjectInfoDraft.proposedCompletionDate}
-                          onChange={event =>
-                            updateNewProjectInfoField(
-                              'proposedCompletionDate',
-                              (event.target as HTMLInputElement).value,
-                            )
-                          }
-                          disabled={isCreatingProject || !canEdit}
-                        />
+                          title={canEdit ? 'Create project' : 'Read-only access'}
+                        >
+                          <Plus size={16} /> Create Project
+                        </Button>
                       </div>
                     </div>
-                    <div>
-                      <Label>Default Tasks</Label>
-                      <p className='mt-1 text-xs text-slate-500'>Select preset tasks to add when the project is created.</p>
-                      <div className='mt-2 space-y-2'>
-                        {DEFAULT_PROJECT_TASK_OPTIONS.map(option => (
-                          <label key={option.id} className='flex items-center gap-2 text-sm text-slate-700'>
-                            <input
-                              type='checkbox'
-                              className='h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 disabled:cursor-not-allowed'
-                              checked={Boolean(newProjectTaskSelections[option.id])}
-                              onChange={() => toggleNewProjectTaskSelection(option.id)}
-                              disabled={isCreatingProject || !canEdit}
-                            />
-                            <span>{option.name}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    {newProjectError && (
-                      <p className='flex items-center gap-1 text-sm text-rose-600'>
-                        <AlertCircle size={14} /> {newProjectError}
-                      </p>
-                    )}
-                    <div className='flex justify-end gap-2'>
-                      <Button
-                        variant='outline'
-                        onClick={() => {
-                          setShowNewProject(false)
-                          setNewProjectError(null)
-                          setNewProjectNumber('')
-                          setIsCreatingProject(false)
-                          setNewProjectInfoDraft(createProjectInfoDraft(undefined, users))
-                          setNewProjectTaskSelections(createDefaultTaskSelectionMap())
-                        }}
-                        disabled={isCreatingProject}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        onClick={() => {
-                          void handleCreateProject()
-                        }}
-                        disabled={isCreatingProject || !canEdit}
-                        title={canEdit ? 'Create project' : 'Read-only access'}
-                      >
-                        <Plus size={16} /> Create Project
-                      </Button>
-                    </div>
-                  </div>
-                ) : (
-                  <p className='text-sm text-slate-600'>Add a customer before creating a project.</p>
-                )}
-              </CardContent>
-            </Card>
+                  ) : (
+                    <p className='text-sm text-slate-600'>Add a customer before creating a project.</p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
