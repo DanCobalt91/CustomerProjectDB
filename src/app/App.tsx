@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, KeyboardEvent, CSSProperties, FormEvent } from 'react'
+import type { ChangeEvent, KeyboardEvent, CSSProperties } from 'react'
 import {
   Plus,
   Trash2,
@@ -14,8 +14,6 @@ import {
   Menu,
   Download,
   Upload,
-  LogIn,
-  LogOut,
 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type {
@@ -60,7 +58,6 @@ import {
   createUser as createUserRecord,
   updateUser as updateUserRecord,
   deleteUser as deleteUserRecord,
-  authenticateUser as authenticateUserRecord,
   exportDatabase as exportDatabaseRecords,
   importDatabase as importDatabaseRecords,
 } from '../lib/storage'
@@ -186,7 +183,15 @@ const PROJECT_STATUS_BUCKET_META: Record<
 }
 
 const FALLBACK_CURRENT_USER_NAME = 'Team Member'
-const SESSION_STORAGE_KEY = 'customer-project-db-session'
+const LOCAL_WORKSPACE_USER: User = {
+  id: 'local-workspace-user',
+  name: FALLBACK_CURRENT_USER_NAME,
+  email: '',
+  role: 'admin',
+  twoFactorEnabled: false,
+  twoFactorMethod: undefined,
+  passwordHash: '',
+}
 
 const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchClass: string }> = {
   'Not started': {
@@ -322,12 +327,6 @@ function getPasswordStrengthMeta(password: string): { label: string; className: 
 function AppContent() {
   const [db, setDb] = useState<Customer[]>([])
   const [users, setUsers] = useState<User[]>([])
-  const [sessionUserId, setSessionUserId] = useState<string | null>(null)
-  const [isSessionReady, setIsSessionReady] = useState(false)
-  const [loginEmail, setLoginEmail] = useState('')
-  const [loginPassword, setLoginPassword] = useState('')
-  const [loginError, setLoginError] = useState<string | null>(null)
-  const [isLoggingIn, setIsLoggingIn] = useState(false)
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [activePage, setActivePage] = useState<
@@ -506,43 +505,6 @@ function AppContent() {
   }, [refreshCustomers])
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      setIsSessionReady(true)
-      return
-    }
-    const stored = window.localStorage.getItem(SESSION_STORAGE_KEY)
-    setSessionUserId(stored)
-    setIsSessionReady(true)
-  }, [])
-
-  useEffect(() => {
-    if (!isSessionReady || typeof window === 'undefined') {
-      return
-    }
-    if (sessionUserId) {
-      window.localStorage.setItem(SESSION_STORAGE_KEY, sessionUserId)
-    } else {
-      window.localStorage.removeItem(SESSION_STORAGE_KEY)
-    }
-  }, [sessionUserId, isSessionReady])
-
-  useEffect(() => {
-    if (!sessionUserId || isLoading) {
-      return
-    }
-    if (!users.some(user => user.id === sessionUserId)) {
-      setSessionUserId(null)
-    }
-  }, [users, sessionUserId, isLoading])
-
-  useEffect(() => {
-    if (sessionUserId) {
-      setLoginError(null)
-      setLoginPassword('')
-    }
-  }, [sessionUserId])
-
-  useEffect(() => {
     setNewProjectInfoDraft(prev => {
       if (!prev.salespersonId) {
         return prev
@@ -573,13 +535,15 @@ function AppContent() {
   const selectedCustomerAddressForMap = selectedCustomer?.address?.trim() || null
   const sortedCustomers = useMemo(() => [...db].sort((a, b) => a.name.localeCompare(b.name)), [db])
   const hasCustomers = sortedCustomers.length > 0
-  const currentUser = useMemo(
-    () => (sessionUserId ? users.find(user => user.id === sessionUserId) ?? null : null),
-    [sessionUserId, users],
-  )
-  const currentUserName = currentUser?.name ?? FALLBACK_CURRENT_USER_NAME
-  const currentUserEmail = currentUser?.email ?? null
-  const canEdit = currentUser ? currentUser.role !== 'viewer' : false
+  const currentUser = useMemo<User>(() => {
+    if (users.length === 0) {
+      return LOCAL_WORKSPACE_USER
+    }
+    return users[0]
+  }, [users])
+  const currentUserName = currentUser.name || FALLBACK_CURRENT_USER_NAME
+  const currentUserEmail = currentUser.email?.trim() ? currentUser.email : null
+  const canEdit = true
 
 
   useEffect(() => {
@@ -2017,84 +1981,6 @@ function AppContent() {
     </div>
   )
 
-  const renderLoginPage = () => {
-    const strength = getPasswordStrengthMeta(loginPassword)
-
-    return (
-      <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-10 text-slate-900'>
-        <div className='mx-auto flex min-h-[60vh] max-w-lg items-center justify-center'>
-          <Card className='panel w-full max-w-lg'>
-            <CardHeader className='flex-col items-start gap-2'>
-              <div className='flex items-center gap-2 text-lg font-semibold text-slate-900'>
-                <LogIn size={20} /> Sign in
-              </div>
-              <p className='text-sm text-slate-600'>Enter your credentials to access CustomerProjectDB.</p>
-            </CardHeader>
-            <CardContent>
-              <form className='space-y-4' onSubmit={event => void handleLogin(event)}>
-                <div>
-                  <Label htmlFor='login-email'>Email</Label>
-                  <Input
-                    id='login-email'
-                    type='email'
-                    autoComplete='email'
-                    value={loginEmail}
-                    onChange={event => setLoginEmail((event.target as HTMLInputElement).value)}
-                    placeholder='you@example.com'
-                    required
-                  />
-                </div>
-                <div>
-                  <Label htmlFor='login-password'>Password</Label>
-                  <Input
-                    id='login-password'
-                    type='password'
-                    autoComplete='current-password'
-                    value={loginPassword}
-                    onChange={event => setLoginPassword((event.target as HTMLInputElement).value)}
-                    placeholder='Enter your password'
-                    required
-                  />
-                  {loginPassword ? (
-                    <div className='mt-2'>
-                      <div className='h-1.5 w-full rounded-full bg-slate-200'>
-                        <div
-                          className={`h-full rounded-full ${strength.className}`}
-                          style={{ width: strength.width }}
-                        />
-                      </div>
-                      <p className='mt-1 text-xs font-medium text-slate-500'>Strength: {strength.label}</p>
-                    </div>
-                  ) : null}
-                </div>
-                <p className='text-xs text-slate-500'>Passwords must be at least 8 characters long and include a symbol, number, and uppercase letter.</p>
-                {loginError ? (
-                  <div className='rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-600'>
-                    {loginError}
-                  </div>
-                ) : null}
-                <Button type='submit' className='w-full' disabled={isLoggingIn}>
-                  {isLoggingIn ? (
-                    'Signing in…'
-                  ) : (
-                    <span className='flex items-center justify-center gap-2'>
-                      <LogIn size={16} /> Sign in
-                    </span>
-                  )}
-                </Button>
-              </form>
-              <div className='mt-6 rounded-2xl border border-slate-200 bg-white/80 p-4 text-xs text-slate-600'>
-                <p className='font-semibold text-slate-700'>Demo account</p>
-                <p>Email: demo@example.com</p>
-                <p>Password: Demo@123</p>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    )
-  }
-
   const renderDashboardView = () => {
     const averageWorkOrders = totalProjects > 0 ? totalWorkOrders / totalProjects : 0
     const pieChartData = activeProjectStatusData.map(status => ({ value: status.count, color: status.color }))
@@ -2993,10 +2879,6 @@ function AppContent() {
       await deleteUserRecord(userId)
       setUsers(prev => prev.filter(user => user.id !== userId))
       applyUserChangeToProjects(userId, 'remove')
-      if (sessionUserId === userId) {
-        setSessionUserId(null)
-        setActivePage('home')
-      }
       setUserFormError(null)
     } catch (error) {
       console.error('Failed to delete user', error)
@@ -3009,35 +2891,6 @@ function AppContent() {
     }
   }
 
-  async function handleLogin(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault()
-    const email = loginEmail.trim().toLowerCase()
-    const password = loginPassword
-    if (!email || !password) {
-      setLoginError('Enter your email and password.')
-      return
-    }
-
-    setIsLoggingIn(true)
-    try {
-      const user = await authenticateUserRecord({ email, password })
-      setSessionUserId(user.id)
-      setActivePage('home')
-      setLoginEmail('')
-      setLoginPassword('')
-      setLoginError(null)
-    } catch (error) {
-      console.error('Failed to sign in', error)
-      setLoginError(toErrorMessage(error, 'Unable to sign in with those credentials.'))
-    } finally {
-      setIsLoggingIn(false)
-    }
-  }
-
-  const handleLogout = () => {
-    setSessionUserId(null)
-    setActivePage('home')
-  }
   async function saveCustomerDetails(
     customerId: string,
     updates: {
@@ -4271,32 +4124,6 @@ function AppContent() {
     )
   }
 
-  if (!isSessionReady) {
-    return (
-      <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
-        <div className='mx-auto flex min-h-[60vh] max-w-6xl flex-col items-center justify-center gap-4 text-center text-slate-600'>
-          <span className='h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-sky-500' aria-hidden />
-          <p className='text-sm font-medium text-slate-500'>Preparing your workspace…</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (sessionUserId && !currentUser) {
-    return (
-      <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
-        <div className='mx-auto flex min-h-[60vh] max-w-6xl flex-col items-center justify-center gap-4 text-center text-slate-600'>
-          <span className='h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-sky-500' aria-hidden />
-          <p className='text-sm font-medium text-slate-500'>Loading your account…</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (!currentUser) {
-    return renderLoginPage()
-  }
-
   if (isLoading) {
     return (
       <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
@@ -4544,17 +4371,9 @@ function AppContent() {
                 </span>
               )}
               <div className='flex flex-col items-end text-[11px] text-slate-500 sm:text-xs'>
-                <span className='font-semibold text-slate-700'>Signed in as {currentUserName}</span>
+                <span className='font-semibold text-slate-700'>Workspace user: {currentUserName}</span>
                 {currentUserEmail && <span className='truncate text-slate-500'>{currentUserEmail}</span>}
               </div>
-              <Button
-                variant='outline'
-                onClick={handleLogout}
-                className='gap-2 text-xs font-semibold text-slate-600'
-                title='Sign out'
-              >
-                <LogOut size={14} /> Log out
-              </Button>
               {resolvedPage === 'customers' && (
                 <Button
                   onClick={() => {
