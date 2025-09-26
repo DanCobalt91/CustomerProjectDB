@@ -1,4 +1,5 @@
 import type {
+  AppRole,
   Customer,
   CustomerContact,
   Project,
@@ -7,10 +8,13 @@ import type {
   ProjectDocuments,
   ProjectFile,
   ProjectFileCategory,
+  ProjectInfo,
   ProjectStatusLogEntry,
   ProjectStatus,
   ProjectTask,
   ProjectTaskStatus,
+  TwoFactorMethod,
+  User,
   WO,
   WOType,
 } from '../types'
@@ -23,11 +27,15 @@ import {
 } from '../types'
 import { createId } from './id'
 
+const DEFAULT_USER_ID = 'user-demo'
+const DEFAULT_USER_NAME = 'Demo User'
+
 type ContactInput = Partial<Omit<CustomerContact, 'id'>> & { id?: string }
 type ProjectDocumentsUpdate = Partial<Record<ProjectFileCategory, ProjectFile[] | ProjectFile | null>>
 
 type StorageApi = {
   listCustomers(): Promise<Customer[]>
+  listUsers(): Promise<User[]>
   listProjectsByCustomer(customerId: string): Promise<Project[]>
   listWOs(projectId: string): Promise<WO[]>
   createCustomer(data: {
@@ -44,7 +52,14 @@ type StorageApi = {
     },
   ): Promise<Customer>
   deleteCustomer(customerId: string): Promise<void>
-  createProject(customerId: string, number: string): Promise<Project>
+  createProject(
+    customerId: string,
+    data: {
+      number: string
+      info?: ProjectInfo | null
+      tasks?: Array<{ name: string; status?: ProjectTaskStatus; assigneeId?: string }>
+    },
+  ): Promise<Project>
   updateProject(
     projectId: string,
     data: {
@@ -54,6 +69,7 @@ type StorageApi = {
       activeSubStatus?: ProjectActiveSubStatus | null
       statusHistory?: ProjectStatusLogEntry[] | null
       customerSignOff?: ProjectCustomerSignOff | null
+      info?: ProjectInfo | null
     },
   ): Promise<Project>
   deleteProject(projectId: string): Promise<void>
@@ -65,7 +81,8 @@ type StorageApi = {
       name: string
       start: string
       end: string
-      assignee?: string
+      assigneeId?: string
+      assigneeName?: string
       status: ProjectTaskStatus
     },
   ): Promise<ProjectTask>
@@ -76,13 +93,32 @@ type StorageApi = {
       name?: string
       start?: string | null
       end?: string | null
-      assignee?: string | null
+      assigneeId?: string | null
+      assigneeName?: string | null
       status?: ProjectTaskStatus
     },
   ): Promise<ProjectTask>
   deleteTask(projectId: string, taskId: string): Promise<void>
-  exportDatabase(): Promise<{ customers: Customer[] }>
-  importDatabase(data: unknown): Promise<Customer[]>
+  createUser(data: {
+    name: string
+    email?: string
+    role: AppRole
+    twoFactorEnabled: boolean
+    twoFactorMethod?: TwoFactorMethod | null
+  }): Promise<User>
+  updateUser(
+    userId: string,
+    data: {
+      name?: string
+      email?: string | null
+      role?: AppRole
+      twoFactorEnabled?: boolean
+      twoFactorMethod?: TwoFactorMethod | null
+    },
+  ): Promise<User>
+  deleteUser(userId: string): Promise<void>
+  exportDatabase(): Promise<{ customers: Customer[]; users: User[] }>
+  importDatabase(data: unknown): Promise<{ customers: Customer[]; users: User[] }>
 }
 
 let localStorageStorage: StorageApi | null = null
@@ -97,6 +133,10 @@ function ensureLocalStorage(): StorageApi {
 
 export function listCustomers(): Promise<Customer[]> {
   return ensureLocalStorage().listCustomers()
+}
+
+export function listUsers(): Promise<User[]> {
+  return ensureLocalStorage().listUsers()
 }
 
 export function listProjectsByCustomer(customerId: string): Promise<Project[]> {
@@ -130,8 +170,15 @@ export function deleteCustomer(customerId: string): Promise<void> {
   return ensureLocalStorage().deleteCustomer(customerId)
 }
 
-export function createProject(customerId: string, number: string): Promise<Project> {
-  return ensureLocalStorage().createProject(customerId, number)
+export function createProject(
+  customerId: string,
+  data: {
+    number: string
+    info?: ProjectInfo | null
+    tasks?: Array<{ name: string; status?: ProjectTaskStatus; assigneeId?: string }>
+  },
+): Promise<Project> {
+  return ensureLocalStorage().createProject(customerId, data)
 }
 
 export function updateProject(
@@ -143,6 +190,7 @@ export function updateProject(
     activeSubStatus?: ProjectActiveSubStatus | null
     statusHistory?: ProjectStatusLogEntry[] | null
     customerSignOff?: ProjectCustomerSignOff | null
+    info?: ProjectInfo | null
   },
 ): Promise<Project> {
   return ensureLocalStorage().updateProject(projectId, data)
@@ -165,7 +213,14 @@ export function deleteWO(woId: string): Promise<void> {
 
 export function createTask(
   projectId: string,
-  data: { name: string; start: string; end: string; assignee?: string; status: ProjectTaskStatus },
+  data: {
+    name: string
+    start: string
+    end: string
+    assigneeId?: string
+    assigneeName?: string
+    status: ProjectTaskStatus
+  },
 ): Promise<ProjectTask> {
   return ensureLocalStorage().createTask(projectId, data)
 }
@@ -177,7 +232,8 @@ export function updateTask(
     name?: string
     start?: string | null
     end?: string | null
-    assignee?: string | null
+    assigneeId?: string | null
+    assigneeName?: string | null
     status?: ProjectTaskStatus
   },
 ): Promise<ProjectTask> {
@@ -188,11 +244,38 @@ export function deleteTask(projectId: string, taskId: string): Promise<void> {
   return ensureLocalStorage().deleteTask(projectId, taskId)
 }
 
-export function exportDatabase(): Promise<{ customers: Customer[] }> {
+export function createUser(data: {
+  name: string
+  email?: string
+  role: AppRole
+  twoFactorEnabled: boolean
+  twoFactorMethod?: TwoFactorMethod | null
+}): Promise<User> {
+  return ensureLocalStorage().createUser(data)
+}
+
+export function updateUser(
+  userId: string,
+  data: {
+    name?: string
+    email?: string | null
+    role?: AppRole
+    twoFactorEnabled?: boolean
+    twoFactorMethod?: TwoFactorMethod | null
+  },
+): Promise<User> {
+  return ensureLocalStorage().updateUser(userId, data)
+}
+
+export function deleteUser(userId: string): Promise<void> {
+  return ensureLocalStorage().deleteUser(userId)
+}
+
+export function exportDatabase(): Promise<{ customers: Customer[]; users: User[] }> {
   return ensureLocalStorage().exportDatabase()
 }
 
-export function importDatabase(data: unknown): Promise<Customer[]> {
+export function importDatabase(data: unknown): Promise<{ customers: Customer[]; users: User[] }> {
   return ensureLocalStorage().importDatabase(data)
 }
 
@@ -201,7 +284,7 @@ function sortByText<T>(items: T[], getValue: (item: T) => string): T[] {
 }
 
 function createLocalStorageStorage(): StorageApi {
-  type Database = { customers: Customer[] }
+  type Database = { customers: Customer[]; users: User[] }
 
   type StorageLike = {
     getItem(key: string): string | null
@@ -431,6 +514,7 @@ function createLocalStorageStorage(): StorageApi {
       signedByName: toOptionalString((raw as { signedByName?: unknown }).signedByName),
       signedByPosition: toOptionalString((raw as { signedByPosition?: unknown }).signedByPosition),
       signatureDataUrl: toOptionalString((raw as { signatureDataUrl?: unknown }).signatureDataUrl),
+      projectInfo: normalizeProjectInfo((raw as { projectInfo?: unknown }).projectInfo) ?? undefined,
     }
   }
 
@@ -534,8 +618,124 @@ function createLocalStorageStorage(): StorageApi {
       status,
       start: start ?? undefined,
       end: normalizedEnd ?? undefined,
-      assignee: toOptionalString((raw as { assignee?: unknown }).assignee),
+      assigneeId: toOptionalString((raw as { assigneeId?: unknown }).assigneeId),
+      assigneeName: toOptionalString(
+        (raw as { assigneeName?: unknown; assignee?: unknown }).assigneeName ??
+          (raw as { assignee?: unknown }).assignee,
+      ),
     }
+  }
+
+  function normalizeStringArrayValue(value: unknown): string[] | undefined {
+    if (value === undefined || value === null) {
+      return undefined
+    }
+
+    const accumulator: string[] = []
+
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        if (typeof entry === 'string') {
+          const normalized = entry.trim()
+          if (normalized) {
+            accumulator.push(normalized)
+          }
+        }
+      }
+    } else if (typeof value === 'string') {
+      const parts = value.split(/\r?\n|,/)
+      for (const part of parts) {
+        const normalized = part.trim()
+        if (normalized) {
+          accumulator.push(normalized)
+        }
+      }
+    }
+
+    if (accumulator.length === 0) {
+      return undefined
+    }
+
+    return accumulator
+  }
+
+  function normalizeDateOnlyValue(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined
+    }
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return undefined
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const parsed = Date.parse(trimmed)
+      if (Number.isNaN(parsed)) {
+        return undefined
+      }
+      const iso = new Date(parsed).toISOString()
+      return iso.slice(0, 10)
+    }
+    const parsed = Date.parse(trimmed)
+    if (Number.isNaN(parsed)) {
+      return undefined
+    }
+    return trimmed
+  }
+
+  function normalizeProjectInfo(value: unknown): ProjectInfo | undefined {
+    if (!value || typeof value !== 'object') {
+      return undefined
+    }
+
+    const raw = value as Record<string, unknown>
+    const lineReference = toOptionalString(
+      (raw as { lineReference?: unknown; lineName?: unknown; lineNumber?: unknown }).lineReference ??
+        (raw as { lineName?: unknown }).lineName ??
+        (raw as { lineNumber?: unknown }).lineNumber,
+    )
+    const machineSerialNumbers = normalizeStringArrayValue(
+      (raw as { machineSerialNumbers?: unknown; machineSerials?: unknown }).machineSerialNumbers ??
+        (raw as { machineSerials?: unknown }).machineSerials,
+    )
+    const toolSerialNumbers = normalizeStringArrayValue(
+      (raw as { toolSerialNumbers?: unknown; toolSerials?: unknown }).toolSerialNumbers ??
+        (raw as { toolSerials?: unknown }).toolSerials,
+    )
+    const cobaltOrderNumber = toOptionalString((raw as { cobaltOrderNumber?: unknown }).cobaltOrderNumber)
+    const customerOrderNumber = toOptionalString(
+      (raw as { customerOrderNumber?: unknown; purchaseOrder?: unknown }).customerOrderNumber ??
+        (raw as { purchaseOrder?: unknown }).purchaseOrder,
+    )
+    const salespersonId = toOptionalString((raw as { salespersonId?: unknown }).salespersonId)
+    const salespersonName = toOptionalString(
+      (raw as { salespersonName?: unknown; salesperson?: unknown }).salespersonName ??
+        (raw as { salesperson?: unknown }).salesperson,
+    )
+    const startDate = normalizeDateOnlyValue((raw as { startDate?: unknown }).startDate)
+    const proposedCompletionDate = normalizeDateOnlyValue(
+      (raw as { proposedCompletionDate?: unknown; targetCompletionDate?: unknown }).proposedCompletionDate ??
+        (raw as { targetCompletionDate?: unknown }).targetCompletionDate,
+    )
+
+    const info: ProjectInfo = {}
+    if (lineReference) info.lineReference = lineReference
+    if (machineSerialNumbers) info.machineSerialNumbers = machineSerialNumbers
+    if (toolSerialNumbers) info.toolSerialNumbers = toolSerialNumbers
+    if (cobaltOrderNumber) info.cobaltOrderNumber = cobaltOrderNumber
+    if (customerOrderNumber) info.customerOrderNumber = customerOrderNumber
+    if (salespersonId) info.salespersonId = salespersonId
+    if (salespersonName) info.salespersonName = salespersonName
+    if (startDate) info.startDate = startDate
+    if (proposedCompletionDate) info.proposedCompletionDate = proposedCompletionDate
+
+    const hasInfo = Object.values(info).some(value => {
+      if (Array.isArray(value)) {
+        return value.length > 0
+      }
+      return value !== undefined
+    })
+
+    return hasInfo ? info : undefined
   }
 
   function sortContacts(contacts: CustomerContact[]): CustomerContact[] {
@@ -595,6 +795,8 @@ function createLocalStorageStorage(): StorageApi {
       .map(normalizeProjectTask)
       .filter((task): task is ProjectTask => !!task)
 
+    const info = normalizeProjectInfo((raw as { info?: unknown }).info)
+
     return {
       id,
       number,
@@ -617,6 +819,7 @@ function createLocalStorageStorage(): StorageApi {
             ],
       customerSignOff: customerSignOff ?? undefined,
       tasks: tasks.length > 0 ? sortTasks(tasks) : [],
+      info: info ?? undefined,
     }
   }
 
@@ -664,9 +867,66 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
+  function normalizeTwoFactorMethod(value: unknown): TwoFactorMethod | undefined {
+    if (value === 'sms' || value === 'authenticator') {
+      return value
+    }
+    return undefined
+  }
+
+  function normalizeUser(value: unknown): User | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const idRaw = typeof raw.id === 'string' ? raw.id.trim() : ''
+    const name = toOptionalString(raw.name)
+    if (!name) {
+      return null
+    }
+
+    const roleRaw = (raw as { role?: unknown }).role
+    const role: AppRole = roleRaw === 'admin' || roleRaw === 'editor' || roleRaw === 'viewer' ? roleRaw : 'viewer'
+
+    const email = toOptionalString(raw.email)
+    const twoFactorEnabled = Boolean((raw as { twoFactorEnabled?: unknown }).twoFactorEnabled)
+    let twoFactorMethod = normalizeTwoFactorMethod((raw as { twoFactorMethod?: unknown }).twoFactorMethod)
+    if (!twoFactorEnabled) {
+      twoFactorMethod = undefined
+    }
+
+    return {
+      id: idRaw || createId(),
+      name,
+      email,
+      role,
+      twoFactorEnabled,
+      twoFactorMethod,
+    }
+  }
+
+  function sortUsers(users: User[]): User[] {
+    return sortByText(users, user => user.name)
+  }
+
+  function ensureDefaultUsers(users: User[]): User[] {
+    if (users.length > 0) {
+      return users
+    }
+    return [
+      {
+        id: DEFAULT_USER_ID,
+        name: DEFAULT_USER_NAME,
+        role: 'editor',
+        twoFactorEnabled: false,
+      },
+    ]
+  }
+
   function normalizeDatabase(value: unknown): Database {
     if (!value || typeof value !== 'object') {
-      return { customers: [] }
+      return { customers: [], users: ensureDefaultUsers([]) }
     }
 
     const rawCustomers = Array.isArray((value as { customers?: unknown }).customers)
@@ -677,21 +937,31 @@ function createLocalStorageStorage(): StorageApi {
       .map(normalizeCustomer)
       .filter((customer): customer is Customer => !!customer)
 
-    return { customers: sortCustomers(customers) }
+    const rawUsers = Array.isArray((value as { users?: unknown }).users)
+      ? ((value as { users?: unknown }).users as unknown[])
+      : []
+
+    const users = rawUsers
+      .map(normalizeUser)
+      .filter((user): user is User => !!user)
+
+    const normalizedUsers = ensureDefaultUsers(sortUsers(users))
+
+    return { customers: sortCustomers(customers), users: normalizedUsers }
   }
 
   function loadDatabase(): Database {
     const storage = resolveStorage()
     const raw = storage.getItem(STORAGE_KEY)
     if (!raw) {
-      return { customers: [] }
+      return { customers: [], users: ensureDefaultUsers([]) }
     }
 
     try {
       const parsed = JSON.parse(raw) as unknown
       return normalizeDatabase(parsed)
     } catch {
-      return { customers: [] }
+      return { customers: [], users: ensureDefaultUsers([]) }
     }
   }
 
@@ -717,7 +987,25 @@ function createLocalStorageStorage(): StorageApi {
       status: task.status,
       start: task.start,
       end: task.end,
-      assignee: task.assignee,
+      assigneeId: task.assigneeId,
+      assigneeName: task.assigneeName,
+    }
+  }
+
+  function cloneProjectInfo(info?: ProjectInfo): ProjectInfo | undefined {
+    if (!info) {
+      return undefined
+    }
+    return {
+      lineReference: info.lineReference,
+      machineSerialNumbers: info.machineSerialNumbers ? [...info.machineSerialNumbers] : undefined,
+      toolSerialNumbers: info.toolSerialNumbers ? [...info.toolSerialNumbers] : undefined,
+      cobaltOrderNumber: info.cobaltOrderNumber,
+      customerOrderNumber: info.customerOrderNumber,
+      salespersonId: info.salespersonId,
+      salespersonName: info.salespersonName,
+      startDate: info.startDate,
+      proposedCompletionDate: info.proposedCompletionDate,
     }
   }
 
@@ -769,6 +1057,7 @@ function createLocalStorageStorage(): StorageApi {
       decision: signOff.decision,
       snags: signOff.snags ? [...signOff.snags] : undefined,
       signatureDataUrl: signOff.signatureDataUrl,
+      projectInfo: cloneProjectInfo(signOff.projectInfo),
     }
   }
 
@@ -779,6 +1068,17 @@ function createLocalStorageStorage(): StorageApi {
       position: contact.position,
       phone: contact.phone,
       email: contact.email,
+    }
+  }
+
+  function cloneUser(user: User): User {
+    return {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      twoFactorEnabled: user.twoFactorEnabled,
+      twoFactorMethod: user.twoFactorMethod,
     }
   }
 
@@ -796,6 +1096,7 @@ function createLocalStorageStorage(): StorageApi {
       customerSignOff: project.customerSignOff
         ? cloneCustomerSignOff(project.customerSignOff)
         : undefined,
+      info: cloneProjectInfo(project.info),
     }
   }
 
@@ -909,6 +1210,11 @@ function createLocalStorageStorage(): StorageApi {
       return db.customers.map(cloneCustomer)
     },
 
+    async listUsers(): Promise<User[]> {
+      const db = loadDatabase()
+      return db.users.map(cloneUser)
+    },
+
     async listProjectsByCustomer(customerId: string): Promise<Project[]> {
       const db = loadDatabase()
       const located = locateCustomer(db, customerId)
@@ -950,7 +1256,7 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       const nextCustomers = sortCustomers([customer, ...db.customers])
-      saveDatabase({ customers: nextCustomers })
+      saveDatabase({ customers: nextCustomers, users: db.users })
       return cloneCustomer(customer)
     },
 
@@ -988,7 +1294,7 @@ function createLocalStorageStorage(): StorageApi {
 
       const nextCustomers = [...db.customers]
       nextCustomers[index] = nextCustomer
-      saveDatabase({ customers: sortCustomers(nextCustomers) })
+      saveDatabase({ customers: sortCustomers(nextCustomers), users: db.users })
       return cloneCustomer(nextCustomer)
     },
 
@@ -1001,10 +1307,17 @@ function createLocalStorageStorage(): StorageApi {
 
       const nextCustomers = [...db.customers]
       nextCustomers.splice(located.index, 1)
-      saveDatabase({ customers: nextCustomers })
+      saveDatabase({ customers: nextCustomers, users: db.users })
     },
 
-    async createProject(customerId: string, number: string): Promise<Project> {
+    async createProject(
+      customerId: string,
+      data: {
+        number: string
+        info?: ProjectInfo | null
+        tasks?: Array<{ name: string; status?: ProjectTaskStatus; assigneeId?: string }>
+      },
+    ): Promise<Project> {
       const db = loadDatabase()
       const located = locateCustomer(db, customerId)
       if (!located) {
@@ -1012,31 +1325,75 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       const { index, customer } = located
+      const normalizedNumber = data.number.trim()
+      if (!normalizedNumber) {
+        throw new Error('Project number is required.')
+      }
+
+      const info = normalizeProjectInfo(data.info ?? undefined)
+      const templateTasks = Array.isArray(data.tasks) ? data.tasks : []
+      const normalizedTasks: ProjectTask[] = []
+
+      for (const task of templateTasks) {
+        if (!task || typeof task !== 'object') {
+          continue
+        }
+        const name = typeof task.name === 'string' ? task.name.trim() : ''
+        if (!name) {
+          continue
+        }
+        const status =
+          task.status && isProjectTaskStatus(task.status) ? task.status : 'Not started'
+        let assigneeId: string | undefined
+        let assigneeName: string | undefined
+        if (typeof task.assigneeId === 'string') {
+          const candidateId = task.assigneeId.trim()
+          if (candidateId) {
+            const user = db.users.find(entry => entry.id === candidateId)
+            if (user) {
+              assigneeId = user.id
+              assigneeName = user.name
+            }
+          }
+        }
+
+        normalizedTasks.push({
+          id: createId(),
+          name,
+          status,
+          assigneeId,
+          assigneeName,
+        })
+      }
+
+      const initialTasks = normalizedTasks.length > 0 ? sortTasks(normalizedTasks) : []
+
       const project: Project = {
         id: createId(),
-        number: number.trim(),
-      status: DEFAULT_PROJECT_STATUS,
-      activeSubStatus: DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
-      note: undefined,
-      wos: [],
-      tasks: [],
-      documents: undefined,
-      statusHistory: [
-        {
-          id: createId(),
-          status: DEFAULT_PROJECT_STATUS,
+        number: normalizedNumber,
+        status: DEFAULT_PROJECT_STATUS,
+        activeSubStatus: DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
+        note: undefined,
+        wos: [],
+        tasks: initialTasks,
+        documents: undefined,
+        statusHistory: [
+          {
+            id: createId(),
+            status: DEFAULT_PROJECT_STATUS,
             activeSubStatus: DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
             changedAt: new Date().toISOString(),
             changedBy: 'System',
           },
         ],
         customerSignOff: undefined,
+        info: info ?? undefined,
       }
 
       const nextProjects = sortProjects([project, ...customer.projects])
       const nextCustomers = [...db.customers]
       nextCustomers[index] = { ...customer, projects: nextProjects }
-      saveDatabase({ customers: sortCustomers(nextCustomers) })
+      saveDatabase({ customers: sortCustomers(nextCustomers), users: db.users })
       return cloneProject(project)
     },
 
@@ -1049,6 +1406,7 @@ function createLocalStorageStorage(): StorageApi {
         activeSubStatus?: ProjectActiveSubStatus | null
         statusHistory?: ProjectStatusLogEntry[] | null
         customerSignOff?: ProjectCustomerSignOff | null
+        info?: ProjectInfo | null
       },
     ): Promise<Project> {
       const db = loadDatabase()
@@ -1154,6 +1512,16 @@ function createLocalStorageStorage(): StorageApi {
         }
       }
 
+      let nextInfo = project.info
+      if (data.info !== undefined) {
+        if (data.info === null) {
+          nextInfo = undefined
+        } else {
+          const normalizedInfo = normalizeProjectInfo(data.info)
+          nextInfo = normalizedInfo ?? undefined
+        }
+      }
+
       const nextProject: Project = {
         ...project,
         status: nextStatus,
@@ -1162,13 +1530,14 @@ function createLocalStorageStorage(): StorageApi {
         documents: normalizedDocuments,
         statusHistory: normalizedStatusHistory,
         customerSignOff: nextCustomerSignOff,
+        info: nextInfo,
       }
 
       const updatedProjects = [...customer.projects]
       updatedProjects[projectIndex] = nextProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers })
+      saveDatabase({ customers: nextCustomers, users: db.users })
       return cloneProject(nextProject)
     },
 
@@ -1184,7 +1553,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects.splice(projectIndex, 1)
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers })
+      saveDatabase({ customers: nextCustomers, users: db.users })
     },
 
     async createWO(projectId: string, data: { number: string; type: WOType; note?: string }): Promise<WO> {
@@ -1211,7 +1580,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers })
+      saveDatabase({ customers: nextCustomers, users: db.users })
       return cloneWorkOrder(workOrder)
     },
 
@@ -1230,12 +1599,19 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers })
+      saveDatabase({ customers: nextCustomers, users: db.users })
     },
 
     async createTask(
       projectId: string,
-      data: { name: string; start: string; end: string; assignee?: string; status: ProjectTaskStatus },
+      data: {
+        name: string
+        start: string
+        end: string
+        assigneeId?: string
+        assigneeName?: string
+        status: ProjectTaskStatus
+      },
     ): Promise<ProjectTask> {
       const db = loadDatabase()
       const located = locateProject(db, projectId)
@@ -1250,7 +1626,8 @@ function createLocalStorageStorage(): StorageApi {
         status: data.status,
         start: data.start,
         end: data.end,
-        assignee: normalizeInput(data.assignee),
+        assigneeId: normalizeInput(data.assigneeId),
+        assigneeName: normalizeInput(data.assigneeName),
       }
 
       const updatedTasks = sortTasks([...(project.tasks ?? []), task])
@@ -1259,7 +1636,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers })
+      saveDatabase({ customers: nextCustomers, users: db.users })
       return cloneProjectTask(task)
     },
 
@@ -1270,7 +1647,8 @@ function createLocalStorageStorage(): StorageApi {
         name?: string
         start?: string | null
         end?: string | null
-        assignee?: string | null
+        assigneeId?: string | null
+        assigneeName?: string | null
         status?: ProjectTaskStatus
       },
     ): Promise<ProjectTask> {
@@ -1288,17 +1666,33 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       const current = tasks[taskIndex]
+      let nextAssigneeId = current.assigneeId
+      if (data.assigneeId !== undefined) {
+        if (data.assigneeId === null) {
+          nextAssigneeId = undefined
+        } else {
+          const trimmed = data.assigneeId.trim()
+          nextAssigneeId = trimmed ? trimmed : undefined
+        }
+      }
+
+      let nextAssigneeName = current.assigneeName
+      if (data.assigneeName !== undefined) {
+        if (data.assigneeName === null) {
+          nextAssigneeName = undefined
+        } else {
+          const trimmedName = data.assigneeName.trim()
+          nextAssigneeName = trimmedName ? trimmedName : undefined
+        }
+      }
+
       const updated: ProjectTask = {
         ...current,
         name: data.name !== undefined ? data.name.trim() : current.name,
         start: data.start === undefined ? current.start : data.start ?? undefined,
         end: data.end === undefined ? current.end : data.end ?? undefined,
-        assignee:
-          data.assignee === undefined
-            ? current.assignee
-            : data.assignee === null
-            ? undefined
-            : normalizeInput(data.assignee),
+        assigneeId: nextAssigneeId,
+        assigneeName: nextAssigneeName,
         status: data.status ?? current.status,
       }
 
@@ -1308,7 +1702,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers })
+      saveDatabase({ customers: nextCustomers, users: db.users })
       return cloneProjectTask(updated)
     },
 
@@ -1332,17 +1726,132 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers })
+      saveDatabase({ customers: nextCustomers, users: db.users })
     },
 
-    async exportDatabase(): Promise<{ customers: Customer[] }> {
+    async createUser(data: {
+      name: string
+      email?: string
+      role: AppRole
+      twoFactorEnabled: boolean
+      twoFactorMethod?: TwoFactorMethod | null
+    }): Promise<User> {
+      const db = loadDatabase()
+      const name = data.name.trim()
+      if (!name) {
+        throw new Error('User name is required.')
+      }
+
+      const role: AppRole =
+        data.role === 'admin' || data.role === 'editor' || data.role === 'viewer' ? data.role : 'viewer'
+
+      const email = normalizeInput(data.email)
+      const twoFactorEnabled = Boolean(data.twoFactorEnabled)
+      let twoFactorMethod = normalizeTwoFactorMethod(data.twoFactorMethod)
+      if (!twoFactorEnabled) {
+        twoFactorMethod = undefined
+      }
+
+      const user: User = {
+        id: createId(),
+        name,
+        email,
+        role,
+        twoFactorEnabled,
+        twoFactorMethod,
+      }
+
+      const nextUsers = sortUsers([...db.users, user])
+      saveDatabase({ customers: db.customers, users: nextUsers })
+      return cloneUser(user)
+    },
+
+    async updateUser(
+      userId: string,
+      data: {
+        name?: string
+        email?: string | null
+        role?: AppRole
+        twoFactorEnabled?: boolean
+        twoFactorMethod?: TwoFactorMethod | null
+      },
+    ): Promise<User> {
+      const db = loadDatabase()
+      const index = db.users.findIndex(user => user.id === userId)
+      if (index === -1) {
+        throw new Error('User not found.')
+      }
+
+      const current = db.users[index]
+      const nextName = data.name !== undefined ? data.name.trim() : current.name
+      if (!nextName) {
+        throw new Error('User name is required.')
+      }
+
+      let nextEmail = current.email
+      if (data.email !== undefined) {
+        nextEmail = data.email === null ? undefined : normalizeInput(data.email)
+      }
+
+      let nextRole = current.role
+      if (data.role && (data.role === 'admin' || data.role === 'editor' || data.role === 'viewer')) {
+        nextRole = data.role
+      }
+
+      let nextTwoFactorEnabled = current.twoFactorEnabled
+      if (data.twoFactorEnabled !== undefined) {
+        nextTwoFactorEnabled = Boolean(data.twoFactorEnabled)
+      }
+
+      let nextTwoFactorMethod = current.twoFactorMethod
+      if (data.twoFactorMethod !== undefined) {
+        if (data.twoFactorMethod === null) {
+          nextTwoFactorMethod = undefined
+        } else {
+          nextTwoFactorMethod = normalizeTwoFactorMethod(data.twoFactorMethod) ?? nextTwoFactorMethod
+        }
+      }
+
+      if (!nextTwoFactorEnabled) {
+        nextTwoFactorMethod = undefined
+      }
+
+      const updated: User = {
+        id: current.id,
+        name: nextName,
+        email: nextEmail,
+        role: nextRole,
+        twoFactorEnabled: nextTwoFactorEnabled,
+        twoFactorMethod: nextTwoFactorMethod,
+      }
+
+      const nextUsers = sortUsers([
+        ...db.users.slice(0, index),
+        updated,
+        ...db.users.slice(index + 1),
+      ])
+      saveDatabase({ customers: db.customers, users: nextUsers })
+      return cloneUser(updated)
+    },
+
+    async deleteUser(userId: string): Promise<void> {
+      const db = loadDatabase()
+      const nextUsers = db.users.filter(user => user.id !== userId)
+      if (nextUsers.length === db.users.length) {
+        throw new Error('User not found.')
+      }
+      saveDatabase({ customers: db.customers, users: nextUsers })
+    },
+
+    async exportDatabase(): Promise<{ customers: Customer[]; users: User[] }> {
       const db = loadDatabase()
       return {
         customers: db.customers.map(cloneCustomer),
+        users: db.users.map(cloneUser),
       }
     },
 
-    async importDatabase(data: unknown): Promise<Customer[]> {
+    async importDatabase(data: unknown): Promise<{ customers: Customer[]; users: User[] }> {
       let source: unknown = data
       if (typeof data === 'string') {
         try {
@@ -1354,7 +1863,10 @@ function createLocalStorageStorage(): StorageApi {
 
       const normalized = normalizeDatabase(source)
       saveDatabase(normalized)
-      return normalized.customers.map(cloneCustomer)
+      return {
+        customers: normalized.customers.map(cloneCustomer),
+        users: normalized.users.map(cloneUser),
+      }
     },
   }
 }

@@ -36,6 +36,14 @@ type Rgb = [number, number, number]
 export type CustomerSignOffPdfInput = {
   projectNumber: string
   customerName: string
+  lineReference?: string
+  machineSerialNumbers?: string[]
+  toolSerialNumbers?: string[]
+  cobaltOrderNumber?: string
+  customerOrderNumber?: string
+  salespersonName?: string
+  startDate?: string
+  proposedCompletionDate?: string
   signedByName: string
   signedByPosition: string
   decision: CustomerSignOffDecision
@@ -272,6 +280,24 @@ export async function generateCustomerSignOffPdf(data: CustomerSignOffPdfInput):
   const wrap = (text: string, width: number, size: number, isBold: boolean) =>
     wrapText(text, width, size, isBold, measure)
 
+  const formatList = (items?: string[]): string => {
+    if (!items || items.length === 0) {
+      return 'Not provided'
+    }
+    return items.join(', ')
+  }
+
+  const formatDateValue = (value?: string): string => {
+    if (!value) {
+      return 'Not provided'
+    }
+    const parsed = Date.parse(value)
+    if (Number.isNaN(parsed)) {
+      return value
+    }
+    return new Date(parsed).toLocaleDateString()
+  }
+
   const drawHeading = (text: string, size: number, gap: number) => {
     cursor -= size
     appendTextLine(builder, text, margin, cursor, 'F2', size, headingColor)
@@ -298,6 +324,16 @@ export async function generateCustomerSignOffPdf(data: CustomerSignOffPdfInput):
   drawLabelValue('Project', data.projectNumber)
   const completedDisplay = new Date(data.completedAt).toLocaleString()
   drawLabelValue('Completed', completedDisplay)
+
+  drawHeading('Project Information', 16, 16)
+  drawLabelValue('Line No/Name', data.lineReference ?? 'Not provided')
+  drawLabelValue('Machine Serial Numbers', formatList(data.machineSerialNumbers))
+  drawLabelValue('Tool Serial Numbers', formatList(data.toolSerialNumbers))
+  drawLabelValue('Cobalt Order Number', data.cobaltOrderNumber ?? 'Not provided')
+  drawLabelValue('Customer Order Number', data.customerOrderNumber ?? 'Not provided')
+  drawLabelValue('Salesperson', data.salespersonName ?? 'Not provided')
+  drawLabelValue('Project Start Date', formatDateValue(data.startDate))
+  drawLabelValue('Proposed Completion', formatDateValue(data.proposedCompletionDate))
 
   const optionCopy = CUSTOMER_SIGN_OFF_OPTION_COPY[data.decision]
   drawHeading('Acceptance Statement', 16, 16)
