@@ -1091,12 +1091,10 @@ function createLocalStorageStorage(): StorageApi {
     const normalized = normalizeDatabase(db)
     storage.setItem(STORAGE_KEY, JSON.stringify(normalized))
     for (const legacyKey of LEGACY_STORAGE_KEYS) {
-      if (legacyKey !== STORAGE_KEY) {
-        try {
-          storage.removeItem(legacyKey)
-        } catch {
-          // Ignore removal errors; they only affect optional clean-up of legacy data.
-        }
+      try {
+        storage.removeItem(legacyKey)
+      } catch {
+        // Ignore removal errors; they only affect optional clean-up of legacy data.
       }
     }
   }
