@@ -29,6 +29,8 @@ import { createId } from './id'
 
 const DEFAULT_USER_ID = 'user-demo'
 const DEFAULT_USER_NAME = 'Demo User'
+const DEFAULT_USER_EMAIL = 'demo@example.com'
+const DEFAULT_USER_PASSWORD = 'Demo@123'
 
 type ContactInput = Partial<Omit<CustomerContact, 'id'>> & { id?: string }
 type ProjectDocumentsUpdate = Partial<Record<ProjectFileCategory, ProjectFile[] | ProjectFile | null>>
@@ -101,7 +103,8 @@ type StorageApi = {
   deleteTask(projectId: string, taskId: string): Promise<void>
   createUser(data: {
     name: string
-    email?: string
+    email: string
+    password: string
     role: AppRole
     twoFactorEnabled: boolean
     twoFactorMethod?: TwoFactorMethod | null
@@ -111,12 +114,14 @@ type StorageApi = {
     data: {
       name?: string
       email?: string | null
+      password?: string | null
       role?: AppRole
       twoFactorEnabled?: boolean
       twoFactorMethod?: TwoFactorMethod | null
     },
   ): Promise<User>
   deleteUser(userId: string): Promise<void>
+  authenticateUser(credentials: { email: string; password: string }): Promise<User>
   exportDatabase(): Promise<{ customers: Customer[]; users: User[] }>
   importDatabase(data: unknown): Promise<{ customers: Customer[]; users: User[] }>
 }
@@ -246,7 +251,8 @@ export function deleteTask(projectId: string, taskId: string): Promise<void> {
 
 export function createUser(data: {
   name: string
-  email?: string
+  email: string
+  password: string
   role: AppRole
   twoFactorEnabled: boolean
   twoFactorMethod?: TwoFactorMethod | null
@@ -259,6 +265,7 @@ export function updateUser(
   data: {
     name?: string
     email?: string | null
+    password?: string | null
     role?: AppRole
     twoFactorEnabled?: boolean
     twoFactorMethod?: TwoFactorMethod | null
@@ -269,6 +276,10 @@ export function updateUser(
 
 export function deleteUser(userId: string): Promise<void> {
   return ensureLocalStorage().deleteUser(userId)
+}
+
+export function authenticateUser(credentials: { email: string; password: string }): Promise<User> {
+  return ensureLocalStorage().authenticateUser(credentials)
 }
 
 export function exportDatabase(): Promise<{ customers: Customer[]; users: User[] }> {
@@ -351,6 +362,53 @@ function createLocalStorageStorage(): StorageApi {
     const trimmed = value.trim()
     return trimmed ? trimmed : undefined
   }
+
+  function normalizeEmail(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined
+    }
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return undefined
+    }
+    return trimmed.toLowerCase()
+  }
+
+  function isValidEmail(email: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+  }
+
+  function hashPassword(password: string): string {
+    const normalized = password.normalize('NFKC')
+    let hashA = 0x811c9dc5
+    let hashB = 0x01000193
+    for (const char of normalized) {
+      const code = char.codePointAt(0) ?? 0
+      hashA = Math.imul(hashA ^ code, 0x01000193) >>> 0
+      hashB = Math.imul(hashB + code, 0x01000193) >>> 0
+      hashB ^= (hashA << 5) | (hashA >>> 27)
+    }
+    const segmentA = hashA.toString(16).padStart(8, '0')
+    const segmentB = hashB.toString(16).padStart(8, '0')
+    return `cpdb$${segmentA}${segmentB}`
+  }
+
+  function verifyPassword(password: string, expectedHash: string): boolean {
+    if (typeof expectedHash !== 'string' || expectedHash.length === 0) {
+      return false
+    }
+    const actual = hashPassword(password)
+    if (actual.length !== expectedHash.length) {
+      return false
+    }
+    let mismatch = 0
+    for (let index = 0; index < expectedHash.length; index += 1) {
+      mismatch |= actual.charCodeAt(index) ^ expectedHash.charCodeAt(index)
+    }
+    return mismatch === 0
+  }
+
+  const DEFAULT_USER_PASSWORD_HASH = hashPassword(DEFAULT_USER_PASSWORD)
 
   function normalizeWorkOrder(value: unknown): WO | null {
     if (!value || typeof value !== 'object') {
@@ -889,7 +947,21 @@ function createLocalStorageStorage(): StorageApi {
     const roleRaw = (raw as { role?: unknown }).role
     const role: AppRole = roleRaw === 'admin' || roleRaw === 'editor' || roleRaw === 'viewer' ? roleRaw : 'viewer'
 
-    const email = toOptionalString(raw.email)
+    const normalizedId = idRaw || createId()
+    const email = normalizeEmail(raw.email) ?? `${normalizedId.replace(/[^a-z0-9]/gi, '').slice(0, 12) || 'user'}@local.invalid`
+    const passwordHashRaw = toOptionalString((raw as { passwordHash?: unknown }).passwordHash)
+    const passwordHash = passwordHashRaw && passwordHashRaw.startsWith('cpdb$')
+      ? passwordHashRaw
+      : (() => {
+          const fallbackPassword = toOptionalString((raw as { password?: unknown }).password)
+          if (fallbackPassword) {
+            return hashPassword(fallbackPassword)
+          }
+          if (normalizedId === DEFAULT_USER_ID) {
+            return DEFAULT_USER_PASSWORD_HASH
+          }
+          return hashPassword(DEFAULT_USER_PASSWORD)
+        })()
     const twoFactorEnabled = Boolean((raw as { twoFactorEnabled?: unknown }).twoFactorEnabled)
     let twoFactorMethod = normalizeTwoFactorMethod((raw as { twoFactorMethod?: unknown }).twoFactorMethod)
     if (!twoFactorEnabled) {
@@ -897,12 +969,13 @@ function createLocalStorageStorage(): StorageApi {
     }
 
     return {
-      id: idRaw || createId(),
+      id: normalizedId,
       name,
       email,
       role,
       twoFactorEnabled,
       twoFactorMethod,
+      passwordHash,
     }
   }
 
@@ -918,8 +991,11 @@ function createLocalStorageStorage(): StorageApi {
       {
         id: DEFAULT_USER_ID,
         name: DEFAULT_USER_NAME,
+        email: DEFAULT_USER_EMAIL,
         role: 'editor',
         twoFactorEnabled: false,
+        twoFactorMethod: undefined,
+        passwordHash: DEFAULT_USER_PASSWORD_HASH,
       },
     ]
   }
@@ -945,7 +1021,19 @@ function createLocalStorageStorage(): StorageApi {
       .map(normalizeUser)
       .filter((user): user is User => !!user)
 
-    const normalizedUsers = ensureDefaultUsers(sortUsers(users))
+    const seenIds = new Set<string>()
+    const seenEmails = new Set<string>()
+    const dedupedUsers: User[] = []
+    for (const user of users) {
+      if (seenIds.has(user.id) || seenEmails.has(user.email)) {
+        continue
+      }
+      seenIds.add(user.id)
+      seenEmails.add(user.email)
+      dedupedUsers.push(user)
+    }
+
+    const normalizedUsers = ensureDefaultUsers(sortUsers(dedupedUsers))
 
     return { customers: sortCustomers(customers), users: normalizedUsers }
   }
@@ -1079,6 +1167,7 @@ function createLocalStorageStorage(): StorageApi {
       role: user.role,
       twoFactorEnabled: user.twoFactorEnabled,
       twoFactorMethod: user.twoFactorMethod,
+      passwordHash: user.passwordHash,
     }
   }
 
@@ -1731,7 +1820,8 @@ function createLocalStorageStorage(): StorageApi {
 
     async createUser(data: {
       name: string
-      email?: string
+      email: string
+      password: string
       role: AppRole
       twoFactorEnabled: boolean
       twoFactorMethod?: TwoFactorMethod | null
@@ -1742,10 +1832,25 @@ function createLocalStorageStorage(): StorageApi {
         throw new Error('User name is required.')
       }
 
+      const email = normalizeEmail(data.email)
+      if (!email) {
+        throw new Error('Email is required.')
+      }
+      if (!isValidEmail(email)) {
+        throw new Error('Enter a valid email address.')
+      }
+      if (db.users.some(user => user.email === email)) {
+        throw new Error('A user with this email already exists.')
+      }
+
+      const password = typeof data.password === 'string' ? data.password : ''
+      if (!password.trim()) {
+        throw new Error('Password is required.')
+      }
+
       const role: AppRole =
         data.role === 'admin' || data.role === 'editor' || data.role === 'viewer' ? data.role : 'viewer'
 
-      const email = normalizeInput(data.email)
       const twoFactorEnabled = Boolean(data.twoFactorEnabled)
       let twoFactorMethod = normalizeTwoFactorMethod(data.twoFactorMethod)
       if (!twoFactorEnabled) {
@@ -1759,6 +1864,7 @@ function createLocalStorageStorage(): StorageApi {
         role,
         twoFactorEnabled,
         twoFactorMethod,
+        passwordHash: hashPassword(password),
       }
 
       const nextUsers = sortUsers([...db.users, user])
@@ -1771,6 +1877,7 @@ function createLocalStorageStorage(): StorageApi {
       data: {
         name?: string
         email?: string | null
+        password?: string | null
         role?: AppRole
         twoFactorEnabled?: boolean
         twoFactorMethod?: TwoFactorMethod | null
@@ -1790,12 +1897,36 @@ function createLocalStorageStorage(): StorageApi {
 
       let nextEmail = current.email
       if (data.email !== undefined) {
-        nextEmail = data.email === null ? undefined : normalizeInput(data.email)
+        if (data.email === null) {
+          throw new Error('Email is required.')
+        }
+        const normalizedEmail = normalizeEmail(data.email)
+        if (!normalizedEmail) {
+          throw new Error('Email is required.')
+        }
+        if (!isValidEmail(normalizedEmail)) {
+          throw new Error('Enter a valid email address.')
+        }
+        if (db.users.some(user => user.id !== userId && user.email === normalizedEmail)) {
+          throw new Error('A user with this email already exists.')
+        }
+        nextEmail = normalizedEmail
       }
 
       let nextRole = current.role
       if (data.role && (data.role === 'admin' || data.role === 'editor' || data.role === 'viewer')) {
         nextRole = data.role
+      }
+
+      let nextPasswordHash = current.passwordHash
+      if (data.password !== undefined) {
+        if (data.password === null) {
+          throw new Error('Password is required.')
+        }
+        if (!data.password.trim()) {
+          throw new Error('Password is required.')
+        }
+        nextPasswordHash = hashPassword(data.password)
       }
 
       let nextTwoFactorEnabled = current.twoFactorEnabled
@@ -1823,6 +1954,7 @@ function createLocalStorageStorage(): StorageApi {
         role: nextRole,
         twoFactorEnabled: nextTwoFactorEnabled,
         twoFactorMethod: nextTwoFactorMethod,
+        passwordHash: nextPasswordHash,
       }
 
       const nextUsers = sortUsers([
@@ -1832,6 +1964,26 @@ function createLocalStorageStorage(): StorageApi {
       ])
       saveDatabase({ customers: db.customers, users: nextUsers })
       return cloneUser(updated)
+    },
+
+    async authenticateUser(credentials: { email: string; password: string }): Promise<User> {
+      const email = normalizeEmail(credentials.email)
+      const password = typeof credentials.password === 'string' ? credentials.password : ''
+      if (!email || !password) {
+        throw new Error('Enter your email and password to sign in.')
+      }
+
+      const db = loadDatabase()
+      const user = db.users.find(entry => entry.email === email)
+      if (!user) {
+        throw new Error('Invalid email or password.')
+      }
+
+      if (!verifyPassword(password, user.passwordHash)) {
+        throw new Error('Invalid email or password.')
+      }
+
+      return cloneUser(user)
     },
 
     async deleteUser(userId: string): Promise<void> {
