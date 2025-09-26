@@ -1,5 +1,6 @@
 import type {
   AppRole,
+  BusinessSettings,
   Customer,
   CustomerContact,
   Project,
@@ -9,6 +10,7 @@ import type {
   ProjectFile,
   ProjectFileCategory,
   ProjectInfo,
+  ProjectOnsiteReport,
   ProjectStatusLogEntry,
   ProjectStatus,
   ProjectTask,
@@ -19,6 +21,8 @@ import type {
   WOType,
 } from '../types'
 import {
+  BUSINESS_DAYS,
+  DEFAULT_BUSINESS_SETTINGS,
   DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
   DEFAULT_PROJECT_STATUS,
   PROJECT_ACTIVE_SUB_STATUS_OPTIONS,
@@ -72,6 +76,7 @@ type StorageApi = {
       statusHistory?: ProjectStatusLogEntry[] | null
       customerSignOff?: ProjectCustomerSignOff | null
       info?: ProjectInfo | null
+      onsiteReports?: ProjectOnsiteReport[] | null
     },
   ): Promise<Project>
   deleteProject(projectId: string): Promise<void>
@@ -122,8 +127,14 @@ type StorageApi = {
   ): Promise<User>
   deleteUser(userId: string): Promise<void>
   authenticateUser(credentials: { email: string; password: string }): Promise<User>
-  exportDatabase(): Promise<{ customers: Customer[]; users: User[] }>
-  importDatabase(data: unknown): Promise<{ customers: Customer[]; users: User[] }>
+  exportDatabase(): Promise<{ customers: Customer[]; users: User[]; businessSettings: BusinessSettings }>
+  importDatabase(data: unknown): Promise<{
+    customers: Customer[]
+    users: User[]
+    businessSettings: BusinessSettings
+  }>
+  getBusinessSettings(): Promise<BusinessSettings>
+  updateBusinessSettings(settings: BusinessSettings): Promise<BusinessSettings>
 }
 
 let localStorageStorage: StorageApi | null = null
@@ -196,6 +207,7 @@ export function updateProject(
     statusHistory?: ProjectStatusLogEntry[] | null
     customerSignOff?: ProjectCustomerSignOff | null
     info?: ProjectInfo | null
+    onsiteReports?: ProjectOnsiteReport[] | null
   },
 ): Promise<Project> {
   return ensureLocalStorage().updateProject(projectId, data)
@@ -282,12 +294,28 @@ export function authenticateUser(credentials: { email: string; password: string 
   return ensureLocalStorage().authenticateUser(credentials)
 }
 
-export function exportDatabase(): Promise<{ customers: Customer[]; users: User[] }> {
+export function exportDatabase(): Promise<{
+  customers: Customer[]
+  users: User[]
+  businessSettings: BusinessSettings
+}> {
   return ensureLocalStorage().exportDatabase()
 }
 
-export function importDatabase(data: unknown): Promise<{ customers: Customer[]; users: User[] }> {
+export function importDatabase(data: unknown): Promise<{
+  customers: Customer[]
+  users: User[]
+  businessSettings: BusinessSettings
+}> {
   return ensureLocalStorage().importDatabase(data)
+}
+
+export function getBusinessSettings(): Promise<BusinessSettings> {
+  return ensureLocalStorage().getBusinessSettings()
+}
+
+export function updateBusinessSettings(settings: BusinessSettings): Promise<BusinessSettings> {
+  return ensureLocalStorage().updateBusinessSettings(settings)
 }
 
 function sortByText<T>(items: T[], getValue: (item: T) => string): T[] {
@@ -295,7 +323,7 @@ function sortByText<T>(items: T[], getValue: (item: T) => string): T[] {
 }
 
 function createLocalStorageStorage(): StorageApi {
-  type Database = { customers: Customer[]; users: User[] }
+  type Database = { customers: Customer[]; users: User[]; businessSettings: BusinessSettings }
 
   type StorageLike = {
     getItem(key: string): string | null
@@ -741,6 +769,69 @@ function createLocalStorageStorage(): StorageApi {
     return trimmed
   }
 
+  function normalizeTimeOnlyValue(value: unknown): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined
+    }
+    const trimmed = value.trim()
+    if (!trimmed) {
+      return undefined
+    }
+    const match = trimmed.match(/^([0-9]{1,2}):([0-9]{2})$/)
+    if (!match) {
+      return undefined
+    }
+    const hours = Number.parseInt(match[1], 10)
+    const minutes = Number.parseInt(match[2], 10)
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+      return undefined
+    }
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+      return undefined
+    }
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`
+  }
+
+  function normalizeBusinessSettings(value: unknown): BusinessSettings {
+    const base = DEFAULT_BUSINESS_SETTINGS
+    const normalized: BusinessSettings = {
+      businessName: base.businessName,
+      hours: BUSINESS_DAYS.reduce((acc, day) => {
+        const source = base.hours[day]
+        acc[day] = { ...source }
+        return acc
+      }, {} as BusinessSettings['hours']),
+    }
+
+    if (!value || typeof value !== 'object') {
+      return normalized
+    }
+
+    const raw = value as Record<string, unknown>
+    const name = toOptionalString(raw.businessName)
+    if (name) {
+      normalized.businessName = name
+    }
+
+    const hoursValue = (raw as { hours?: unknown }).hours
+    if (hoursValue && typeof hoursValue === 'object') {
+      const hoursRaw = hoursValue as Record<string, unknown>
+      for (const day of BUSINESS_DAYS) {
+        const entry = hoursRaw[day]
+        if (!entry || typeof entry !== 'object') {
+          continue
+        }
+        const entryRaw = entry as Record<string, unknown>
+        const enabled = Boolean(entryRaw.enabled)
+        const start = normalizeTimeOnlyValue(entryRaw.start) ?? normalized.hours[day].start
+        const end = normalizeTimeOnlyValue(entryRaw.end) ?? normalized.hours[day].end
+        normalized.hours[day] = { enabled, start, end }
+      }
+    }
+
+    return normalized
+  }
+
   function normalizeProjectInfo(value: unknown): ProjectInfo | undefined {
     if (!value || typeof value !== 'object') {
       return undefined
@@ -795,6 +886,51 @@ function createLocalStorageStorage(): StorageApi {
     })
 
     return hasInfo ? info : undefined
+  }
+
+  function normalizeOnsiteReport(value: unknown): ProjectOnsiteReport | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const idRaw = typeof raw.id === 'string' ? raw.id.trim() : ''
+    const reportDate =
+      normalizeDateOnlyValue((raw as { reportDate?: unknown }).reportDate) ??
+      new Date().toISOString().slice(0, 10)
+    const arrivalTime = normalizeTimeOnlyValue((raw as { arrivalTime?: unknown }).arrivalTime)
+    const departureTime = normalizeTimeOnlyValue((raw as { departureTime?: unknown }).departureTime)
+    const engineerName = toOptionalString((raw as { engineerName?: unknown }).engineerName) ?? ''
+    const customerContact = toOptionalString((raw as { customerContact?: unknown }).customerContact)
+    const siteAddress = toOptionalString((raw as { siteAddress?: unknown }).siteAddress)
+    const workSummary = toOptionalString((raw as { workSummary?: unknown }).workSummary) ?? ''
+    const materialsUsed = toOptionalString((raw as { materialsUsed?: unknown }).materialsUsed)
+    const additionalNotes = toOptionalString((raw as { additionalNotes?: unknown }).additionalNotes)
+    const signedByName = toOptionalString((raw as { signedByName?: unknown }).signedByName)
+    const signedByPosition = toOptionalString((raw as { signedByPosition?: unknown }).signedByPosition)
+    const signatureDataUrl = toOptionalString((raw as { signatureDataUrl?: unknown }).signatureDataUrl)
+    const createdAtRaw = typeof raw.createdAt === 'string' ? raw.createdAt : null
+    const createdAt =
+      createdAtRaw && !Number.isNaN(Date.parse(createdAtRaw))
+        ? createdAtRaw
+        : new Date().toISOString()
+
+    return {
+      id: idRaw || createId(),
+      reportDate,
+      arrivalTime,
+      departureTime,
+      engineerName,
+      customerContact,
+      siteAddress,
+      workSummary,
+      materialsUsed,
+      additionalNotes,
+      signedByName,
+      signedByPosition,
+      signatureDataUrl,
+      createdAt,
+    }
   }
 
   function sortContacts(contacts: CustomerContact[]): CustomerContact[] {
@@ -854,6 +990,13 @@ function createLocalStorageStorage(): StorageApi {
       .map(normalizeProjectTask)
       .filter((task): task is ProjectTask => !!task)
 
+    const onsiteReportsSource = Array.isArray((raw as { onsiteReports?: unknown }).onsiteReports)
+      ? ((raw as { onsiteReports?: unknown }).onsiteReports as unknown[])
+      : []
+    const onsiteReports = onsiteReportsSource
+      .map(normalizeOnsiteReport)
+      .filter((report): report is ProjectOnsiteReport => !!report)
+
     const info = normalizeProjectInfo((raw as { info?: unknown }).info)
 
     return {
@@ -879,6 +1022,7 @@ function createLocalStorageStorage(): StorageApi {
       customerSignOff: customerSignOff ?? undefined,
       tasks: tasks.length > 0 ? sortTasks(tasks) : [],
       info: info ?? undefined,
+      onsiteReports: onsiteReports.length > 0 ? onsiteReports : [],
     }
   }
 
@@ -1003,7 +1147,11 @@ function createLocalStorageStorage(): StorageApi {
 
   function normalizeDatabase(value: unknown): Database {
     if (!value || typeof value !== 'object') {
-      return { customers: [], users: ensureDefaultUsers([]) }
+      return {
+        customers: [],
+        users: ensureDefaultUsers([]),
+        businessSettings: DEFAULT_BUSINESS_SETTINGS,
+      }
     }
 
     const rawCustomers = Array.isArray((value as { customers?: unknown }).customers)
@@ -1036,7 +1184,15 @@ function createLocalStorageStorage(): StorageApi {
 
     const normalizedUsers = ensureDefaultUsers(sortUsers(dedupedUsers))
 
-    return { customers: sortCustomers(customers), users: normalizedUsers }
+    const businessSettings = normalizeBusinessSettings(
+      (value as { businessSettings?: unknown }).businessSettings,
+    )
+
+    return {
+      customers: sortCustomers(customers),
+      users: normalizedUsers,
+      businessSettings,
+    }
   }
 
   function readStoredDatabase(storage: StorageLike): { key: string; value: string } | null {
@@ -1059,7 +1215,11 @@ function createLocalStorageStorage(): StorageApi {
     const storage = resolveStorage()
     const stored = readStoredDatabase(storage)
     if (!stored) {
-      return { customers: [], users: ensureDefaultUsers([]) }
+      return {
+        customers: [],
+        users: ensureDefaultUsers([]),
+        businessSettings: DEFAULT_BUSINESS_SETTINGS,
+      }
     }
 
     try {
@@ -1082,7 +1242,11 @@ function createLocalStorageStorage(): StorageApi {
           // Ignore failures to clean up invalid legacy data.
         }
       }
-      return { customers: [], users: ensureDefaultUsers([]) }
+      return {
+        customers: [],
+        users: ensureDefaultUsers([]),
+        businessSettings: DEFAULT_BUSINESS_SETTINGS,
+      }
     }
   }
 
@@ -1189,6 +1353,20 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
+  function cloneOnsiteReport(report: ProjectOnsiteReport): ProjectOnsiteReport {
+    return { ...report }
+  }
+
+  function cloneBusinessSettings(settings: BusinessSettings): BusinessSettings {
+    return {
+      businessName: settings.businessName,
+      hours: BUSINESS_DAYS.reduce((acc, day) => {
+        acc[day] = { ...settings.hours[day] }
+        return acc
+      }, {} as BusinessSettings['hours']),
+    }
+  }
+
   function cloneCustomerContact(contact: CustomerContact): CustomerContact {
     return {
       id: contact.id,
@@ -1226,6 +1404,7 @@ function createLocalStorageStorage(): StorageApi {
         ? cloneCustomerSignOff(project.customerSignOff)
         : undefined,
       info: cloneProjectInfo(project.info),
+      onsiteReports: project.onsiteReports ? project.onsiteReports.map(cloneOnsiteReport) : [],
     }
   }
 
@@ -1385,7 +1564,7 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       const nextCustomers = sortCustomers([customer, ...db.customers])
-      saveDatabase({ customers: nextCustomers, users: db.users })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
       return cloneCustomer(customer)
     },
 
@@ -1423,7 +1602,11 @@ function createLocalStorageStorage(): StorageApi {
 
       const nextCustomers = [...db.customers]
       nextCustomers[index] = nextCustomer
-      saveDatabase({ customers: sortCustomers(nextCustomers), users: db.users })
+      saveDatabase({
+        customers: sortCustomers(nextCustomers),
+        users: db.users,
+        businessSettings: db.businessSettings,
+      })
       return cloneCustomer(nextCustomer)
     },
 
@@ -1436,7 +1619,7 @@ function createLocalStorageStorage(): StorageApi {
 
       const nextCustomers = [...db.customers]
       nextCustomers.splice(located.index, 1)
-      saveDatabase({ customers: nextCustomers, users: db.users })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
     },
 
     async createProject(
@@ -1517,12 +1700,17 @@ function createLocalStorageStorage(): StorageApi {
         ],
         customerSignOff: undefined,
         info: info ?? undefined,
+        onsiteReports: [],
       }
 
       const nextProjects = sortProjects([project, ...customer.projects])
       const nextCustomers = [...db.customers]
       nextCustomers[index] = { ...customer, projects: nextProjects }
-      saveDatabase({ customers: sortCustomers(nextCustomers), users: db.users })
+      saveDatabase({
+        customers: sortCustomers(nextCustomers),
+        users: db.users,
+        businessSettings: db.businessSettings,
+      })
       return cloneProject(project)
     },
 
@@ -1651,6 +1839,19 @@ function createLocalStorageStorage(): StorageApi {
         }
       }
 
+      let nextOnsiteReports = project.onsiteReports ?? []
+      if ((data as { onsiteReports?: ProjectOnsiteReport[] | null }).onsiteReports !== undefined) {
+        const reports = (data as { onsiteReports?: ProjectOnsiteReport[] | null }).onsiteReports
+        if (reports === null) {
+          nextOnsiteReports = []
+        } else if (Array.isArray(reports)) {
+          const normalized = reports
+            .map(normalizeOnsiteReport)
+            .filter((report): report is ProjectOnsiteReport => !!report)
+          nextOnsiteReports = normalized
+        }
+      }
+
       const nextProject: Project = {
         ...project,
         status: nextStatus,
@@ -1660,13 +1861,14 @@ function createLocalStorageStorage(): StorageApi {
         statusHistory: normalizedStatusHistory,
         customerSignOff: nextCustomerSignOff,
         info: nextInfo,
+        onsiteReports: nextOnsiteReports,
       }
 
       const updatedProjects = [...customer.projects]
       updatedProjects[projectIndex] = nextProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
       return cloneProject(nextProject)
     },
 
@@ -1682,7 +1884,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects.splice(projectIndex, 1)
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
     },
 
     async createWO(projectId: string, data: { number: string; type: WOType; note?: string }): Promise<WO> {
@@ -1709,7 +1911,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
       return cloneWorkOrder(workOrder)
     },
 
@@ -1728,7 +1930,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
     },
 
     async createTask(
@@ -1765,7 +1967,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
       return cloneProjectTask(task)
     },
 
@@ -1831,7 +2033,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
       return cloneProjectTask(updated)
     },
 
@@ -1855,7 +2057,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
     },
 
     async createUser(data: {
@@ -1908,7 +2110,7 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       const nextUsers = sortUsers([...db.users, user])
-      saveDatabase({ customers: db.customers, users: nextUsers })
+      saveDatabase({ customers: db.customers, users: nextUsers, businessSettings: db.businessSettings })
       return cloneUser(user)
     },
 
@@ -2002,7 +2204,7 @@ function createLocalStorageStorage(): StorageApi {
         updated,
         ...db.users.slice(index + 1),
       ])
-      saveDatabase({ customers: db.customers, users: nextUsers })
+      saveDatabase({ customers: db.customers, users: nextUsers, businessSettings: db.businessSettings })
       return cloneUser(updated)
     },
 
@@ -2032,18 +2234,27 @@ function createLocalStorageStorage(): StorageApi {
       if (nextUsers.length === db.users.length) {
         throw new Error('User not found.')
       }
-      saveDatabase({ customers: db.customers, users: nextUsers })
+      saveDatabase({ customers: db.customers, users: nextUsers, businessSettings: db.businessSettings })
     },
 
-    async exportDatabase(): Promise<{ customers: Customer[]; users: User[] }> {
+    async exportDatabase(): Promise<{
+      customers: Customer[]
+      users: User[]
+      businessSettings: BusinessSettings
+    }> {
       const db = loadDatabase()
       return {
         customers: db.customers.map(cloneCustomer),
         users: db.users.map(cloneUser),
+        businessSettings: cloneBusinessSettings(db.businessSettings),
       }
     },
 
-    async importDatabase(data: unknown): Promise<{ customers: Customer[]; users: User[] }> {
+    async importDatabase(data: unknown): Promise<{
+      customers: Customer[]
+      users: User[]
+      businessSettings: BusinessSettings
+    }> {
       let source: unknown = data
       if (typeof data === 'string') {
         try {
@@ -2058,7 +2269,20 @@ function createLocalStorageStorage(): StorageApi {
       return {
         customers: normalized.customers.map(cloneCustomer),
         users: normalized.users.map(cloneUser),
+        businessSettings: cloneBusinessSettings(normalized.businessSettings),
       }
+    },
+
+    async getBusinessSettings(): Promise<BusinessSettings> {
+      const db = loadDatabase()
+      return cloneBusinessSettings(db.businessSettings)
+    },
+
+    async updateBusinessSettings(settings: BusinessSettings): Promise<BusinessSettings> {
+      const normalized = normalizeBusinessSettings(settings)
+      const db = loadDatabase()
+      saveDatabase({ customers: db.customers, users: db.users, businessSettings: normalized })
+      return cloneBusinessSettings(normalized)
     },
   }
 }

@@ -1,5 +1,10 @@
 import type { ProjectInfo, User } from '../types'
 
+export type ProjectInfoDraftDefaults = {
+  startDate?: string
+  proposedCompletionDate?: string
+}
+
 export type ProjectInfoDraft = {
   lineReference: string
   machineSerialNumbers: string
@@ -11,7 +16,11 @@ export type ProjectInfoDraft = {
   proposedCompletionDate: string
 }
 
-export function createProjectInfoDraft(info: ProjectInfo | undefined, users: User[]): ProjectInfoDraft {
+export function createProjectInfoDraft(
+  info: ProjectInfo | undefined,
+  users: User[],
+  defaults: ProjectInfoDraftDefaults = {},
+): ProjectInfoDraft {
   let salespersonId = info?.salespersonId ?? ''
   if (salespersonId && !users.some(user => user.id === salespersonId)) {
     salespersonId = ''
@@ -33,8 +42,8 @@ export function createProjectInfoDraft(info: ProjectInfo | undefined, users: Use
     cobaltOrderNumber: info?.cobaltOrderNumber ?? '',
     customerOrderNumber: info?.customerOrderNumber ?? '',
     salespersonId,
-    startDate: info?.startDate ?? '',
-    proposedCompletionDate: info?.proposedCompletionDate ?? '',
+    startDate: info?.startDate ?? defaults.startDate ?? '',
+    proposedCompletionDate: info?.proposedCompletionDate ?? defaults.proposedCompletionDate ?? '',
   }
 }
 

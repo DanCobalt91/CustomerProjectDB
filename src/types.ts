@@ -64,6 +64,59 @@ export type ProjectInfo = {
   proposedCompletionDate?: string;
 };
 
+export const BUSINESS_DAYS = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+] as const;
+
+export type BusinessDay = (typeof BUSINESS_DAYS)[number];
+
+export type BusinessDayHours = {
+  enabled: boolean;
+  start: string; // HH:MM (24h)
+  end: string; // HH:MM (24h)
+};
+
+export type BusinessSettings = {
+  businessName: string;
+  hours: Record<BusinessDay, BusinessDayHours>;
+};
+
+export const DEFAULT_BUSINESS_SETTINGS: BusinessSettings = {
+  businessName: 'Cobalt Systems',
+  hours: {
+    monday: { enabled: true, start: '08:30', end: '17:00' },
+    tuesday: { enabled: true, start: '08:30', end: '17:00' },
+    wednesday: { enabled: true, start: '08:30', end: '17:00' },
+    thursday: { enabled: true, start: '08:30', end: '17:00' },
+    friday: { enabled: true, start: '08:30', end: '17:00' },
+    saturday: { enabled: false, start: '09:00', end: '13:00' },
+    sunday: { enabled: false, start: '09:00', end: '13:00' },
+  },
+};
+
+export type ProjectOnsiteReport = {
+  id: string;
+  reportDate: string;
+  arrivalTime?: string;
+  departureTime?: string;
+  engineerName: string;
+  customerContact?: string;
+  siteAddress?: string;
+  workSummary: string;
+  materialsUsed?: string;
+  additionalNotes?: string;
+  signedByName?: string;
+  signedByPosition?: string;
+  signatureDataUrl?: string;
+  createdAt: string;
+};
+
 export type CustomerSignOffDecision = 'option1' | 'option2' | 'option3';
 
 export const CUSTOMER_SIGN_OFF_DECISIONS: CustomerSignOffDecision[] = ['option1', 'option2', 'option3'];
@@ -123,6 +176,7 @@ export type Project = {
   customerSignOff?: ProjectCustomerSignOff;
   tasks?: ProjectTask[];
   info?: ProjectInfo;
+  onsiteReports?: ProjectOnsiteReport[];
 };
 
 export type CustomerContact = {
