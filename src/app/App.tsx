@@ -4856,7 +4856,7 @@ function AppContent() {
   if (isLoading) {
     return (
       <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
-        <div className='mx-auto flex min-h-[60vh] max-w-6xl flex-col items-center justify-center gap-4 text-center text-slate-600'>
+        <div className='flex min-h-[60vh] flex-col items-center justify-center gap-4 text-center text-slate-600'>
           <span className='h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-sky-500' aria-hidden />
           <p className='text-sm font-medium text-slate-500'>Loading customers…</p>
         </div>
@@ -4912,6 +4912,8 @@ function AppContent() {
     }
   }
 
+  const businessTitle = businessSettings.businessName.trim() || 'CustomerProjectDB'
+
   const pageHeading =
     activePage === 'home'
       ? 'Workspace Overview'
@@ -4955,22 +4957,20 @@ function AppContent() {
       <Card className='panel'>
         <CardHeader>
           <div>
-            <h1 className='text-2xl font-semibold tracking-tight text-slate-900'>CustomerProjectDB</h1>
+            <h1 className='text-2xl font-semibold tracking-tight text-slate-900'>{businessTitle}</h1>
           </div>
         </CardHeader>
         <CardContent>
           <div className='space-y-4'>
             <div className='relative'>
-              <Label htmlFor='global-search' className='sr-only'>
-                Search customers or projects
-              </Label>
+              <Label htmlFor='global-search' className='sr-only'>Search</Label>
               <Search size={16} className='pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400' />
               <Input
                 id='global-search'
                 value={globalSearchQuery}
                 onChange={(event) => setGlobalSearchQuery((event.target as HTMLInputElement).value)}
                 onKeyDown={handleGlobalSearchKeyDown}
-                placeholder='Search customers or projects…'
+                placeholder='Search…'
                 autoComplete='off'
                 className='pl-9 pr-10'
               />
@@ -5054,7 +5054,7 @@ function AppContent() {
 
   return (
     <div className='min-h-screen bg-gradient-to-br from-white/70 via-[#f3f6ff]/80 to-[#dee9ff]/80 px-4 py-8 text-slate-900 md:px-10'>
-      <div className='mx-auto flex max-w-6xl gap-6'>
+      <div className='flex w-full gap-6'>
         <div className='hidden w-72 shrink-0 md:block'>
           <div className='sticky top-6 flex flex-col gap-6'>{sidebarPanels}</div>
         </div>
