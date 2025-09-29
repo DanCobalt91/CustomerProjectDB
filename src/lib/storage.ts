@@ -2,6 +2,8 @@ import type {
   AppRole,
   BusinessSettings,
   Customer,
+  CustomerSite,
+  CustomerSubCustomer,
   CustomerContact,
   Project,
   ProjectActiveSubStatus,
@@ -37,6 +39,11 @@ const DEFAULT_USER_EMAIL = 'demo@example.com'
 const DEFAULT_USER_PASSWORD = 'Demo@123'
 
 type ContactInput = Partial<Omit<CustomerContact, 'id'>> & { id?: string }
+type CustomerSiteInput = Partial<Omit<CustomerSite, 'id'>> & { id?: string }
+type CustomerSubCustomerInput = Partial<Omit<CustomerSubCustomer, 'id' | 'name'>> & {
+  id?: string
+  name?: string
+}
 type ProjectDocumentsUpdate = Partial<Record<ProjectFileCategory, ProjectFile[] | ProjectFile | null>>
 
 type StorageApi = {
@@ -48,6 +55,8 @@ type StorageApi = {
     name: string
     address?: string
     contacts?: ContactInput[]
+    sites?: CustomerSiteInput[]
+    subCustomers?: CustomerSubCustomerInput[]
   }): Promise<Customer>
   updateCustomer(
     customerId: string,
@@ -55,6 +64,8 @@ type StorageApi = {
       name?: string
       address?: string | null
       contacts?: ContactInput[] | null
+      sites?: CustomerSiteInput[] | null
+      subCustomers?: CustomerSubCustomerInput[] | null
     },
   ): Promise<Customer>
   deleteCustomer(customerId: string): Promise<void>
@@ -167,6 +178,8 @@ export function createCustomer(data: {
   name: string
   address?: string
   contacts?: ContactInput[]
+  sites?: CustomerSiteInput[]
+  subCustomers?: CustomerSubCustomerInput[]
 }): Promise<Customer> {
   return ensureLocalStorage().createCustomer(data)
 }
@@ -177,6 +190,8 @@ export function updateCustomer(
     name?: string
     address?: string | null
     contacts?: ContactInput[] | null
+    sites?: CustomerSiteInput[] | null
+    subCustomers?: CustomerSubCustomerInput[] | null
   },
 ): Promise<Customer> {
   return ensureLocalStorage().updateCustomer(customerId, data)
@@ -645,6 +660,62 @@ function createLocalStorageStorage(): StorageApi {
     return PROJECT_FILE_CATEGORIES.some(category => (documents[category]?.length ?? 0) > 0)
   }
 
+  function normalizeCustomerSite(value: unknown): CustomerSite | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const name = toOptionalString(raw.name)
+    const address = toOptionalString(raw.address)
+    const notes = toOptionalString(raw.notes)
+
+    if (!name && !address && !notes) {
+      return null
+    }
+
+    const idRaw = typeof raw.id === 'string' ? raw.id.trim() : ''
+    return {
+      id: idRaw || createId(),
+      name,
+      address,
+      notes,
+    }
+  }
+
+  function normalizeCustomerSubCustomer(
+    value: unknown,
+    availableSites?: CustomerSite[],
+  ): CustomerSubCustomer | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const name = toOptionalString(raw.name)
+    if (!name) {
+      return null
+    }
+
+    const idRaw = typeof raw.id === 'string' ? raw.id.trim() : ''
+    const address = toOptionalString(raw.address)
+    const notes = toOptionalString(raw.notes)
+    const siteIdRaw = toOptionalString((raw as { siteId?: unknown }).siteId)
+
+    let siteId: string | undefined
+    if (siteIdRaw && (!availableSites || availableSites.some(site => site.id === siteIdRaw))) {
+      siteId = siteIdRaw
+    }
+
+    return {
+      id: idRaw || createId(),
+      name,
+      address,
+      notes,
+      siteId,
+    }
+  }
+
   function normalizeCustomerContact(value: unknown): CustomerContact | null {
     if (!value || typeof value !== 'object') {
       return null
@@ -939,6 +1010,14 @@ function createLocalStorageStorage(): StorageApi {
     return sortByText(contacts, contact => contact.name || contact.position || contact.email || contact.phone || contact.id)
   }
 
+  function sortSites(sites: CustomerSite[]): CustomerSite[] {
+    return sortByText(sites, site => site.name || site.address || site.id)
+  }
+
+  function sortSubCustomers(subCustomers: CustomerSubCustomer[]): CustomerSubCustomer[] {
+    return sortByText(subCustomers, subCustomer => subCustomer.name || subCustomer.id)
+  }
+
   function normalizeProject(value: unknown): Project | null {
     if (!value || typeof value !== 'object') {
       return null
@@ -1045,6 +1124,18 @@ function createLocalStorageStorage(): StorageApi {
       .map(normalizeProject)
       .filter((project): project is Project => !!project)
 
+    const sitesSource = Array.isArray((raw as { sites?: unknown }).sites)
+      ? ((raw as { sites?: unknown }).sites as unknown[])
+      : []
+    let sites = sitesSource.map(normalizeCustomerSite).filter((site): site is CustomerSite => !!site)
+
+    if (sites.length === 0) {
+      const fallbackSite = normalizeCustomerSite({ address: raw.address })
+      if (fallbackSite) {
+        sites = [fallbackSite]
+      }
+    }
+
     const contactsSource = Array.isArray((raw as { contacts?: unknown }).contacts)
       ? ((raw as { contacts?: unknown }).contacts as unknown[])
       : []
@@ -1063,10 +1154,21 @@ function createLocalStorageStorage(): StorageApi {
       }
     }
 
+    const subCustomersSource = Array.isArray((raw as { subCustomers?: unknown }).subCustomers)
+      ? ((raw as { subCustomers?: unknown }).subCustomers as unknown[])
+      : []
+    const subCustomers = subCustomersSource
+      .map(entry => normalizeCustomerSubCustomer(entry, sites))
+      .filter((entry): entry is CustomerSubCustomer => !!entry)
+
+    const address = toOptionalString(raw.address) ?? sites[0]?.address
+
     return {
       id,
       name,
-      address: toOptionalString(raw.address),
+      address,
+      sites: sortSites(sites),
+      subCustomers: sortSubCustomers(subCustomers),
       contacts: sortContacts(contacts),
       projects: sortProjects(projects),
     }
@@ -1379,6 +1481,25 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
+  function cloneCustomerSite(site: CustomerSite): CustomerSite {
+    return {
+      id: site.id,
+      name: site.name,
+      address: site.address,
+      notes: site.notes,
+    }
+  }
+
+  function cloneCustomerSubCustomer(subCustomer: CustomerSubCustomer): CustomerSubCustomer {
+    return {
+      id: subCustomer.id,
+      name: subCustomer.name,
+      address: subCustomer.address,
+      notes: subCustomer.notes,
+      siteId: subCustomer.siteId,
+    }
+  }
+
   function cloneUser(user: User): User {
     return {
       id: user.id,
@@ -1415,6 +1536,8 @@ function createLocalStorageStorage(): StorageApi {
       id: customer.id,
       name: customer.name,
       address: customer.address,
+      sites: customer.sites.map(cloneCustomerSite),
+      subCustomers: customer.subCustomers.map(cloneCustomerSubCustomer),
       contacts: customer.contacts.map(cloneCustomerContact),
       projects: customer.projects.map(cloneProject),
     }
@@ -1549,6 +1672,8 @@ function createLocalStorageStorage(): StorageApi {
       name: string
       address?: string
       contacts?: ContactInput[]
+      sites?: CustomerSiteInput[]
+      subCustomers?: CustomerSubCustomerInput[]
     }): Promise<Customer> {
       const db = loadDatabase()
       const contactsSource = Array.isArray(data.contacts) ? data.contacts : []
@@ -1557,10 +1682,32 @@ function createLocalStorageStorage(): StorageApi {
           .map(normalizeCustomerContact)
           .filter((contact): contact is CustomerContact => !!contact),
       )
+
+      const sitesSource = Array.isArray(data.sites) ? data.sites : []
+      let sites = sitesSource
+        .map(normalizeCustomerSite)
+        .filter((site): site is CustomerSite => !!site)
+      if (sites.length === 0) {
+        const fallbackSite = normalizeCustomerSite({ address: data.address })
+        if (fallbackSite) {
+          sites = [fallbackSite]
+        }
+      }
+      sites = sortSites(sites)
+
+      const subCustomersSource = Array.isArray(data.subCustomers) ? data.subCustomers : []
+      const subCustomers = sortSubCustomers(
+        subCustomersSource
+          .map(entry => normalizeCustomerSubCustomer(entry, sites))
+          .filter((entry): entry is CustomerSubCustomer => !!entry),
+      )
+
       const customer: Customer = {
         id: createId(),
         name: data.name.trim(),
-        address: normalizeInput(data.address),
+        address: normalizeInput(data.address) ?? sites[0]?.address,
+        sites,
+        subCustomers,
         contacts,
         projects: [],
       }
@@ -1576,6 +1723,8 @@ function createLocalStorageStorage(): StorageApi {
         name?: string
         address?: string | null
         contacts?: ContactInput[] | null
+        sites?: CustomerSiteInput[] | null
+        subCustomers?: CustomerSubCustomerInput[] | null
       },
     ): Promise<Customer> {
       const db = loadDatabase()
@@ -1595,10 +1744,38 @@ function createLocalStorageStorage(): StorageApi {
                 .map(normalizeCustomerContact)
                 .filter((contact): contact is CustomerContact => !!contact),
             )
+      const sites =
+        data.sites === undefined
+          ? customer.sites
+          : data.sites === null
+          ? []
+          : sortSites(
+              data.sites
+                .map(normalizeCustomerSite)
+                .filter((site): site is CustomerSite => !!site),
+            )
+      const subCustomers =
+        data.subCustomers === undefined
+          ? customer.subCustomers
+          : data.subCustomers === null
+          ? []
+          : sortSubCustomers(
+              data.subCustomers
+                .map(entry => normalizeCustomerSubCustomer(entry, sites))
+                .filter((entry): entry is CustomerSubCustomer => !!entry),
+            )
+
+      let nextAddress = applyNullable(customer.address, data.address)
+      if (data.address === undefined && !nextAddress && sites.length > 0) {
+        nextAddress = sites[0]?.address
+      }
+
       const nextCustomer: Customer = {
         ...customer,
         name: typeof data.name === 'string' ? data.name.trim() || customer.name : customer.name,
-        address: applyNullable(customer.address, data.address),
+        address: nextAddress,
+        sites,
+        subCustomers,
         contacts,
       }
 
@@ -1611,7 +1788,6 @@ function createLocalStorageStorage(): StorageApi {
       })
       return cloneCustomer(nextCustomer)
     },
-
     async deleteCustomer(customerId: string): Promise<void> {
       const db = loadDatabase()
       const located = locateCustomer(db, customerId)
