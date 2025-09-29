@@ -114,6 +114,7 @@ export type ProjectOnsiteReport = {
   signedByName?: string;
   signedByPosition?: string;
   signatureDataUrl?: string;
+  pdfDataUrl?: string;
   createdAt: string;
 };
 

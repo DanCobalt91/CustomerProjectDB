@@ -69,7 +69,7 @@ import {
   updateBusinessSettings as updateBusinessSettingsRecord,
 } from '../lib/storage'
 import { createId } from '../lib/id'
-import { generateCustomerSignOffPdf } from '../lib/signOff'
+import { generateCustomerSignOffPdf, generateOnsiteReportPdf } from '../lib/signOff'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
@@ -82,6 +82,7 @@ import {
   type ProjectInfoDraft,
   type ProjectInfoDraftDefaults,
 } from '../lib/projectInfo'
+import type { OnsiteReportSubmission } from '../lib/onsiteReport'
 
 const PROJECT_FILE_MIME_BY_EXTENSION: Record<string, string> = {
   pdf: 'application/pdf',
@@ -2063,6 +2064,20 @@ function AppContent() {
         onRemoveCustomerSignOff={() =>
           removeCustomerSignOff(selectedProjectData.customer.id, selectedProjectData.project.id)
         }
+        onCreateOnsiteReport={(submission) =>
+          createOnsiteReport(
+            selectedProjectData.customer.id,
+            selectedProjectData.project.id,
+            submission,
+          )
+        }
+        onDeleteOnsiteReport={(reportId) =>
+          deleteOnsiteReport(
+            selectedProjectData.customer.id,
+            selectedProjectData.project.id,
+            reportId,
+          )
+        }
         onDeleteProject={() => {
           void deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)
           setActivePage('projects')
@@ -3881,6 +3896,184 @@ function AppContent() {
     } catch (error) {
       console.error('Failed to generate customer sign off', error)
       const message = toErrorMessage(error, 'Failed to generate customer sign off.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function createOnsiteReport(
+    customerId: string,
+    projectId: string,
+    submission: OnsiteReportSubmission,
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to create onsite reports.'
+      setActionError(message)
+      return message
+    }
+
+    const customer = db.find(entry => entry.id === customerId)
+    const project = customer?.projects.find(entry => entry.id === projectId)
+    if (!customer || !project) {
+      const message = 'Project not found.'
+      setActionError(message)
+      return message
+    }
+
+    const reportDate = submission.reportDate?.trim()
+    if (!reportDate) {
+      return 'Select the report date.'
+    }
+
+    const engineerName = submission.engineerName.trim()
+    if (!engineerName) {
+      return 'Enter the engineer name.'
+    }
+
+    const workSummary = submission.workSummary.trim()
+    if (!workSummary) {
+      return 'Enter the work summary.'
+    }
+
+    const signedByName = submission.signedByName.trim()
+    if (!signedByName) {
+      return 'Enter the customer name.'
+    }
+
+    if (submission.signaturePaths.length === 0) {
+      return 'Capture a signature to continue.'
+    }
+
+    const createdAt = new Date().toISOString()
+
+    try {
+      const pdfDataUrl = await generateOnsiteReportPdf({
+        projectNumber: project.number,
+        customerName: customer.name,
+        siteAddress: submission.siteAddress,
+        reportDate,
+        arrivalTime: submission.arrivalTime,
+        departureTime: submission.departureTime,
+        engineerName,
+        customerContact: submission.customerContact,
+        workSummary,
+        materialsUsed: submission.materialsUsed,
+        additionalNotes: submission.additionalNotes,
+        signedByName,
+        signedByPosition: submission.signedByPosition,
+        signaturePaths: submission.signaturePaths,
+        signatureDimensions: submission.signatureDimensions,
+        createdAt,
+      })
+
+      const report: ProjectOnsiteReport = {
+        id: createId(),
+        reportDate,
+        arrivalTime: submission.arrivalTime?.trim() || undefined,
+        departureTime: submission.departureTime?.trim() || undefined,
+        engineerName,
+        customerContact: submission.customerContact?.trim() || undefined,
+        siteAddress: submission.siteAddress?.trim() || undefined,
+        workSummary,
+        materialsUsed: submission.materialsUsed?.trim() || undefined,
+        additionalNotes: submission.additionalNotes?.trim() || undefined,
+        signedByName,
+        signedByPosition: submission.signedByPosition?.trim() || undefined,
+        signatureDataUrl: submission.signatureDataUrl,
+        pdfDataUrl,
+        createdAt,
+      }
+
+      const existingReports = project.onsiteReports ?? []
+      const nextReports = [...existingReports, report]
+
+      setDb(prev =>
+        prev.map(entry =>
+          entry.id !== customerId
+            ? entry
+            : {
+                ...entry,
+                projects: entry.projects.map(projectEntry =>
+                  projectEntry.id !== projectId
+                    ? projectEntry
+                    : {
+                        ...projectEntry,
+                        onsiteReports: nextReports,
+                      },
+                ),
+              },
+        ),
+      )
+
+      try {
+        await updateProjectRecord(projectId, { onsiteReports: nextReports })
+        setActionError(null)
+        return null
+      } catch (error) {
+        console.error('Failed to save onsite report', error)
+        const message = toErrorMessage(error, 'Failed to save onsite report.')
+        setActionError(message)
+        return message
+      }
+    } catch (error) {
+      console.error('Failed to generate onsite report', error)
+      const message = toErrorMessage(error, 'Failed to generate onsite report.')
+      setActionError(message)
+      return message
+    }
+  }
+
+  async function deleteOnsiteReport(
+    customerId: string,
+    projectId: string,
+    reportId: string,
+  ): Promise<string | null> {
+    if (!canEdit) {
+      const message = 'Not authorized to remove onsite reports.'
+      setActionError(message)
+      return message
+    }
+
+    const customer = db.find(entry => entry.id === customerId)
+    const project = customer?.projects.find(entry => entry.id === projectId)
+    if (!customer || !project) {
+      const message = 'Project not found.'
+      setActionError(message)
+      return message
+    }
+
+    const existingReports = project.onsiteReports ?? []
+    if (!existingReports.some(report => report.id === reportId)) {
+      return 'Onsite report not found.'
+    }
+
+    const nextReports = existingReports.filter(report => report.id !== reportId)
+
+    setDb(prev =>
+      prev.map(entry =>
+        entry.id !== customerId
+          ? entry
+          : {
+              ...entry,
+              projects: entry.projects.map(projectEntry =>
+                projectEntry.id !== projectId
+                  ? projectEntry
+                  : {
+                      ...projectEntry,
+                      onsiteReports: nextReports,
+                    },
+              ),
+            },
+      ),
+    )
+
+    try {
+      await updateProjectRecord(projectId, { onsiteReports: nextReports })
+      setActionError(null)
+      return null
+    } catch (error) {
+      console.error('Failed to remove onsite report', error)
+      const message = toErrorMessage(error, 'Failed to remove onsite report.')
       setActionError(message)
       return message
     }

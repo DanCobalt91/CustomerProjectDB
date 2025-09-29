@@ -24,6 +24,7 @@ import type {
   ProjectFile,
   ProjectFileCategory,
   ProjectInfo,
+  ProjectOnsiteReport,
   ProjectStatus,
   WOType,
   CustomerSignOffDecision,
@@ -50,6 +51,7 @@ import {
   parseProjectInfoDraft,
   type ProjectInfoDraft,
 } from '../lib/projectInfo'
+import type { OnsiteReportSubmission } from '../lib/onsiteReport'
 
 export type ProjectPageProps = {
   customer: Customer
@@ -72,6 +74,8 @@ export type ProjectPageProps = {
   onUploadCustomerSignOff: (file: File) => Promise<string | null>
   onGenerateCustomerSignOff: (submission: CustomerSignOffSubmission) => Promise<string | null>
   onRemoveCustomerSignOff: () => Promise<string | null>
+  onCreateOnsiteReport: (submission: OnsiteReportSubmission) => Promise<string | null>
+  onDeleteOnsiteReport: (reportId: string) => Promise<string | null>
   onDeleteProject: () => void
   onNavigateToCustomer: () => void
   onReturnToIndex: () => void
@@ -155,6 +159,7 @@ const PROJECT_TABS = [
 
 type ProjectTab = (typeof PROJECT_TABS)[number]['value']
 type UploadCategory = ProjectFileCategory | 'finalAcceptance'
+type ProjectFileTab = 'all' | ProjectFileCategory
 type TaskFormState = {
   name: string
   start: string
@@ -162,6 +167,28 @@ type TaskFormState = {
   assigneeId: string
   status: ProjectTaskStatus
 }
+
+type OnsiteReportDraft = {
+  reportDate: string
+  arrivalTime: string
+  departureTime: string
+  engineerName: string
+  customerContact: string
+  siteAddress: string
+  workSummary: string
+  materialsUsed: string
+  additionalNotes: string
+  signedByName: string
+  signedByPosition: string
+}
+
+const PROJECT_FILE_TAB_OPTIONS: Array<{ value: ProjectFileTab; label: string }> = [
+  { value: 'all', label: 'All files' },
+  { value: 'fds', label: 'FDS' },
+  { value: 'mechanical', label: 'Mechanical' },
+  { value: 'electrical', label: 'Electrical' },
+  { value: 'installation', label: 'Installation' },
+]
 
 function stripPrefix(value: string, pattern: RegExp): string {
   const trimmed = value.trim()
@@ -337,6 +364,8 @@ export default function ProjectPage({
   onUploadCustomerSignOff,
   onGenerateCustomerSignOff,
   onRemoveCustomerSignOff,
+  onCreateOnsiteReport,
+  onDeleteOnsiteReport,
   onDeleteProject,
   onNavigateToCustomer,
   onReturnToIndex,
@@ -390,6 +419,7 @@ export default function ProjectPage({
   const [showStatusHistory, setShowStatusHistory] = useState(false)
   const [isUploadDialogOpen, setIsUploadDialogOpen] = useState(false)
   const [uploadDialogCategory, setUploadDialogCategory] = useState<UploadCategory>('fds')
+  const [activeFileTab, setActiveFileTab] = useState<ProjectFileTab>('all')
   const [uploadDialogFile, setUploadDialogFile] = useState<File | null>(null)
   const [uploadDialogError, setUploadDialogError] = useState<string | null>(null)
   const [isSubmittingUpload, setIsSubmittingUpload] = useState(false)
@@ -447,6 +477,37 @@ export default function ProjectPage({
   const currentUserDisplayName = currentUser?.name ?? currentUserName
   const sortedUsers = useMemo(() => [...users].sort((a, b) => a.name.localeCompare(b.name)), [users])
 
+  const buildDefaultOnsiteReportDraft = useCallback((): OnsiteReportDraft => {
+    const now = new Date()
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+    return {
+      reportDate: local.toISOString().slice(0, 10),
+      arrivalTime: '',
+      departureTime: '',
+      engineerName: currentUserDisplayName,
+      customerContact: customer.contacts[0]?.name ?? '',
+      siteAddress: customer.address ?? '',
+      workSummary: '',
+      materialsUsed: '',
+      additionalNotes: '',
+      signedByName: '',
+      signedByPosition: '',
+    }
+  }, [currentUserDisplayName, customer.address, customer.contacts])
+
+  const [onsiteReportDraft, setOnsiteReportDraft] = useState<OnsiteReportDraft>(() =>
+    buildDefaultOnsiteReportDraft(),
+  )
+  const [isCreatingOnsiteReport, setIsCreatingOnsiteReport] = useState(false)
+  const [isSavingOnsiteReport, setIsSavingOnsiteReport] = useState(false)
+  const [onsiteReportError, setOnsiteReportError] = useState<string | null>(null)
+  const [onsiteHasSignature, setOnsiteHasSignature] = useState(false)
+  const [removingOnsiteReportId, setRemovingOnsiteReportId] = useState<string | null>(null)
+  const onsiteSignatureCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const onsiteSignatureDrawingRef = useRef(false)
+  const onsiteSignatureStrokesRef = useRef<Array<Array<{ x: number; y: number }>>>([])
+  const onsiteActiveSignatureStrokeRef = useRef<number | null>(null)
+
   const documents = project.documents ?? {}
   const documentsCount = useMemo(() => {
     const projectFilesCount = PROJECT_FILE_CATEGORIES.reduce(
@@ -495,6 +556,18 @@ export default function ProjectPage({
     setHasSignature(false)
   }, [])
 
+  const resetOnsiteSignature = useCallback(() => {
+    const canvas = onsiteSignatureCanvasRef.current
+    const context = canvas?.getContext('2d') ?? null
+    if (canvas && context) {
+      context.clearRect(0, 0, canvas.width, canvas.height)
+    }
+    onsiteSignatureDrawingRef.current = false
+    onsiteActiveSignatureStrokeRef.current = null
+    onsiteSignatureStrokesRef.current = []
+    setOnsiteHasSignature(false)
+  }, [])
+
   useEffect(() => {
     setTaskForm({ name: '', start: '', end: '', assigneeId: '', status: PROJECT_TASK_STATUSES[0] })
     setTaskError(null)
@@ -510,6 +583,8 @@ export default function ProjectPage({
       return
     }
     setNoteDraft(project.note ?? '')
+    setInfoDraft(createProjectInfoDraft(project.info, users))
+    setInfoError(null)
     setIsNoteDialogOpen(true)
   }
 
@@ -528,6 +603,7 @@ export default function ProjectPage({
     setRemovingFile(null)
     setExpandedPreviews(new Set())
     setActiveTab('tasks')
+    setActiveFileTab('all')
     setIsUploadingSignOff(false)
     setIsRemovingSignOff(false)
     setIsGeneratingSignOff(false)
@@ -536,7 +612,24 @@ export default function ProjectPage({
     setSignOffDraft({ name: '', position: '', decision: 'option1', snagsText: '' })
     resetSignature()
     setShowStatusHistory(false)
-  }, [project.id, resetSignature])
+    setIsCreatingOnsiteReport(false)
+    setIsSavingOnsiteReport(false)
+    setOnsiteReportError(null)
+    setOnsiteHasSignature(false)
+    setRemovingOnsiteReportId(null)
+    onsiteSignatureStrokesRef.current = []
+    onsiteActiveSignatureStrokeRef.current = null
+    setOnsiteReportDraft(buildDefaultOnsiteReportDraft())
+    resetOnsiteSignature()
+  }, [
+    project.id,
+    resetSignature,
+    project.activeSubStatus,
+    project.note,
+    project.status,
+    buildDefaultOnsiteReportDraft,
+    resetOnsiteSignature,
+  ])
 
   useEffect(() => {
     if (!isNoteDialogOpen) {
@@ -584,6 +677,34 @@ export default function ProjectPage({
     context.beginPath()
   }, [isGeneratingSignOff])
 
+  useEffect(() => {
+    if (!isCreatingOnsiteReport) {
+      return
+    }
+    const canvas = onsiteSignatureCanvasRef.current
+    if (!canvas) {
+      return
+    }
+    const context = canvas.getContext('2d')
+    if (!context) {
+      return
+    }
+    const ratio = window.devicePixelRatio || 1
+    const rect = canvas.getBoundingClientRect()
+    canvas.width = rect.width * ratio
+    canvas.height = rect.height * ratio
+    context.setTransform(1, 0, 0, 1, 0, 0)
+    context.scale(ratio, ratio)
+    context.lineCap = 'round'
+    context.lineJoin = 'round'
+    context.lineWidth = 2
+    context.strokeStyle = '#111827'
+    onsiteSignatureDrawingRef.current = false
+    onsiteActiveSignatureStrokeRef.current = null
+    onsiteSignatureStrokesRef.current = []
+    context.beginPath()
+  }, [isCreatingOnsiteReport])
+
   const updateFileError = (category: ProjectFileCategory, message: string | null) => {
     setFileErrors(prev => ({ ...prev, [category]: message }))
   }
@@ -594,7 +715,8 @@ export default function ProjectPage({
       setIsUploadDialogOpen(true)
       return
     }
-    setUploadDialogCategory('fds')
+    const defaultCategory: UploadCategory = activeFileTab === 'all' ? 'fds' : activeFileTab
+    setUploadDialogCategory(defaultCategory)
     setUploadDialogFile(null)
     setUploadDialogError(null)
     setIsSubmittingUpload(false)
@@ -688,7 +810,14 @@ export default function ProjectPage({
     }
   }
 
-  const handleSaveProjectInfo = () => {
+  const updateOnsiteReportField = <K extends keyof OnsiteReportDraft>(field: K, value: string) => {
+    setOnsiteReportDraft(prev => ({ ...prev, [field]: value }))
+    if (onsiteReportError) {
+      setOnsiteReportError(null)
+    }
+  }
+
+  const handleSaveProjectDetails = () => {
     if (!canEdit) {
       setInfoError('You have read-only access.')
       return
@@ -701,9 +830,11 @@ export default function ProjectPage({
     }
     setIsSavingInfo(true)
     try {
+      onUpdateProjectNote(noteDraft)
       onUpdateProjectInfo(info)
       setInfoError(null)
       setInfoStatus(info ? 'Project information saved.' : 'Project information cleared.')
+      setIsNoteDialogOpen(false)
     } finally {
       setIsSavingInfo(false)
     }
@@ -936,6 +1067,210 @@ export default function ProjectPage({
     } finally {
       setIsCompletingSignOff(false)
     }
+  }
+
+  const startOnsiteReport = () => {
+    if (!canEdit) {
+      setOnsiteReportError('You have read-only access.')
+      return
+    }
+    setOnsiteReportDraft(buildDefaultOnsiteReportDraft())
+    setOnsiteReportError(null)
+    setIsSavingOnsiteReport(false)
+    setOnsiteHasSignature(false)
+    onsiteSignatureStrokesRef.current = []
+    onsiteActiveSignatureStrokeRef.current = null
+    resetOnsiteSignature()
+    setIsCreatingOnsiteReport(true)
+  }
+
+  const cancelOnsiteReport = () => {
+    setIsCreatingOnsiteReport(false)
+    setIsSavingOnsiteReport(false)
+    setOnsiteReportError(null)
+    setOnsiteHasSignature(false)
+    onsiteSignatureStrokesRef.current = []
+    onsiteActiveSignatureStrokeRef.current = null
+    resetOnsiteSignature()
+    setOnsiteReportDraft(buildDefaultOnsiteReportDraft())
+  }
+
+  const handleOnsiteSignaturePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (!canEdit || !isCreatingOnsiteReport) {
+      return
+    }
+    const canvas = onsiteSignatureCanvasRef.current
+    if (!canvas) {
+      return
+    }
+    const context = canvas.getContext('2d')
+    if (!context) {
+      return
+    }
+    event.preventDefault()
+    const point = getSignaturePoint(canvas, event)
+    context.beginPath()
+    context.moveTo(point.x, point.y)
+    onsiteSignatureDrawingRef.current = true
+    const strokeIndex = onsiteSignatureStrokesRef.current.length
+    onsiteSignatureStrokesRef.current.push([point])
+    onsiteActiveSignatureStrokeRef.current = strokeIndex
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const handleOnsiteSignaturePointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (!onsiteSignatureDrawingRef.current) {
+      return
+    }
+    const canvas = onsiteSignatureCanvasRef.current
+    if (!canvas) {
+      return
+    }
+    const context = canvas.getContext('2d')
+    if (!context) {
+      return
+    }
+    event.preventDefault()
+    const point = getSignaturePoint(canvas, event)
+    const activeIndex = onsiteActiveSignatureStrokeRef.current
+    if (activeIndex !== null && onsiteSignatureStrokesRef.current[activeIndex]) {
+      onsiteSignatureStrokesRef.current[activeIndex].push(point)
+    }
+    context.lineTo(point.x, point.y)
+    context.stroke()
+    setOnsiteHasSignature(true)
+  }
+
+  const finishOnsiteSignatureStroke = (event?: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (onsiteSignatureDrawingRef.current && event) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    onsiteSignatureDrawingRef.current = false
+    onsiteActiveSignatureStrokeRef.current = null
+    const canvas = onsiteSignatureCanvasRef.current
+    const context = canvas?.getContext('2d')
+    context?.beginPath()
+  }
+
+  const handleOnsiteSignaturePointerUp = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    finishOnsiteSignatureStroke(event)
+  }
+
+  const handleOnsiteSignaturePointerLeave = () => {
+    finishOnsiteSignatureStroke()
+  }
+
+  const handleSaveOnsiteReport = async () => {
+    if (!canEdit) {
+      setOnsiteReportError('You have read-only access.')
+      return
+    }
+    const reportDate = onsiteReportDraft.reportDate.trim()
+    if (!reportDate) {
+      setOnsiteReportError('Select the report date.')
+      return
+    }
+    const engineerName = onsiteReportDraft.engineerName.trim()
+    if (!engineerName) {
+      setOnsiteReportError('Enter the engineer name.')
+      return
+    }
+    const workSummary = onsiteReportDraft.workSummary.trim()
+    if (!workSummary) {
+      setOnsiteReportError('Enter the work summary.')
+      return
+    }
+    const signedByName = onsiteReportDraft.signedByName.trim()
+    if (!signedByName) {
+      setOnsiteReportError('Enter the customer name.')
+      return
+    }
+    const canvas = onsiteSignatureCanvasRef.current
+    if (!canvas) {
+      setOnsiteReportError('Signature pad not ready.')
+      return
+    }
+    const usableStrokes = onsiteSignatureStrokesRef.current
+      .map(stroke => stroke.map(point => ({ x: point.x, y: point.y })))
+      .filter(stroke => stroke.length >= 2)
+    if (usableStrokes.length === 0) {
+      setOnsiteReportError('Capture a signature to continue.')
+      return
+    }
+    const rect = canvas.getBoundingClientRect()
+    const signatureDataUrl = canvas.toDataURL('image/png')
+    const arrivalTime = onsiteReportDraft.arrivalTime.trim()
+    const departureTime = onsiteReportDraft.departureTime.trim()
+    const customerContact = onsiteReportDraft.customerContact.trim()
+    const siteAddress = onsiteReportDraft.siteAddress.trim()
+    const materialsUsed = onsiteReportDraft.materialsUsed.trim()
+    const additionalNotes = onsiteReportDraft.additionalNotes.trim()
+    const signedByPosition = onsiteReportDraft.signedByPosition.trim()
+
+    setIsSavingOnsiteReport(true)
+    setOnsiteReportError(null)
+    try {
+      const result = await onCreateOnsiteReport({
+        reportDate,
+        arrivalTime: arrivalTime || undefined,
+        departureTime: departureTime || undefined,
+        engineerName,
+        customerContact: customerContact || undefined,
+        siteAddress: siteAddress || undefined,
+        workSummary,
+        materialsUsed: materialsUsed || undefined,
+        additionalNotes: additionalNotes || undefined,
+        signedByName,
+        signedByPosition: signedByPosition || undefined,
+        signatureDataUrl,
+        signaturePaths: usableStrokes,
+        signatureDimensions: { width: rect.width, height: rect.height },
+      })
+      if (result) {
+        setOnsiteReportError(result)
+        return
+      }
+      setIsCreatingOnsiteReport(false)
+      setOnsiteReportDraft(buildDefaultOnsiteReportDraft())
+      resetOnsiteSignature()
+      setOnsiteHasSignature(false)
+    } finally {
+      setIsSavingOnsiteReport(false)
+    }
+  }
+
+  const handleRemoveOnsiteReport = async (reportId: string) => {
+    if (!canEdit) {
+      setOnsiteReportError('You have read-only access.')
+      return
+    }
+    const confirmed = window.confirm('Remove this onsite report?')
+    if (!confirmed) {
+      return
+    }
+    setRemovingOnsiteReportId(reportId)
+    setOnsiteReportError(null)
+    try {
+      const result = await onDeleteOnsiteReport(reportId)
+      if (result) {
+        setOnsiteReportError(result)
+      }
+    } finally {
+      setRemovingOnsiteReportId(null)
+    }
+  }
+
+  const handleDownloadOnsiteReport = (report: ProjectOnsiteReport) => {
+    if (!report.pdfDataUrl) {
+      setOnsiteReportError('This onsite report is missing a PDF document.')
+      return
+    }
+    const sanitizedNumber = stripPrefix(project.number, /^P[-\s]?(.+)$/i)
+    const datePart = report.reportDate ? report.reportDate.replace(/-/g, '') : ''
+    const link = document.createElement('a')
+    link.href = report.pdfDataUrl
+    link.download = `OnsiteReport-${sanitizedNumber || project.number}-${datePart || report.id}.pdf`
+    link.click()
   }
 
   const handleDownloadSignOffFile = (file: ProjectFile) => {
@@ -1271,6 +1606,462 @@ export default function ProjectPage({
       </div>
     )
   }
+  const renderProjectFiles = () => {
+    const categoriesWithFiles = PROJECT_FILE_CATEGORIES.filter(
+      category => (documents[category]?.length ?? 0) > 0,
+    )
+    const onsiteReports = project.onsiteReports ?? []
+    const sortedOnsiteReports = [...onsiteReports].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+    )
+
+    const renderCategorySection = (category: ProjectFileCategory, allowEmpty: boolean) => {
+      const metadata = PROJECT_FILE_METADATA[category]
+      const files = documents[category] ?? []
+      const errorMessage = fileErrors[category]
+      const hasFiles = files.length > 0
+      if (!hasFiles && !allowEmpty) {
+        return null
+      }
+      return (
+        <div key={category} className='rounded-2xl border border-slate-200/70 bg-white/90'>
+          <div className='border-b border-slate-200/70 px-5 py-4'>
+            <div className='text-sm font-semibold text-slate-800'>{metadata.label}</div>
+            <p className='mt-1 text-xs text-slate-500'>{metadata.description}</p>
+          </div>
+          {hasFiles ? (
+            <div className='space-y-3 px-5 py-4'>
+              {files.map(file => {
+                const uploadedAt = formatTimestamp(file.uploadedAt)
+                const isPreviewOpen = expandedPreviews.has(file.id)
+                const isRemoving =
+                  removingFile?.category === category && removingFile.fileId === file.id
+                return (
+                  <div key={file.id} className='rounded-xl border border-slate-200/70 bg-white/90'>
+                    <div className='flex flex-wrap items-center justify-between gap-3 px-4 py-3'>
+                      <div>
+                        <div className='text-sm font-semibold text-slate-800'>{file.name}</div>
+                        {uploadedAt && (
+                          <div className='text-xs text-slate-500'>Uploaded {uploadedAt}</div>
+                        )}
+                      </div>
+                      <div className='flex flex-wrap items-center gap-2'>
+                        <Button variant='outline' onClick={() => togglePreview(file.id)}>
+                          {isPreviewOpen ? 'Hide Preview' : 'Preview'}
+                        </Button>
+                        <Button variant='outline' onClick={() => handleDownloadDocument(category, file)}>
+                          <Download size={16} />
+                        </Button>
+                        <Button
+                          variant='ghost'
+                          className='text-rose-600 hover:bg-rose-50'
+                          onClick={() => void handleRemoveDocument(category, file.id)}
+                          disabled={!canEdit || isRemoving}
+                          title={canEdit ? 'Remove file' : 'Read-only access'}
+                        >
+                          <Trash2 size={16} />
+                        </Button>
+                        {isRemoving && <span className='text-xs text-slate-500'>Removing…</span>}
+                      </div>
+                    </div>
+                    {isPreviewOpen && (
+                      <div className='border-t border-slate-200/70 bg-slate-50 p-4'>
+                        {renderFilePreview(file)}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div className='px-5 py-4 text-sm text-slate-500'>No files uploaded yet.</div>
+          )}
+          {errorMessage && (
+            <p className='flex items-center gap-1 px-5 pb-4 text-sm text-rose-600'>
+              <AlertCircle size={14} /> {errorMessage}
+            </p>
+          )}
+        </div>
+      )
+    }
+
+    const allCategorySections = PROJECT_FILE_CATEGORIES.map(category =>
+      renderCategorySection(category, false),
+    ).filter(Boolean) as JSX.Element[]
+
+    const onsiteHeader = (
+      <div className='flex flex-wrap items-start justify-between gap-3'>
+        <div>
+          <div className='text-sm font-semibold text-slate-800'>Onsite reports</div>
+          <p className='text-xs text-slate-500'>Capture onsite visit summaries and customer signatures.</p>
+        </div>
+        {!isCreatingOnsiteReport && (
+          <Button
+            variant='outline'
+            onClick={startOnsiteReport}
+            disabled={!canEdit}
+            title={canEdit ? 'New onsite report' : 'Read-only access'}
+          >
+            <FileText size={16} /> New Onsite Report
+          </Button>
+        )}
+      </div>
+    )
+
+    return (
+      <div className='space-y-6'>
+        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
+          <div className='flex flex-wrap items-center justify-between gap-3'>
+            <div>
+              <div className='text-sm font-semibold text-slate-800'>Project files</div>
+              <p className='text-xs text-slate-500'>Upload design documentation and installation packs for this project.</p>
+            </div>
+            <Button
+              variant='outline'
+              onClick={openUploadDialog}
+              disabled={!canEdit}
+              className='rounded-full px-2 py-2'
+              title={canEdit ? 'Upload file' : 'Read-only access'}
+            >
+              <Upload size={16} />
+              <span className='sr-only'>Upload file</span>
+            </Button>
+          </div>
+          <div className='mt-4 flex flex-wrap gap-2'>
+            {PROJECT_FILE_TAB_OPTIONS.map(option => (
+              <button
+                key={option.value}
+                type='button'
+                onClick={() => setActiveFileTab(option.value)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                  activeFileTab === option.value
+                    ? 'bg-sky-600 text-white shadow-sm'
+                    : 'bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          {activeFileTab === 'all' ? (
+            categoriesWithFiles.length === 0 ? (
+              <div className='mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
+                No project files uploaded yet.
+              </div>
+            ) : (
+              <div className='mt-4 space-y-4'>{allCategorySections}</div>
+            )
+          ) : (
+            <div className='mt-4 space-y-4'>{renderCategorySection(activeFileTab, true)}</div>
+          )}
+        </section>
+
+        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
+          <div className='flex flex-wrap items-start justify-between gap-3'>
+            <div>
+              <div className='text-sm font-semibold text-slate-800'>Final Acceptance</div>
+              <p className='text-xs text-slate-500'>Generate or upload the signed final acceptance for this project.</p>
+              <p className='mt-2 text-xs text-slate-400'>Use the upload button above to attach a signed final acceptance document.</p>
+            </div>
+            {!isGeneratingSignOff && (
+              <Button
+                variant='outline'
+                onClick={startGeneratingSignOff}
+                disabled={!canEdit}
+                title={canEdit ? 'Generate final acceptance' : 'Read-only access'}
+              >
+                <FileText size={16} /> Generate Final Acceptance
+              </Button>
+            )}
+          </div>
+          {isUploadingSignOff && <p className='mt-3 text-xs text-slate-500'>Uploading…</p>}
+          {signOffError && !isGeneratingSignOff && (
+            <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
+              <AlertCircle size={14} /> {signOffError}
+            </p>
+          )}
+          <div className='mt-4 space-y-4'>
+            {isGeneratingSignOff
+              ? renderCustomerSignOffForm()
+              : customerSignOff
+              ? renderCustomerSignOffSummary()
+              : (
+                  <div className='rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
+                    No final acceptance recorded yet.
+                  </div>
+                )}
+          </div>
+        </section>
+
+        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
+          {onsiteHeader}
+          {onsiteReportError && !isCreatingOnsiteReport && (
+            <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
+              <AlertCircle size={14} /> {onsiteReportError}
+            </p>
+          )}
+          <div className='mt-4 space-y-4'>
+            {isCreatingOnsiteReport && (
+              <div className='rounded-2xl border border-slate-200/80 bg-white/90 p-5 shadow-sm'>
+                <div className='grid gap-3 md:grid-cols-2'>
+                  <div>
+                    <Label htmlFor='onsite-date'>Report date</Label>
+                    <input
+                      id='onsite-date'
+                      type='date'
+                      className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                      value={onsiteReportDraft.reportDate}
+                      onChange={event => updateOnsiteReportField('reportDate', (event.target as HTMLInputElement).value)}
+                      disabled={!canEdit || isSavingOnsiteReport}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor='onsite-engineer'>Engineer</Label>
+                    <Input
+                      id='onsite-engineer'
+                      value={onsiteReportDraft.engineerName}
+                      onChange={event => updateOnsiteReportField('engineerName', (event.target as HTMLInputElement).value)}
+                      placeholder='Engineer name'
+                      disabled={!canEdit || isSavingOnsiteReport}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor='onsite-arrival'>Arrival time</Label>
+                    <input
+                      id='onsite-arrival'
+                      type='time'
+                      className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                      value={onsiteReportDraft.arrivalTime}
+                      onChange={event => updateOnsiteReportField('arrivalTime', (event.target as HTMLInputElement).value)}
+                      disabled={!canEdit || isSavingOnsiteReport}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor='onsite-departure'>Departure time</Label>
+                    <input
+                      id='onsite-departure'
+                      type='time'
+                      className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                      value={onsiteReportDraft.departureTime}
+                      onChange={event => updateOnsiteReportField('departureTime', (event.target as HTMLInputElement).value)}
+                      disabled={!canEdit || isSavingOnsiteReport}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor='onsite-contact'>Customer contact</Label>
+                    <Input
+                      id='onsite-contact'
+                      value={onsiteReportDraft.customerContact}
+                      onChange={event => updateOnsiteReportField('customerContact', (event.target as HTMLInputElement).value)}
+                      placeholder='Customer representative'
+                      disabled={!canEdit || isSavingOnsiteReport}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor='onsite-position'>Customer position</Label>
+                    <Input
+                      id='onsite-position'
+                      value={onsiteReportDraft.signedByPosition}
+                      onChange={event => updateOnsiteReportField('signedByPosition', (event.target as HTMLInputElement).value)}
+                      placeholder='e.g. Operations Manager'
+                      disabled={!canEdit || isSavingOnsiteReport}
+                    />
+                  </div>
+                  <div className='md:col-span-2'>
+                    <Label htmlFor='onsite-site-address'>Site address</Label>
+                    <textarea
+                      id='onsite-site-address'
+                      className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                      rows={2}
+                      value={onsiteReportDraft.siteAddress}
+                      onChange={event => updateOnsiteReportField('siteAddress', (event.target as HTMLTextAreaElement).value)}
+                      placeholder='Where was the work completed?'
+                      disabled={!canEdit || isSavingOnsiteReport}
+                    />
+                  </div>
+                  <div className='md:col-span-2'>
+                    <Label htmlFor='onsite-work-summary'>Work summary</Label>
+                    <textarea
+                      id='onsite-work-summary'
+                      className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                      rows={4}
+                      value={onsiteReportDraft.workSummary}
+                      onChange={event => updateOnsiteReportField('workSummary', (event.target as HTMLTextAreaElement).value)}
+                      placeholder='Describe the work carried out onsite'
+                      disabled={!canEdit || isSavingOnsiteReport}
+                    />
+                  </div>
+                  <div className='md:col-span-2'>
+                    <Label htmlFor='onsite-materials'>Materials used</Label>
+                    <textarea
+                      id='onsite-materials'
+                      className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                      rows={3}
+                      value={onsiteReportDraft.materialsUsed}
+                      onChange={event => updateOnsiteReportField('materialsUsed', (event.target as HTMLTextAreaElement).value)}
+                      placeholder='List any materials or parts used'
+                      disabled={!canEdit || isSavingOnsiteReport}
+                    />
+                  </div>
+                  <div className='md:col-span-2'>
+                    <Label htmlFor='onsite-notes'>Additional notes</Label>
+                    <textarea
+                      id='onsite-notes'
+                      className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                      rows={3}
+                      value={onsiteReportDraft.additionalNotes}
+                      onChange={event => updateOnsiteReportField('additionalNotes', (event.target as HTMLTextAreaElement).value)}
+                      placeholder='Any additional remarks'
+                      disabled={!canEdit || isSavingOnsiteReport}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor='onsite-signee'>Customer name</Label>
+                    <Input
+                      id='onsite-signee'
+                      value={onsiteReportDraft.signedByName}
+                      onChange={event => updateOnsiteReportField('signedByName', (event.target as HTMLInputElement).value)}
+                      placeholder='Customer name'
+                      disabled={!canEdit || isSavingOnsiteReport}
+                    />
+                  </div>
+                </div>
+                <div className='mt-4 space-y-2'>
+                  <Label>Signature</Label>
+                  <p className='text-xs text-slate-500'>Ask the customer to sign below.</p>
+                  <div className='overflow-hidden rounded-2xl border border-slate-200 bg-white'>
+                    <canvas
+                      ref={onsiteSignatureCanvasRef}
+                      className='h-36 w-full'
+                      style={{ touchAction: 'none' }}
+                      onPointerDown={handleOnsiteSignaturePointerDown}
+                      onPointerMove={handleOnsiteSignaturePointerMove}
+                      onPointerUp={handleOnsiteSignaturePointerUp}
+                      onPointerLeave={handleOnsiteSignaturePointerLeave}
+                    />
+                  </div>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <Button variant='outline' onClick={resetOnsiteSignature} disabled={isSavingOnsiteReport || !canEdit}>
+                      <X size={16} /> Clear signature
+                    </Button>
+                    <span className='text-xs text-slate-500'>
+                      {onsiteHasSignature ? 'Signature captured.' : 'Use your cursor or finger to sign.'}
+                    </span>
+                  </div>
+                </div>
+                {onsiteReportError && (
+                  <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
+                    <AlertCircle size={14} /> {onsiteReportError}
+                  </p>
+                )}
+                <div className='mt-4 flex flex-wrap items-center gap-2'>
+                  <Button onClick={() => void handleSaveOnsiteReport()} disabled={isSavingOnsiteReport || !canEdit}>
+                    {isSavingOnsiteReport ? 'Saving…' : 'Save onsite report'}
+                  </Button>
+                  <Button variant='ghost' onClick={cancelOnsiteReport} disabled={isSavingOnsiteReport}>
+                    <X size={16} /> Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
+            {sortedOnsiteReports.length === 0 ? (
+              <div className='rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
+                No onsite reports recorded yet.
+              </div>
+            ) : (
+              <div className='space-y-4'>
+                {sortedOnsiteReports.map(report => {
+                  const createdDisplay = formatTimestamp(report.createdAt)
+                  return (
+                    <div key={report.id} className='rounded-2xl border border-slate-200/80 bg-white/90 p-5 shadow-sm'>
+                      <div className='flex flex-wrap items-start justify-between gap-3'>
+                        <div className='space-y-1'>
+                          <div className='text-sm font-semibold text-slate-800'>Report on {report.reportDate || '—'}</div>
+                          <div className='text-xs text-slate-500'>Engineer: {report.engineerName || '—'}</div>
+                          {(report.arrivalTime || report.departureTime) && (
+                            <div className='text-xs text-slate-500'>
+                              Arrival {report.arrivalTime || '—'} · Departure {report.departureTime || '—'}
+                            </div>
+                          )}
+                          {createdDisplay && (
+                            <div className='text-xs text-slate-400'>Created {createdDisplay}</div>
+                          )}
+                          {report.customerContact && (
+                            <div className='text-xs text-slate-500'>Customer contact: {report.customerContact}</div>
+                          )}
+                          {report.siteAddress && (
+                            <div className='text-xs text-slate-500 whitespace-pre-wrap'>Site address: {report.siteAddress}</div>
+                          )}
+                        </div>
+                        <div className='flex flex-wrap items-center gap-2'>
+                          <Button variant='outline' onClick={() => handleDownloadOnsiteReport(report)}>
+                            <Download size={16} /> Download PDF
+                          </Button>
+                          {canEdit && (
+                            <Button
+                              variant='ghost'
+                              className='text-rose-600 hover:bg-rose-50'
+                              onClick={() => void handleRemoveOnsiteReport(report.id)}
+                              disabled={removingOnsiteReportId === report.id}
+                            >
+                              <Trash2 size={16} /> Remove
+                            </Button>
+                          )}
+                          {removingOnsiteReportId === report.id && (
+                            <span className='text-xs text-slate-500'>Removing…</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className='mt-4 grid gap-4 md:grid-cols-2'>
+                        <div>
+                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Work summary</div>
+                          <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>
+                            {report.workSummary || 'Not provided.'}
+                          </p>
+                        </div>
+                        <div>
+                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Materials used</div>
+                          <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>
+                            {report.materialsUsed || 'Not provided.'}
+                          </p>
+                        </div>
+                        <div className='md:col-span-2'>
+                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Additional notes</div>
+                          <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>
+                            {report.additionalNotes || 'Not provided.'}
+                          </p>
+                        </div>
+                        <div>
+                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Customer name</div>
+                          <p className='mt-2 text-sm text-slate-700'>
+                            {report.signedByName || '—'}
+                            {report.signedByPosition ? ` — ${report.signedByPosition}` : ''}
+                          </p>
+                        </div>
+                      </div>
+                      {report.signatureDataUrl && (
+                        <div className='mt-4'>
+                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Signature</div>
+                          <div className='mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white p-3'>
+                            <img
+                              src={report.signatureDataUrl}
+                              alt={`Onsite report signature for ${report.signedByName ?? 'customer'}`}
+                              className='max-h-32 w-full object-contain'
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+    )
+  }
+
 
   const renderCustomerSignOffForm = () => (
     <div className='rounded-2xl border border-slate-200/80 bg-white/90 p-5 shadow-sm'>
@@ -1405,6 +2196,10 @@ export default function ProjectPage({
           <div className='mb-4 space-y-2'>
             <div className='text-sm font-semibold text-slate-800'>Recorded project info</div>
             <p className='text-xs text-slate-500'>This metadata is included when generating customer final acceptance PDFs.</p>
+            <p className='text-xs text-slate-400'>Use the edit button above to update these details alongside the project note.</p>
+            {infoStatus && (
+              <p className='text-xs text-emerald-600'>{infoStatus}</p>
+            )}
           </div>
           {hasProjectInfo ? (
             <div className='space-y-4'>
@@ -1492,237 +2287,6 @@ export default function ProjectPage({
           ) : (
             <div className='rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
               No project information recorded yet.
-            </div>
-          )}
-        </section>
-
-        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
-          <div className='mb-4 space-y-1'>
-            <div className='text-sm font-semibold text-slate-800'>Edit project info</div>
-            <p className='text-xs text-slate-500'>Provide project metadata, serial numbers, and sales context.</p>
-          </div>
-          <div className='grid gap-3 md:grid-cols-2'>
-            <div>
-              <Label htmlFor='info-line'>Line No/Name</Label>
-              <Input
-                id='info-line'
-                value={infoDraft.lineReference}
-                onChange={event => updateInfoField('lineReference', (event.target as HTMLInputElement).value)}
-                placeholder='e.g. Line 3 — Bottling'
-                disabled={!canEdit || isSavingInfo}
-              />
-            </div>
-            <div>
-              <Label htmlFor='info-salesperson'>Salesperson</Label>
-              <select
-                id='info-salesperson'
-                className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                value={infoDraft.salespersonId}
-                onChange={event =>
-                  updateInfoField('salespersonId', (event.target as HTMLSelectElement).value)
-                }
-                disabled={!canEdit || isSavingInfo}
-              >
-                <option value=''>Unassigned</option>
-                {sortedUsers.map(user => (
-                  <option key={user.id} value={user.id}>
-                    {user.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className='md:col-span-2'>
-              <Label htmlFor='info-machine-serials'>Machine Serial Numbers</Label>
-              <textarea
-                id='info-machine-serials'
-                className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                rows={3}
-                value={infoDraft.machineSerialNumbers}
-                onChange={event =>
-                  updateInfoField('machineSerialNumbers', (event.target as HTMLTextAreaElement).value)
-                }
-                placeholder='Enter each serial number on a new line'
-                disabled={!canEdit || isSavingInfo}
-              />
-            </div>
-            <div className='md:col-span-2'>
-              <Label htmlFor='info-tool-serials'>Tool Serial Numbers</Label>
-              <textarea
-                id='info-tool-serials'
-                className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                rows={3}
-                value={infoDraft.toolSerialNumbers}
-                onChange={event =>
-                  updateInfoField('toolSerialNumbers', (event.target as HTMLTextAreaElement).value)
-                }
-                placeholder='Enter each serial number on a new line'
-                disabled={!canEdit || isSavingInfo}
-              />
-            </div>
-            <div>
-              <Label htmlFor='info-cobalt-order'>Cobalt Order Number</Label>
-              <Input
-                id='info-cobalt-order'
-                value={infoDraft.cobaltOrderNumber}
-                onChange={event => updateInfoField('cobaltOrderNumber', (event.target as HTMLInputElement).value)}
-                placeholder='e.g. CO-12345'
-                disabled={!canEdit || isSavingInfo}
-              />
-            </div>
-            <div>
-              <Label htmlFor='info-customer-order'>Customer Order Number</Label>
-              <Input
-                id='info-customer-order'
-                value={infoDraft.customerOrderNumber}
-                onChange={event => updateInfoField('customerOrderNumber', (event.target as HTMLInputElement).value)}
-                placeholder='e.g. PO-90876'
-                disabled={!canEdit || isSavingInfo}
-              />
-            </div>
-            <div>
-              <Label htmlFor='info-start-date'>Project Start Date</Label>
-              <input
-                id='info-start-date'
-                type='date'
-                className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                value={infoDraft.startDate}
-                onChange={event => updateInfoField('startDate', (event.target as HTMLInputElement).value)}
-                disabled={!canEdit || isSavingInfo}
-              />
-            </div>
-            <div>
-              <Label htmlFor='info-proposed-completion'>Proposed Completion Date</Label>
-              <input
-                id='info-proposed-completion'
-                type='date'
-                className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                value={infoDraft.proposedCompletionDate}
-                onChange={event =>
-                  updateInfoField('proposedCompletionDate', (event.target as HTMLInputElement).value)
-                }
-                disabled={!canEdit || isSavingInfo}
-              />
-            </div>
-          </div>
-          {infoError && (
-            <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
-              <AlertCircle size={14} /> {infoError}
-            </p>
-          )}
-          {infoStatus && !infoError && (
-            <p className='mt-3 text-sm text-emerald-600'>{infoStatus}</p>
-          )}
-          <div className='mt-4 flex flex-wrap justify-end gap-2'>
-            <Button
-              variant='ghost'
-              onClick={handleClearProjectInfo}
-              disabled={!canEdit || isSavingInfo}
-            >
-              Clear
-            </Button>
-            <Button onClick={handleSaveProjectInfo} disabled={!canEdit || isSavingInfo}>
-              {isSavingInfo ? 'Saving…' : 'Save info'}
-            </Button>
-          </div>
-        </section>
-      </div>
-    )
-  }
-
-  const renderProjectFiles = () => {
-    const categoriesWithFiles = PROJECT_FILE_CATEGORIES.filter(
-      category => (documents[category]?.length ?? 0) > 0,
-    )
-
-    return (
-      <div className='space-y-6'>
-        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
-          <div className='flex flex-wrap items-center justify-between gap-3'>
-            <div>
-              <div className='text-sm font-semibold text-slate-800'>Project files</div>
-              <p className='text-xs text-slate-500'>Upload design documentation and installation packs for this project.</p>
-            </div>
-            <Button
-              variant='outline'
-              onClick={openUploadDialog}
-              disabled={!canEdit}
-              className='rounded-full px-2 py-2'
-              title={canEdit ? 'Upload file' : 'Read-only access'}
-            >
-              <Upload size={16} />
-              <span className='sr-only'>Upload file</span>
-            </Button>
-          </div>
-          {categoriesWithFiles.length === 0 ? (
-            <div className='mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
-              No project files uploaded yet.
-            </div>
-          ) : (
-            <div className='mt-4 space-y-4'>
-              {categoriesWithFiles.map(category => {
-                const metadata = PROJECT_FILE_METADATA[category]
-                const files = documents[category] ?? []
-                const errorMessage = fileErrors[category]
-                return (
-                  <div key={category} className='rounded-2xl border border-slate-200/70 bg-white/90'>
-                    <div className='border-b border-slate-200/70 px-5 py-4'>
-                      <div className='text-sm font-semibold text-slate-800'>{metadata.label}</div>
-                      <p className='mt-1 text-xs text-slate-500'>{metadata.description}</p>
-                    </div>
-                    <div className='space-y-3 px-5 py-4'>
-                      {files.map(file => {
-                        const uploadedAt = formatTimestamp(file.uploadedAt)
-                        const isPreviewOpen = expandedPreviews.has(file.id)
-                        const isRemoving =
-                          removingFile?.category === category && removingFile.fileId === file.id
-                        return (
-                          <div key={file.id} className='rounded-xl border border-slate-200/70 bg-white/90'>
-                            <div className='flex flex-wrap items-center justify-between gap-3 px-4 py-3'>
-                              <div>
-                                <div className='text-sm font-semibold text-slate-800'>{file.name}</div>
-                                {uploadedAt && (
-                                  <div className='text-xs text-slate-500'>Uploaded {uploadedAt}</div>
-                                )}
-                              </div>
-                              <div className='flex flex-wrap items-center gap-2'>
-                                <Button variant='outline' onClick={() => togglePreview(file.id)}>
-                                  {isPreviewOpen ? 'Hide Preview' : 'Preview'}
-                                </Button>
-                                <Button
-                                  variant='outline'
-                                  onClick={() => handleDownloadDocument(category, file)}
-                                >
-                                  <Download size={16} />
-                                </Button>
-                                <Button
-                                  variant='ghost'
-                                  className='text-rose-600 hover:bg-rose-50'
-                                  onClick={() => void handleRemoveDocument(category, file.id)}
-                                  disabled={!canEdit || isRemoving}
-                                  title={canEdit ? 'Remove file' : 'Read-only access'}
-                                >
-                                  <Trash2 size={16} />
-                                </Button>
-                                {isRemoving && <span className='text-xs text-slate-500'>Removing…</span>}
-                              </div>
-                            </div>
-                            {isPreviewOpen && (
-                              <div className='border-t border-slate-200/70 bg-slate-50 p-4'>
-                                {renderFilePreview(file)}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
-                    </div>
-                    {errorMessage && (
-                      <p className='flex items-center gap-1 px-5 pb-4 text-sm text-rose-600'>
-                        <AlertCircle size={14} /> {errorMessage}
-                      </p>
-                    )}
-                  </div>
-                )
-              })}
             </div>
           )}
         </section>
@@ -2524,28 +3088,149 @@ export default function ProjectPage({
                   </Button>
                 </CardHeader>
                 <CardContent>
-                  <Label>Project note</Label>
-                  <textarea
-                    className='mt-2 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                    rows={4}
-                    value={noteDraft}
-                    onChange={(event) => setNoteDraft((event.target as HTMLTextAreaElement).value)}
-                    placeholder='Add a note about this project (optional)…'
-                    disabled={!canEdit}
-                  />
-                  <div className='mt-4 flex justify-end gap-2'>
-                    <Button variant='ghost' onClick={closeNoteDialog}>
-                      Cancel
-                    </Button>
-                    <Button
-                      onClick={() => {
-                        onUpdateProjectNote(noteDraft)
-                        closeNoteDialog()
-                      }}
-                      disabled={!canEdit}
-                    >
-                      Save note
-                    </Button>
+                  <div className='space-y-6'>
+                    <div>
+                      <Label>Project note</Label>
+                      <textarea
+                        className='mt-2 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                        rows={4}
+                        value={noteDraft}
+                        onChange={(event) => setNoteDraft((event.target as HTMLTextAreaElement).value)}
+                        placeholder='Add a note about this project (optional)…'
+                        disabled={!canEdit || isSavingInfo}
+                      />
+                    </div>
+                    <div>
+                      <div className='mb-4 space-y-1'>
+                        <div className='text-sm font-semibold text-slate-800'>Project info</div>
+                        <p className='text-xs text-slate-500'>Provide project metadata, serial numbers, and sales context.</p>
+                      </div>
+                      <div className='grid gap-3 md:grid-cols-2'>
+                        <div>
+                          <Label htmlFor='info-line'>Line No/Name</Label>
+                          <Input
+                            id='info-line'
+                            value={infoDraft.lineReference}
+                            onChange={event => updateInfoField('lineReference', (event.target as HTMLInputElement).value)}
+                            placeholder='e.g. Line 3 — Bottling'
+                            disabled={!canEdit || isSavingInfo}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor='info-salesperson'>Salesperson</Label>
+                          <select
+                            id='info-salesperson'
+                            className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            value={infoDraft.salespersonId}
+                            onChange={event =>
+                              updateInfoField('salespersonId', (event.target as HTMLSelectElement).value)
+                            }
+                            disabled={!canEdit || isSavingInfo}
+                          >
+                            <option value=''>Unassigned</option>
+                            {sortedUsers.map(user => (
+                              <option key={user.id} value={user.id}>
+                                {user.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className='md:col-span-2'>
+                          <Label htmlFor='info-machine-serials'>Machine Serial Numbers</Label>
+                          <textarea
+                            id='info-machine-serials'
+                            className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            rows={3}
+                            value={infoDraft.machineSerialNumbers}
+                            onChange={event =>
+                              updateInfoField('machineSerialNumbers', (event.target as HTMLTextAreaElement).value)
+                            }
+                            placeholder='Enter each serial number on a new line'
+                            disabled={!canEdit || isSavingInfo}
+                          />
+                        </div>
+                        <div className='md:col-span-2'>
+                          <Label htmlFor='info-tool-serials'>Tool Serial Numbers</Label>
+                          <textarea
+                            id='info-tool-serials'
+                            className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            rows={3}
+                            value={infoDraft.toolSerialNumbers}
+                            onChange={event =>
+                              updateInfoField('toolSerialNumbers', (event.target as HTMLTextAreaElement).value)
+                            }
+                            placeholder='Enter each serial number on a new line'
+                            disabled={!canEdit || isSavingInfo}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor='info-cobalt-order'>Cobalt Order Number</Label>
+                          <Input
+                            id='info-cobalt-order'
+                            value={infoDraft.cobaltOrderNumber}
+                            onChange={event => updateInfoField('cobaltOrderNumber', (event.target as HTMLInputElement).value)}
+                            placeholder='e.g. CO-12345'
+                            disabled={!canEdit || isSavingInfo}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor='info-customer-order'>Customer Order Number</Label>
+                          <Input
+                            id='info-customer-order'
+                            value={infoDraft.customerOrderNumber}
+                            onChange={event => updateInfoField('customerOrderNumber', (event.target as HTMLInputElement).value)}
+                            placeholder='e.g. PO-90876'
+                            disabled={!canEdit || isSavingInfo}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor='info-start-date'>Project Start Date</Label>
+                          <input
+                            id='info-start-date'
+                            type='date'
+                            className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            value={infoDraft.startDate}
+                            onChange={event => updateInfoField('startDate', (event.target as HTMLInputElement).value)}
+                            disabled={!canEdit || isSavingInfo}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor='info-proposed-completion'>Proposed Completion Date</Label>
+                          <input
+                            id='info-proposed-completion'
+                            type='date'
+                            className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            value={infoDraft.proposedCompletionDate}
+                            onChange={event =>
+                              updateInfoField('proposedCompletionDate', (event.target as HTMLInputElement).value)
+                            }
+                            disabled={!canEdit || isSavingInfo}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    {infoError && (
+                      <p className='flex items-center gap-1 text-sm text-rose-600'>
+                        <AlertCircle size={14} /> {infoError}
+                      </p>
+                    )}
+                    <div className='flex flex-wrap justify-between gap-2'>
+                      <Button variant='ghost' onClick={closeNoteDialog} disabled={isSavingInfo}>
+                        Cancel
+                      </Button>
+                      <div className='flex flex-wrap gap-2'>
+                        <Button
+                          variant='ghost'
+                          onClick={handleClearProjectInfo}
+                          disabled={!canEdit || isSavingInfo}
+                        >
+                          Clear info
+                        </Button>
+                        <Button onClick={handleSaveProjectDetails} disabled={!canEdit || isSavingInfo}>
+                          {isSavingInfo ? 'Saving…' : 'Save changes'}
+                        </Button>
+                      </div>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
