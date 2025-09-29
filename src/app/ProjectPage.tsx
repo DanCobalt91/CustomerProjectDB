@@ -95,6 +95,7 @@ export type ProjectPageProps = {
     },
   ) => Promise<string | null>
   onDeleteTask: (taskId: string) => void
+  taskScheduleDefaults: { start: string; end: string }
 }
 
 const PROJECT_FILE_METADATA: Record<ProjectFileCategory, { label: string; description: string }> = {
@@ -132,8 +133,8 @@ const PROJECT_FILE_ACCEPT =
 
 const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchClass: string }> = {
   'Not started': {
-    badgeClass: 'bg-slate-100 text-slate-700',
-    swatchClass: 'bg-slate-300',
+    badgeClass: 'bg-rose-100 text-rose-700',
+    swatchClass: 'bg-rose-500',
   },
   Started: {
     badgeClass: 'bg-sky-100 text-sky-700',
@@ -343,6 +344,7 @@ export default function ProjectPage({
   onCreateTask,
   onUpdateTask,
   onDeleteTask,
+  taskScheduleDefaults,
 }: ProjectPageProps) {
   const [statusDraft, setStatusDraft] = useState<ProjectStatus>(project.status)
   const [activeSubStatusDraft, setActiveSubStatusDraft] = useState<ProjectActiveSubStatus>(
@@ -398,8 +400,8 @@ export default function ProjectPage({
   const tasks = useMemo(() => sortTasksForDisplay(project.tasks ?? []), [project.tasks])
   const [taskForm, setTaskForm] = useState<TaskFormState>({
     name: '',
-    start: '',
-    end: '',
+    start: taskScheduleDefaults.start,
+    end: taskScheduleDefaults.end,
     assigneeId: '',
     status: PROJECT_TASK_STATUSES[0],
   })
@@ -413,8 +415,30 @@ export default function ProjectPage({
     assigneeId: '',
     status: PROJECT_TASK_STATUSES[0],
   })
+  const lastTaskScheduleDefaultsRef = useRef(taskScheduleDefaults)
   const [taskEditError, setTaskEditError] = useState<string | null>(null)
   const [isSavingTaskEdit, setIsSavingTaskEdit] = useState(false)
+
+  useEffect(() => {
+    const previous = lastTaskScheduleDefaultsRef.current
+    if (
+      previous.start !== taskScheduleDefaults.start ||
+      previous.end !== taskScheduleDefaults.end
+    ) {
+      setTaskForm(prev => ({
+        ...prev,
+        start:
+          !prev.start || prev.start === previous.start
+            ? taskScheduleDefaults.start
+            : prev.start,
+        end:
+          !prev.end || prev.end === previous.end
+            ? taskScheduleDefaults.end
+            : prev.end,
+      }))
+      lastTaskScheduleDefaultsRef.current = taskScheduleDefaults
+    }
+  }, [taskScheduleDefaults])
 
   const currentUser = useMemo(
     () => (currentUserId ? users.find(user => user.id === currentUserId) ?? null : null),
@@ -1000,7 +1024,13 @@ export default function ProjectPage({
         setTaskError(error)
         return
       }
-      setTaskForm({ name: '', start: '', end: '', assigneeId: '', status: PROJECT_TASK_STATUSES[0] })
+      setTaskForm({
+        name: '',
+        start: taskScheduleDefaults.start,
+        end: taskScheduleDefaults.end,
+        assigneeId: '',
+        status: PROJECT_TASK_STATUSES[0],
+      })
       setTaskError(null)
     } finally {
       setIsSavingTask(false)

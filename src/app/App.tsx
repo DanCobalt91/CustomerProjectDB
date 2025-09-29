@@ -39,6 +39,7 @@ import type {
   BusinessDay,
 } from '../types'
 import {
+  BUSINESS_DAYS,
   DEFAULT_BUSINESS_SETTINGS,
   DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
   PROJECT_FILE_CATEGORIES,
@@ -65,6 +66,7 @@ import {
   exportDatabase as exportDatabaseRecords,
   importDatabase as importDatabaseRecords,
   getBusinessSettings,
+  updateBusinessSettings as updateBusinessSettingsRecord,
 } from '../lib/storage'
 import { createId } from '../lib/id'
 import { generateCustomerSignOffPdf } from '../lib/signOff'
@@ -148,6 +150,32 @@ const BUSINESS_DAY_ORDER: Array<{ key: BusinessDay; label: string }> = [
   { key: 'saturday', label: 'Saturday' },
   { key: 'sunday', label: 'Sunday' },
 ]
+
+function cloneBusinessSettings(settings: BusinessSettings): BusinessSettings {
+  return {
+    businessName: settings.businessName,
+    hours: BUSINESS_DAYS.reduce((acc, day) => {
+      const hours = settings.hours[day]
+      acc[day] = hours ? { ...hours } : { ...DEFAULT_BUSINESS_SETTINGS.hours[day] }
+      return acc
+    }, {} as BusinessSettings['hours']),
+  }
+}
+
+function businessSettingsEqual(a: BusinessSettings, b: BusinessSettings): boolean {
+  if (a.businessName.trim() !== b.businessName.trim()) {
+    return false
+  }
+  return BUSINESS_DAYS.every(day => {
+    const aHours = a.hours[day]
+    const bHours = b.hours[day]
+    return (
+      aHours?.enabled === bHours?.enabled &&
+      aHours?.start === bHours?.start &&
+      aHours?.end === bHours?.end
+    )
+  })
+}
 
 function getBusinessDayKey(date: Date): BusinessDay {
   return JS_DAY_TO_BUSINESS_DAY[date.getDay()] ?? 'monday'
@@ -300,8 +328,8 @@ const LOCAL_WORKSPACE_USER: User = {
 
 const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchClass: string }> = {
   'Not started': {
-    badgeClass: 'bg-slate-100 text-slate-700',
-    swatchClass: 'bg-slate-300',
+    badgeClass: 'bg-rose-100 text-rose-700',
+    swatchClass: 'bg-rose-500',
   },
   Started: {
     badgeClass: 'bg-sky-100 text-sky-700',
@@ -439,6 +467,12 @@ function AppContent() {
   >('home')
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [businessSettings, setBusinessSettings] = useState<BusinessSettings>(DEFAULT_BUSINESS_SETTINGS)
+  const [businessSettingsDraft, setBusinessSettingsDraft] = useState<BusinessSettings>(() =>
+    cloneBusinessSettings(DEFAULT_BUSINESS_SETTINGS),
+  )
+  const [isSavingBusinessSettings, setIsSavingBusinessSettings] = useState(false)
+  const [businessSettingsMessage, setBusinessSettingsMessage] = useState<string | null>(null)
+  const [businessSettingsError, setBusinessSettingsError] = useState<string | null>(null)
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -599,6 +633,9 @@ function AppContent() {
         setDb(customers)
         setUsers(usersResult)
         setBusinessSettings(settingsResult)
+        setBusinessSettingsDraft(cloneBusinessSettings(settingsResult))
+        setBusinessSettingsMessage(null)
+        setBusinessSettingsError(null)
         setLoadError(null)
       } catch (error) {
         console.error('Failed to load customers', error)
@@ -641,6 +678,13 @@ function AppContent() {
     if (settingsSection !== 'data') {
       setSettingsError(null)
       setSettingsSuccess(null)
+    }
+  }, [settingsSection])
+
+  useEffect(() => {
+    if (settingsSection !== 'business') {
+      setBusinessSettingsMessage(null)
+      setBusinessSettingsError(null)
     }
   }, [settingsSection])
 
@@ -794,6 +838,7 @@ function AppContent() {
       projectNumber: string
       customerName: string
       statusLabel: string
+      statusColor: string
     }> = []
     const completed: Array<{
       customerId: string
@@ -801,16 +846,20 @@ function AppContent() {
       projectNumber: string
       customerName: string
       statusLabel: string
+      statusColor: string
     }> = []
 
     db.forEach(customer => {
       customer.projects.forEach(project => {
+        const statusBucket = resolveProjectStatusBucket(project)
+        const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
         const entry = {
           customerId: customer.id,
           projectId: project.id,
           projectNumber: project.number,
           customerName: customer.name,
           statusLabel: formatProjectStatus(project.status, project.activeSubStatus),
+          statusColor: statusMeta.color,
         }
         if (project.status === 'Active') {
           active.push(entry)
@@ -964,6 +1013,9 @@ function AppContent() {
         setDb(customers)
         setUsers(importedUsers)
         setBusinessSettings(importedSettings)
+        setBusinessSettingsDraft(cloneBusinessSettings(importedSettings))
+        setBusinessSettingsMessage(null)
+        setBusinessSettingsError(null)
         setNewProjectInfoDraft(
           createProjectInfoDraft(
             undefined,
@@ -1120,38 +1172,66 @@ function AppContent() {
         {sortedCustomers.length === 0 ? (
           <p className='text-sm text-slate-500'>Add a customer to see it listed here.</p>
         ) : (
-          <div className='space-y-1.5'>
-            {sortedCustomers.map(customer => {
-              const isSelected = selectedCustomerId === customer.id && activePage === 'customerDetail'
-              const baseClasses =
-                'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
-              const selectionClasses = isSelected
-                ? 'border-indigo-500 bg-indigo-50/80 text-slate-900 shadow-md'
-                : 'hover:border-slate-300 hover:bg-white'
-
-              return (
-                <button
-                  type='button'
-                  key={customer.id}
-                  onClick={() => {
-                    setSelectedCustomerId(customer.id)
-                    setSelectedProjectId(null)
-                    setActivePage('customerDetail')
-                  }}
-                  className={`${baseClasses} ${selectionClasses}`}
-                  aria-pressed={isSelected}
-                  title='View customer details'
-                >
-                  <div className='flex flex-1 flex-col overflow-hidden text-left'>
-                    <span className='truncate text-sm font-semibold text-slate-900'>{customer.name}</span>
-                    <span className='truncate text-xs text-slate-500'>
-                      {customer.address ? customer.address : 'No address on file.'}
-                    </span>
-                  </div>
-                  <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
-                </button>
-              )
-            })}
+          <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
+            <div className='overflow-x-auto'>
+              <table className='min-w-full divide-y divide-slate-200 bg-white text-sm text-slate-700'>
+                <thead className='bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500'>
+                  <tr>
+                    <th scope='col' className='px-4 py-3 text-left font-semibold'>Customer</th>
+                    <th scope='col' className='px-4 py-3 text-left font-semibold'>Projects</th>
+                    <th scope='col' className='px-4 py-3 text-left font-semibold'>Primary contact</th>
+                    <th scope='col' className='px-4 py-3 text-right font-semibold'>Actions</th>
+                  </tr>
+                </thead>
+                <tbody className='divide-y divide-slate-100'>
+                  {sortedCustomers.map(customer => {
+                    const isSelected = selectedCustomerId === customer.id && activePage === 'customerDetail'
+                    const projectCount = customer.projects.length
+                    const primaryContact = customer.contacts.find(contact => contact.name?.trim()) ?? null
+                    return (
+                      <tr
+                        key={customer.id}
+                        className={`${isSelected ? 'bg-indigo-50/70' : 'hover:bg-slate-50/70'} transition-colors`}
+                      >
+                        <td className='px-4 py-3'>
+                          <div className='flex flex-col gap-1'>
+                            <span className='text-sm font-semibold text-slate-900'>{customer.name}</span>
+                            <span className='text-xs text-slate-500'>
+                              {customer.address ? customer.address : 'No address on file.'}
+                            </span>
+                          </div>
+                        </td>
+                        <td className='whitespace-nowrap px-4 py-3 text-sm text-slate-600'>{projectCount}</td>
+                        <td className='px-4 py-3 text-sm text-slate-600'>
+                          {primaryContact ? (
+                            <div className='flex flex-col'>
+                              <span className='font-medium text-slate-700'>{primaryContact.name}</span>
+                              {primaryContact.position ? (
+                                <span className='text-xs text-slate-500'>{primaryContact.position}</span>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <span className='text-xs text-slate-400'>No contacts recorded</span>
+                          )}
+                        </td>
+                        <td className='px-4 py-3 text-right'>
+                          <Button
+                            variant='outline'
+                            onClick={() => {
+                              setSelectedCustomerId(customer.id)
+                              setSelectedProjectId(null)
+                              setActivePage('customerDetail')
+                            }}
+                          >
+                            View
+                          </Button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </CardContent>
@@ -1607,6 +1687,89 @@ function AppContent() {
     const { active: activeProjects, completed: completedProjects } = projectLists
     const totalProjectsCount = activeProjects.length + completedProjects.length
 
+    const renderProjectRows = (projects: typeof activeProjects) =>
+      projects.map(project => {
+        const isSelected = selectedProjectId === project.projectId && activePage === 'projectDetail'
+        const statusStyle: CSSProperties = {
+          color: project.statusColor,
+          backgroundColor: `${project.statusColor}1a`,
+          borderColor: `${project.statusColor}33`,
+        }
+
+        return (
+          <tr
+            key={project.projectId}
+            className={`${isSelected ? 'bg-indigo-50/70' : 'hover:bg-slate-50/70'} transition-colors`}
+          >
+            <td className='px-4 py-3'>
+              <span className='font-semibold text-slate-900'>{project.projectNumber}</span>
+            </td>
+            <td className='px-4 py-3 text-sm text-slate-600'>{project.customerName}</td>
+            <td className='px-4 py-3'>
+              <span
+                className='inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium'
+                style={statusStyle}
+              >
+                {project.statusLabel}
+              </span>
+            </td>
+            <td className='px-4 py-3'>
+              <div className='flex justify-end gap-2'>
+                <Button
+                  variant='outline'
+                  onClick={() => {
+                    setSelectedCustomerId(project.customerId)
+                    setSelectedProjectId(project.projectId)
+                    setActivePage('projectDetail')
+                  }}
+                >
+                  View
+                </Button>
+                <Button
+                  variant='ghost'
+                  className='text-rose-600 hover:bg-rose-50'
+                  onClick={() => {
+                    if (!canEdit) {
+                      return
+                    }
+                    const confirmed = window.confirm('Delete this project and all associated records?')
+                    if (!confirmed) return
+                    void deleteProject(project.customerId, project.projectId)
+                  }}
+                  title={canEdit ? 'Delete project' : 'Read-only access'}
+                  disabled={!canEdit}
+                >
+                  <Trash2 size={16} />
+                </Button>
+              </div>
+            </td>
+          </tr>
+        )
+      })
+
+    const renderProjectsTableContent = (projects: typeof activeProjects, emptyMessage: string) => {
+      if (projects.length === 0) {
+        return <p className='text-sm text-slate-500'>{emptyMessage}</p>
+      }
+      return (
+        <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
+          <div className='overflow-x-auto'>
+            <table className='min-w-full divide-y divide-slate-200 bg-white text-sm text-slate-700'>
+              <thead className='bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500'>
+                <tr>
+                  <th scope='col' className='px-4 py-3 text-left font-semibold'>Project</th>
+                  <th scope='col' className='px-4 py-3 text-left font-semibold'>Customer</th>
+                  <th scope='col' className='px-4 py-3 text-left font-semibold'>Status</th>
+                  <th scope='col' className='px-4 py-3 text-right font-semibold'>Actions</th>
+                </tr>
+              </thead>
+              <tbody className='divide-y divide-slate-100'>{renderProjectRows(projects)}</tbody>
+            </table>
+          </div>
+        </div>
+      )
+    }
+
     return (
       <div className='space-y-6'>
         <Card className='panel h-fit'>
@@ -1617,50 +1780,7 @@ function AppContent() {
             </div>
           </CardHeader>
           <CardContent>
-            <div>
-              <div className='flex items-center justify-between gap-2'>
-                <div className='text-sm font-semibold text-slate-700'>Active projects</div>
-                <span className='text-xs text-slate-500'>
-                  {activeProjects.length === 1 ? '1 active' : `${activeProjects.length} active`}
-                </span>
-              </div>
-              {activeProjects.length === 0 ? (
-                <p className='mt-2 text-sm text-slate-500'>Add a project to see it listed here.</p>
-              ) : (
-                <div className='mt-2 space-y-1.5'>
-                  {activeProjects.map(project => {
-                    const isSelected = selectedProjectId === project.projectId && activePage === 'projectDetail'
-                    const baseClasses =
-                      'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
-                    const selectionClasses = isSelected
-                      ? 'border-indigo-500 bg-indigo-50/80 text-slate-900 shadow-md'
-                      : 'hover:border-slate-300 hover:bg-white'
-
-                    return (
-                      <button
-                        type='button'
-                        key={project.projectId}
-                        onClick={() => {
-                          setSelectedCustomerId(project.customerId)
-                          setSelectedProjectId(project.projectId)
-                          setActivePage('projectDetail')
-                        }}
-                        className={`${baseClasses} ${selectionClasses}`}
-                        aria-pressed={isSelected}
-                        title='View project details'
-                      >
-                        <div className='flex flex-1 flex-col overflow-hidden text-left'>
-                          <span className='truncate text-sm font-semibold text-slate-900'>{project.projectNumber}</span>
-                          <span className='truncate text-xs text-slate-600'>{project.customerName}</span>
-                          <span className='truncate text-xs font-medium text-slate-500'>{project.statusLabel}</span>
-                        </div>
-                        <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
-            </div>
+            {renderProjectsTableContent(activeProjects, 'Active projects will appear here once created.')}
           </CardContent>
         </Card>
 
@@ -1691,42 +1811,7 @@ function AppContent() {
           </CardHeader>
           {!isCompletedProjectsCollapsed && (
             <CardContent>
-              {completedProjects.length === 0 ? (
-                <p className='text-sm text-slate-500'>Completed projects will appear here.</p>
-              ) : (
-                <div className='space-y-1.5'>
-                  {completedProjects.map(project => {
-                    const isSelected = selectedProjectId === project.projectId && activePage === 'projectDetail'
-                    const baseClasses =
-                      'flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200/70 bg-white/80 px-3 py-2 text-left text-sm shadow-sm transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500'
-                    const selectionClasses = isSelected
-                      ? 'border-slate-400 bg-slate-50/80 text-slate-900 shadow-md'
-                      : 'hover:border-slate-300 hover:bg-white'
-
-                    return (
-                      <button
-                        type='button'
-                        key={project.projectId}
-                        onClick={() => {
-                          setSelectedCustomerId(project.customerId)
-                          setSelectedProjectId(project.projectId)
-                          setActivePage('projectDetail')
-                        }}
-                        className={`${baseClasses} ${selectionClasses}`}
-                        aria-pressed={isSelected}
-                        title='View project details'
-                      >
-                        <div className='flex flex-1 flex-col overflow-hidden text-left'>
-                          <span className='truncate text-sm font-semibold text-slate-900'>{project.projectNumber}</span>
-                          <span className='truncate text-xs text-slate-600'>{project.customerName}</span>
-                          <span className='truncate text-xs font-medium text-slate-500'>{project.statusLabel}</span>
-                        </div>
-                        <ChevronRight size={16} className='flex-shrink-0 text-slate-400' aria-hidden />
-                      </button>
-                    )
-                  })}
-                </div>
-              )}
+              {renderProjectsTableContent(completedProjects, 'Completed projects will appear here.')}
             </CardContent>
           )}
         </Card>
@@ -1734,7 +1819,6 @@ function AppContent() {
       </div>
     )
   }
-
 
   const renderMyTasksPage = () => {
     const hasTasks = filteredTasks.length > 0
@@ -2005,6 +2089,7 @@ function AppContent() {
         onDeleteTask={(taskId) =>
           deleteTask(selectedProjectData.customer.id, selectedProjectData.project.id, taskId)
         }
+        taskScheduleDefaults={computeTaskScheduleDefaults(businessSettings)}
       />
     )
   }
@@ -2705,6 +2790,216 @@ function AppContent() {
     </div>
   )
 
+  const renderBusinessSettingsSection = () => {
+    const invalidHours = BUSINESS_DAY_ORDER.filter(day => {
+      const hours = businessSettingsDraft.hours[day.key]
+      if (!hours?.enabled) {
+        return false
+      }
+      if (!hours.start || !hours.end) {
+        return true
+      }
+      return hours.start >= hours.end
+    })
+    const validationMessage =
+      invalidHours.length > 0
+        ? `Set valid start and end times for ${invalidHours.map(day => day.label).join(', ')}.`
+        : null
+    const trimmedBusinessName = businessSettingsDraft.businessName.trim()
+    const isDirty = !businessSettingsEqual(businessSettingsDraft, businessSettings)
+
+    const handleToggleDay = (dayKey: BusinessDay) => {
+      setBusinessSettingsDraft(prev => {
+        const current = prev.hours[dayKey] ?? DEFAULT_BUSINESS_SETTINGS.hours[dayKey]
+        return {
+          ...prev,
+          hours: {
+            ...prev.hours,
+            [dayKey]: { ...current, enabled: !current.enabled },
+          },
+        }
+      })
+      setBusinessSettingsMessage(null)
+      setBusinessSettingsError(null)
+    }
+
+    const handleTimeChange = (dayKey: BusinessDay, field: 'start' | 'end', value: string) => {
+      setBusinessSettingsDraft(prev => {
+        const current = prev.hours[dayKey] ?? DEFAULT_BUSINESS_SETTINGS.hours[dayKey]
+        return {
+          ...prev,
+          hours: {
+            ...prev.hours,
+            [dayKey]: { ...current, [field]: value },
+          },
+        }
+      })
+      setBusinessSettingsMessage(null)
+      setBusinessSettingsError(null)
+    }
+
+    const handleReset = () => {
+      setBusinessSettingsDraft(cloneBusinessSettings(businessSettings))
+      setBusinessSettingsMessage(null)
+      setBusinessSettingsError(null)
+    }
+
+    const handleSave = async () => {
+      if (!isDirty) {
+        return
+      }
+      if (!trimmedBusinessName) {
+        setBusinessSettingsError('Enter a business name.')
+        return
+      }
+      if (validationMessage) {
+        setBusinessSettingsError(validationMessage)
+        return
+      }
+
+      setIsSavingBusinessSettings(true)
+      try {
+        const payload = cloneBusinessSettings(businessSettingsDraft)
+        payload.businessName = trimmedBusinessName
+        const saved = await updateBusinessSettingsRecord(payload)
+        setBusinessSettings(saved)
+        setBusinessSettingsDraft(cloneBusinessSettings(saved))
+        setBusinessSettingsMessage('Business settings updated.')
+        setBusinessSettingsError(null)
+      } catch (error) {
+        console.error('Failed to update business settings', error)
+        setBusinessSettingsError(toErrorMessage(error, 'Failed to save business settings.'))
+      } finally {
+        setIsSavingBusinessSettings(false)
+      }
+    }
+
+    const disableSave =
+      isSavingBusinessSettings || !isDirty || !!validationMessage || !trimmedBusinessName
+
+    return (
+      <div className='space-y-6'>
+        {businessSettingsError ? (
+          <div className='rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700'>
+            <div className='flex items-start gap-2'>
+              <AlertCircle size={16} className='mt-0.5 flex-shrink-0' />
+              <span>{businessSettingsError}</span>
+            </div>
+          </div>
+        ) : null}
+        {businessSettingsMessage ? (
+          <div className='rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700'>
+            {businessSettingsMessage}
+          </div>
+        ) : null}
+
+        <Card className='panel'>
+          <CardHeader className='flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between'>
+            <div>
+              <div className='text-lg font-semibold text-slate-900'>Business profile</div>
+              <p className='mt-1 text-sm text-slate-600'>Configure the workspace name and working hours used for scheduling defaults.</p>
+            </div>
+            <div className='flex flex-wrap gap-2'>
+              <Button variant='outline' onClick={handleReset} disabled={isSavingBusinessSettings || !isDirty}>
+                Reset changes
+              </Button>
+              <Button onClick={() => void handleSave()} disabled={disableSave}>
+                {isSavingBusinessSettings ? 'Saving…' : 'Save changes'}
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className='space-y-6'>
+            <div>
+              <Label htmlFor='business-name'>Business name</Label>
+              <Input
+                id='business-name'
+                value={businessSettingsDraft.businessName}
+                onChange={event => {
+                  setBusinessSettingsDraft(prev => ({
+                    ...prev,
+                    businessName: (event.target as HTMLInputElement).value,
+                  }))
+                  setBusinessSettingsMessage(null)
+                  setBusinessSettingsError(null)
+                }}
+                placeholder='e.g. Cobalt Systems'
+                disabled={isSavingBusinessSettings}
+              />
+            </div>
+
+            <div>
+              <div className='mb-2 text-sm font-semibold text-slate-700'>Operating hours</div>
+              {validationMessage ? (
+                <div className='mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700'>
+                  {validationMessage}
+                </div>
+              ) : null}
+              <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
+                <div className='overflow-x-auto'>
+                  <table className='min-w-full divide-y divide-slate-200 bg-white text-sm text-slate-700'>
+                    <thead className='bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500'>
+                      <tr>
+                        <th scope='col' className='px-4 py-3 text-left font-semibold'>Day</th>
+                        <th scope='col' className='px-4 py-3 text-left font-semibold'>Open</th>
+                        <th scope='col' className='px-4 py-3 text-left font-semibold'>Start</th>
+                        <th scope='col' className='px-4 py-3 text-left font-semibold'>End</th>
+                      </tr>
+                    </thead>
+                    <tbody className='divide-y divide-slate-100'>
+                      {BUSINESS_DAY_ORDER.map(day => {
+                        const hours = businessSettingsDraft.hours[day.key] ?? DEFAULT_BUSINESS_SETTINGS.hours[day.key]
+                        const isDisabled = !hours.enabled
+                        return (
+                          <tr key={day.key} className='hover:bg-slate-50/70'>
+                            <td className='whitespace-nowrap px-4 py-3 font-medium text-slate-800'>{day.label}</td>
+                            <td className='px-4 py-3'>
+                              <label className='inline-flex items-center gap-2 text-xs font-medium text-slate-600'>
+                                <input
+                                  type='checkbox'
+                                  className='h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-500 disabled:cursor-not-allowed'
+                                  checked={hours.enabled}
+                                  onChange={() => handleToggleDay(day.key)}
+                                  disabled={isSavingBusinessSettings}
+                                />
+                                {hours.enabled ? 'Open' : 'Closed'}
+                              </label>
+                            </td>
+                            <td className='px-4 py-3'>
+                              <input
+                                type='time'
+                                className='w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-700 shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                                value={hours.start}
+                                onChange={event =>
+                                  handleTimeChange(day.key, 'start', (event.target as HTMLInputElement).value)
+                                }
+                                disabled={isSavingBusinessSettings || isDisabled}
+                              />
+                            </td>
+                            <td className='px-4 py-3'>
+                              <input
+                                type='time'
+                                className='w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-700 shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                                value={hours.end}
+                                onChange={event =>
+                                  handleTimeChange(day.key, 'end', (event.target as HTMLInputElement).value)
+                                }
+                                disabled={isSavingBusinessSettings || isDisabled}
+                              />
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
+
   const renderSettingsPage = () => (
     <div className='space-y-6'>
       <div className='rounded-3xl border border-slate-200/70 bg-white/80 p-4 shadow-sm'>
@@ -2734,7 +3029,11 @@ function AppContent() {
           </div>
         </div>
       </div>
-      {settingsSection === 'users' ? renderUserManagementSection() : renderDataSection()}
+      {settingsSection === 'users'
+        ? renderUserManagementSection()
+        : settingsSection === 'business'
+        ? renderBusinessSettingsSection()
+        : renderDataSection()}
     </div>
   )
 
