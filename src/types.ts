@@ -180,6 +180,21 @@ export type Project = {
   onsiteReports?: ProjectOnsiteReport[];
 };
 
+export type CustomerSite = {
+  id: string;
+  name?: string;
+  address?: string;
+  notes?: string;
+};
+
+export type CustomerSubCustomer = {
+  id: string;
+  name: string;
+  address?: string;
+  notes?: string;
+  siteId?: string;
+};
+
 export type CustomerContact = {
   id: string;
   name?: string;
@@ -192,6 +207,8 @@ export type Customer = {
   id: string;
   name: string;
   address?: string;
+  sites: CustomerSite[];
+  subCustomers: CustomerSubCustomer[];
   contacts: CustomerContact[];
   projects: Project[];
 };
