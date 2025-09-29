@@ -53,6 +53,25 @@ export type CustomerSignOffPdfInput = {
   completedAt: string
 }
 
+export type OnsiteReportPdfInput = {
+  projectNumber: string
+  customerName: string
+  siteAddress?: string
+  reportDate: string
+  arrivalTime?: string
+  departureTime?: string
+  engineerName: string
+  customerContact?: string
+  workSummary: string
+  materialsUsed?: string
+  additionalNotes?: string
+  signedByName: string
+  signedByPosition?: string
+  signaturePaths: CustomerSignOffSignatureStroke[]
+  signatureDimensions: CustomerSignOffSignatureDimensions
+  createdAt: string
+}
+
 function escapePdfText(text: string): string {
   return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')
 }
@@ -392,6 +411,146 @@ export async function generateCustomerSignOffPdf(data: CustomerSignOffPdfInput):
   cursor = signatureBoxBottom - 24
   const signedBy = `${data.signedByName} — ${data.signedByPosition}`
   drawLabelValue('Signed by', signedBy)
+
+  const contentStream = builder.content
+  const contentBytes = new TextEncoder().encode(contentStream)
+
+  const objects: PdfObject[] = []
+  objects.push({ type: 'value', content: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>' })
+  objects.push({ type: 'value', content: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>' })
+  objects.push({ type: 'stream', content: contentBytes })
+
+  const predictedPagesId = objects.length + 2
+  const pageObject =
+    `<< /Type /Page /Parent ${predictedPagesId} 0 R /MediaBox [0 0 ${formatNumber(pageWidth)} ${formatNumber(
+      pageHeight,
+    )}] /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> /Contents 3 0 R >>`
+  objects.push({ type: 'value', content: pageObject })
+  objects.push({ type: 'value', content: `<< /Type /Pages /Kids [4 0 R] /Count 1 >>` })
+  objects.push({ type: 'value', content: '<< /Type /Catalog /Pages 5 0 R >>' })
+
+  const pdfBytes = buildPdf(objects)
+  const base64 = encodeBase64(pdfBytes)
+  return `data:application/pdf;base64,${base64}`
+}
+
+export async function generateOnsiteReportPdf(data: OnsiteReportPdfInput): Promise<string> {
+  const pageWidth = 595.28
+  const pageHeight = 841.89
+  const margin = 48
+  const contentWidth = pageWidth - margin * 2
+
+  const headingColor: Rgb = [0.1, 0.13, 0.2]
+  const labelColor: Rgb = [0.4, 0.45, 0.55]
+  const bodyColor: Rgb = [0.1, 0.13, 0.2]
+  const accentColor: Rgb = [0.15, 0.18, 0.26]
+
+  const measure = createTextMeasurer()
+  const builder = { content: '' }
+  let cursor = pageHeight - margin
+
+  const wrap = (text: string, width: number, size: number, isBold: boolean) =>
+    wrapText(text, width, size, isBold, measure)
+
+  const drawHeading = (text: string, size: number, gap: number) => {
+    cursor -= size
+    appendTextLine(builder, text, margin, cursor, 'F2', size, headingColor)
+    cursor -= gap
+  }
+
+  const drawLabelValue = (label: string, value?: string) => {
+    const labelSize = 11
+    const valueSize = 12
+    cursor -= labelSize
+    appendTextLine(builder, label.toUpperCase(), margin, cursor, 'F2', labelSize, labelColor)
+    cursor -= 4
+    const content = value && value.trim() ? value : 'Not provided'
+    const lines = wrap(content, contentWidth, valueSize, false)
+    for (let index = 0; index < lines.length; index += 1) {
+      cursor -= valueSize
+      appendTextLine(builder, lines[index], margin, cursor, 'F1', valueSize, bodyColor)
+      cursor -= 4
+    }
+    cursor -= 8
+  }
+
+  const drawTextBlock = (title: string, value?: string) => {
+    drawHeading(title, 16, 12)
+    const content = value && value.trim() ? value : 'Not provided'
+    const lines = wrap(content, contentWidth, 12, false)
+    for (let index = 0; index < lines.length; index += 1) {
+      cursor -= 12
+      appendTextLine(builder, lines[index], margin, cursor, 'F1', 12, bodyColor)
+      cursor -= 4
+    }
+    cursor -= 8
+  }
+
+  const formatReportDate = (value?: string): string => {
+    if (!value) {
+      return 'Not provided'
+    }
+    const parsed = Date.parse(value)
+    if (Number.isNaN(parsed)) {
+      return value
+    }
+    return new Date(parsed).toLocaleDateString()
+  }
+
+  const formatTimeValue = (value?: string): string => {
+    if (!value) {
+      return 'Not provided'
+    }
+    return value
+  }
+
+  drawHeading('Onsite Report', 24, 24)
+  drawLabelValue('Customer', data.customerName)
+  drawLabelValue('Project', data.projectNumber)
+  drawLabelValue('Site Address', data.siteAddress)
+  drawLabelValue('Created', new Date(data.createdAt).toLocaleString())
+
+  drawHeading('Visit Details', 16, 16)
+  drawLabelValue('Report Date', formatReportDate(data.reportDate))
+  drawLabelValue('Engineer', data.engineerName)
+  drawLabelValue('Arrival Time', formatTimeValue(data.arrivalTime))
+  drawLabelValue('Departure Time', formatTimeValue(data.departureTime))
+  drawLabelValue('Customer Contact', data.customerContact)
+
+  drawTextBlock('Work Summary', data.workSummary)
+  drawTextBlock('Materials Used', data.materialsUsed)
+  drawTextBlock('Additional Notes', data.additionalNotes)
+
+  cursor -= 12
+  drawHeading('Customer Sign Off', 16, 20)
+
+  const signatureBoxHeight = 120
+  const signatureBoxTop = cursor
+  const signatureBoxBottom = signatureBoxTop - signatureBoxHeight
+
+  drawRectangle(
+    builder,
+    margin,
+    signatureBoxBottom,
+    contentWidth,
+    signatureBoxHeight,
+    [0.96, 0.97, 0.99],
+    [0.8, 0.82, 0.86],
+  )
+
+  drawSignaturePaths(builder, data.signaturePaths, data.signatureDimensions, {
+    x: margin,
+    y: signatureBoxBottom,
+    width: contentWidth,
+    height: signatureBoxHeight,
+  })
+
+  cursor = signatureBoxBottom - 24
+  const signedBy = data.signedByPosition
+    ? `${data.signedByName} — ${data.signedByPosition}`
+    : data.signedByName
+  drawLabelValue('Signed By', signedBy)
+  drawLabelValue('Signed At', new Date(data.createdAt).toLocaleString())
 
   const contentStream = builder.content
   const contentBytes = new TextEncoder().encode(contentStream)

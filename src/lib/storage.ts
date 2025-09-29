@@ -909,6 +909,7 @@ function createLocalStorageStorage(): StorageApi {
     const signedByName = toOptionalString((raw as { signedByName?: unknown }).signedByName)
     const signedByPosition = toOptionalString((raw as { signedByPosition?: unknown }).signedByPosition)
     const signatureDataUrl = toOptionalString((raw as { signatureDataUrl?: unknown }).signatureDataUrl)
+    const pdfDataUrl = toOptionalString((raw as { pdfDataUrl?: unknown }).pdfDataUrl)
     const createdAtRaw = typeof raw.createdAt === 'string' ? raw.createdAt : null
     const createdAt =
       createdAtRaw && !Number.isNaN(Date.parse(createdAtRaw))
@@ -929,6 +930,7 @@ function createLocalStorageStorage(): StorageApi {
       signedByName,
       signedByPosition,
       signatureDataUrl,
+      pdfDataUrl,
       createdAt,
     }
   }
