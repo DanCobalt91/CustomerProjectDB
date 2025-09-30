@@ -20,7 +20,6 @@ import type {
   Customer,
   CustomerContact,
   CustomerSite,
-  CustomerSubCustomer,
   Project,
   ProjectActiveSubStatus,
   ProjectCustomerSignOff,
@@ -136,14 +135,6 @@ type CustomerSiteDraft = {
   notes: string
 }
 
-type CustomerSubCustomerDraft = {
-  id: string
-  name: string
-  address: string
-  notes: string
-  siteId: string
-}
-
 type CustomerSiteTabKey = 'all' | 'unassigned' | string
 
 function createSiteDraft(site?: CustomerSite | null): CustomerSiteDraft {
@@ -152,16 +143,6 @@ function createSiteDraft(site?: CustomerSite | null): CustomerSiteDraft {
     name: site?.name ?? '',
     address: site?.address ?? '',
     notes: site?.notes ?? '',
-  }
-}
-
-function createSubCustomerDraft(subCustomer?: CustomerSubCustomer | null): CustomerSubCustomerDraft {
-  return {
-    id: subCustomer?.id ?? createId(),
-    name: subCustomer?.name ?? '',
-    address: subCustomer?.address ?? '',
-    notes: subCustomer?.notes ?? '',
-    siteId: subCustomer?.siteId ?? '',
   }
 }
 
@@ -556,7 +537,7 @@ function AppContent() {
     contactPhone: '',
     contactEmail: '',
     sites: [] as CustomerSiteDraft[],
-    subCustomers: [] as CustomerSubCustomerDraft[],
+    parentCustomerId: '',
   })
   const addNewCustomerSite = () => {
     setNewCust(prev => ({ ...prev, sites: [...prev.sites, createSiteDraft()] }))
@@ -569,32 +550,6 @@ function AppContent() {
   }
   const removeNewCustomerSite = (siteId: string) => {
     setNewCust(prev => ({ ...prev, sites: prev.sites.filter(site => site.id !== siteId) }))
-  }
-  const addNewCustomerSubCustomer = () => {
-    setNewCust(prev => ({
-      ...prev,
-      subCustomers: [
-        ...prev.subCustomers,
-        { ...createSubCustomerDraft(), siteId: prev.sites[0]?.id ?? '' },
-      ],
-    }))
-  }
-  const updateNewCustomerSubCustomer = (
-    subCustomerId: string,
-    updates: Partial<CustomerSubCustomerDraft>,
-  ) => {
-    setNewCust(prev => ({
-      ...prev,
-      subCustomers: prev.subCustomers.map(subCustomer =>
-        subCustomer.id === subCustomerId ? { ...subCustomer, ...updates } : subCustomer,
-      ),
-    }))
-  }
-  const removeNewCustomerSubCustomer = (subCustomerId: string) => {
-    setNewCust(prev => ({
-      ...prev,
-      subCustomers: prev.subCustomers.filter(subCustomer => subCustomer.id !== subCustomerId),
-    }))
   }
   const [showNewCustomer, setShowNewCustomer] = useState(false)
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
@@ -612,7 +567,7 @@ function AppContent() {
     name: '',
     address: '',
     sites: [] as CustomerSiteDraft[],
-    subCustomers: [] as CustomerSubCustomerDraft[],
+    parentCustomerId: '',
   })
   const addEditorSite = () => {
     setCustomerEditorDraft(prev => ({ ...prev, sites: [...prev.sites, createSiteDraft()] }))
@@ -627,35 +582,6 @@ function AppContent() {
     setCustomerEditorDraft(prev => ({
       ...prev,
       sites: prev.sites.filter(site => site.id !== siteId),
-      subCustomers: prev.subCustomers.map(subCustomer =>
-        subCustomer.siteId === siteId ? { ...subCustomer, siteId: '' } : subCustomer,
-      ),
-    }))
-  }
-  const addEditorSubCustomer = () => {
-    setCustomerEditorDraft(prev => ({
-      ...prev,
-      subCustomers: [
-        ...prev.subCustomers,
-        { ...createSubCustomerDraft(), siteId: prev.sites[0]?.id ?? '' },
-      ],
-    }))
-  }
-  const updateEditorSubCustomer = (
-    subCustomerId: string,
-    updates: Partial<CustomerSubCustomerDraft>,
-  ) => {
-    setCustomerEditorDraft(prev => ({
-      ...prev,
-      subCustomers: prev.subCustomers.map(subCustomer =>
-        subCustomer.id === subCustomerId ? { ...subCustomer, ...updates } : subCustomer,
-      ),
-    }))
-  }
-  const removeEditorSubCustomer = (subCustomerId: string) => {
-    setCustomerEditorDraft(prev => ({
-      ...prev,
-      subCustomers: prev.subCustomers.filter(subCustomer => subCustomer.id !== subCustomerId),
     }))
   }
   const [customerEditorError, setCustomerEditorError] = useState<string | null>(null)
@@ -845,7 +771,6 @@ function AppContent() {
     const hasUnassigned =
       selectedCustomer.contacts.some(contact => !contact.siteId) ||
       selectedCustomer.projects.some(project => !project.siteId) ||
-      selectedCustomer.subCustomers.some(sub => !sub.siteId) ||
       selectedCustomer.sites.length === 0
     if (hasUnassigned) {
       tabs.push({ key: 'unassigned', label: 'Unassigned' })
@@ -874,17 +799,21 @@ function AppContent() {
     map.unassigned = selectedCustomer.projects.filter(project => !project.siteId)
     return map
   }, [selectedCustomer])
-  const subCustomersBySiteTab = useMemo(() => {
-    if (!selectedCustomer) {
-      return { all: [] as CustomerSubCustomer[], unassigned: [] as CustomerSubCustomer[] }
+  const customerLookup = useMemo(() => new Map(db.map(customer => [customer.id, customer] as const)), [db])
+  const parentCustomer = useMemo(() => {
+    if (!selectedCustomer?.parentCustomerId) {
+      return null
     }
-    const map: Record<string, CustomerSubCustomer[]> = { all: selectedCustomer.subCustomers }
-    selectedCustomer.sites.forEach(site => {
-      map[site.id] = selectedCustomer.subCustomers.filter(sub => sub.siteId === site.id)
-    })
-    map.unassigned = selectedCustomer.subCustomers.filter(sub => !sub.siteId)
-    return map
-  }, [selectedCustomer])
+    return customerLookup.get(selectedCustomer.parentCustomerId) ?? null
+  }, [customerLookup, selectedCustomer?.parentCustomerId])
+  const childCustomers = useMemo(() => {
+    if (!selectedCustomer) {
+      return [] as Customer[]
+    }
+    return db
+      .filter(customer => customer.parentCustomerId === selectedCustomer.id)
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [db, selectedCustomer])
   const selectedCustomerPrimarySite = selectedCustomerSites.find(site => site.address?.trim()) ?? null
   const activeCustomerSite =
     customerSiteTab !== 'all' && customerSiteTab !== 'unassigned'
@@ -968,9 +897,7 @@ function AppContent() {
       name: selectedCustomer?.name ?? '',
       address: selectedCustomer?.address ?? '',
       sites: selectedCustomer ? selectedCustomer.sites.map(createSiteDraft) : [],
-      subCustomers: selectedCustomer
-        ? selectedCustomer.subCustomers.map(createSubCustomerDraft)
-        : [],
+      parentCustomerId: selectedCustomer?.parentCustomerId ?? '',
     })
     setCustomerEditorError(null)
     setIsSavingCustomerEditor(false)
@@ -1426,7 +1353,7 @@ function AppContent() {
       name: selectedCustomer.name,
       address: selectedCustomer.address ?? '',
       sites: selectedCustomer.sites.map(createSiteDraft),
-      subCustomers: selectedCustomer.subCustomers.map(createSubCustomerDraft),
+      parentCustomerId: selectedCustomer.parentCustomerId ?? '',
     })
     setCustomerEditorError(null)
     setIsSavingCustomerEditor(false)
@@ -1462,6 +1389,12 @@ function AppContent() {
                     const isSelected = selectedCustomerId === customer.id && activePage === 'customerDetail'
                     const projectCount = customer.projects.length
                     const primaryContact = customer.contacts.find(contact => contact.name?.trim()) ?? null
+                    const parent = customer.parentCustomerId
+                      ? customerLookup.get(customer.parentCustomerId) ?? null
+                      : null
+                    const displayName = parent
+                      ? `${parent.name} > ${customer.name}`
+                      : customer.name
                     return (
                       <tr
                         key={customer.id}
@@ -1469,7 +1402,7 @@ function AppContent() {
                       >
                         <td className='px-4 py-3'>
                           <div className='flex flex-col gap-1'>
-                            <span className='text-sm font-semibold text-slate-900'>{customer.name}</span>
+                            <span className='text-sm font-semibold text-slate-900'>{displayName}</span>
                             <span className='text-xs text-slate-500'>
                               {customer.sites.find(site => site.address?.trim())?.address ??
                                 customer.address ??
@@ -1544,7 +1477,6 @@ function AppContent() {
     const projectsForCurrentSite = projectsBySiteTab[customerSiteTab] ?? []
     const activeProjects = projectsForCurrentSite.filter(project => project.status === 'Active')
     const completedProjects = projectsForCurrentSite.filter(project => project.status === 'Complete')
-    const subCustomersForActiveTab = subCustomersBySiteTab[customerSiteTab] ?? []
     const projectsForTab = customerProjectsTab === 'active' ? activeProjects : completedProjects
     const projectTabCopy: Record<'active' | 'complete', { label: string; empty: string; count: number }> = {
       active: {
@@ -1609,6 +1541,21 @@ function AppContent() {
             </div>
             <div>
               <div className='text-3xl font-semibold tracking-tight text-slate-900'>{selectedCustomer.name}</div>
+              {parentCustomer ? (
+                <div className='mt-1 text-sm text-slate-500'>
+                  Sub customer of{' '}
+                  <button
+                    type='button'
+                    className='font-medium text-sky-600 hover:text-sky-700'
+                    onClick={() => {
+                      setSelectedCustomerId(parentCustomer.id)
+                      setActivePage('customers')
+                    }}
+                  >
+                    {parentCustomer.name}
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
         </CardHeader>
@@ -1763,36 +1710,36 @@ function AppContent() {
 
               <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
                 <div className='text-sm font-semibold text-slate-700'>Sub customers</div>
-                {subCustomersForActiveTab.length === 0 ? (
+                {childCustomers.length === 0 ? (
                   <p className='mt-2 text-sm text-slate-500'>No sub customers recorded.</p>
                 ) : (
                   <div className='mt-3 space-y-3'>
-                    {subCustomersForActiveTab.map(subCustomer => {
-                      const relatedSite = selectedCustomerSites.find(site => site.id === subCustomer.siteId) ?? null
-                      return (
-                        <div
-                          key={subCustomer.id}
-                          className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'
-                        >
-                          <div className='text-sm font-semibold text-slate-800'>{subCustomer.name}</div>
-                          {relatedSite ? (
-                            <div className='text-xs text-slate-500'>
-                              Related site: {relatedSite.name?.trim() || relatedSite.address?.trim() || 'Unnamed site'}
+                    {childCustomers.map(child => (
+                      <div
+                        key={child.id}
+                        className='flex items-start justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'
+                      >
+                        <div>
+                          <div className='text-sm font-semibold text-slate-800'>{child.name}</div>
+                          {child.address ? (
+                            <div className='mt-1 text-xs text-slate-500'>
+                              {child.address.split('\n')[0]}
                             </div>
-                          ) : null}
-                          {subCustomer.address ? (
-                            <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
-                              <span className='block whitespace-pre-wrap break-words text-slate-700'>
-                                {subCustomer.address}
-                              </span>
-                            </div>
-                          ) : null}
-                          {subCustomer.notes ? (
-                            <div className='text-xs text-slate-500'>Notes: {subCustomer.notes}</div>
                           ) : null}
                         </div>
-                      )
-                    })}
+                        <Button
+                          type='button'
+                          variant='outline'
+                          className='rounded-full px-2 py-1 text-xs'
+                          onClick={() => {
+                            setSelectedCustomerId(child.id)
+                            setActivePage('customers')
+                          }}
+                        >
+                          View
+                        </Button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
@@ -3933,13 +3880,7 @@ function AppContent() {
       address?: string | null
       contacts?: Array<{ id?: string; name?: string; position?: string; phone?: string; email?: string; siteId?: string }> | null
       sites?: Array<{ id?: string; name?: string; address?: string; notes?: string }> | null
-      subCustomers?: Array<{
-        id?: string
-        name?: string
-        address?: string
-        notes?: string
-        siteId?: string
-      }> | null
+      parentCustomerId?: string | null
     },
     errorMessage = 'Failed to update customer.',
   ) {
@@ -4797,32 +4738,14 @@ function AppContent() {
         })
         .filter((site): site is NonNullable<typeof site> => site !== null)
 
-      const validSiteIds = new Set(sitePayload.map(site => site.id))
-
-      const subCustomerPayload = customerEditorDraft.subCustomers
-        .map(subCustomer => {
-          const name = subCustomer.name.trim()
-          if (!name) {
-            return null
-          }
-          const address = subCustomer.address.trim()
-          const notes = subCustomer.notes.trim()
-          const siteId = subCustomer.siteId.trim()
-          return {
-            id: subCustomer.id,
-            name,
-            address: address || undefined,
-            notes: notes || undefined,
-            siteId: siteId && validSiteIds.has(siteId) ? siteId : undefined,
-          }
-        })
-        .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-
+      const parentCustomerId = customerEditorDraft.parentCustomerId.trim()
       await saveCustomerDetails(selectedCustomer.id, {
         name: trimmedName,
         address: trimmedAddress ? trimmedAddress : null,
         sites: sitePayload,
-        subCustomers: subCustomerPayload,
+        parentCustomerId: parentCustomerId && parentCustomerId !== selectedCustomer.id
+          ? parentCustomerId
+          : null,
       })
       setShowCustomerEditor(false)
     } catch (error) {
@@ -5373,13 +5296,7 @@ function AppContent() {
       address?: string
       contacts?: Array<{ name?: string; position?: string; phone?: string; email?: string; siteId?: string }>
       sites?: Array<{ id: string; name?: string; address?: string; notes?: string }>
-      subCustomers?: Array<{
-        id: string
-        name: string
-        address?: string
-        notes?: string
-        siteId?: string
-      }>
+      parentCustomerId?: string
     },
   ): Promise<string | null> {
     if (!canEdit) {
@@ -5404,7 +5321,7 @@ function AppContent() {
       address: data.address?.trim() || undefined,
       contacts: contactsPayload,
       sites: data.sites,
-      subCustomers: data.subCustomers,
+      parentCustomerId: data.parentCustomerId?.trim() || undefined,
     }
     try {
       const customer = await createCustomerRecord(payload)
@@ -5983,107 +5900,28 @@ function AppContent() {
                       )}
                     </div>
 
-                    <div className='space-y-3'>
-                      <div className='flex items-center justify-between gap-2'>
-                        <Label className='text-sm font-semibold text-slate-700'>Sub customers</Label>
-                        <Button
-                          type='button'
-                          variant='outline'
-                          onClick={addNewCustomerSubCustomer}
-                          disabled={!canEdit}
-                        >
-                          <Plus size={16} /> Add sub customer
-                        </Button>
-                      </div>
-                      {newCust.subCustomers.length === 0 ? (
-                        <p className='text-sm text-slate-500'>No sub customers added.</p>
-                      ) : (
-                        <div className='space-y-3'>
-                          {newCust.subCustomers.map((subCustomer, index) => (
-                            <div
-                              key={subCustomer.id}
-                              className='space-y-3 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-sm'
-                            >
-                              <div className='flex items-center justify-between gap-2'>
-                                <div className='text-sm font-semibold text-slate-700'>Sub customer {index + 1}</div>
-                                <Button
-                                  type='button'
-                                  variant='ghost'
-                                  className='rounded-full px-2 py-1 text-slate-500 hover:text-rose-600'
-                                  onClick={() => removeNewCustomerSubCustomer(subCustomer.id)}
-                                  disabled={!canEdit}
-                                >
-                                  <Trash2 size={16} />
-                                </Button>
-                              </div>
-                              <div className='grid gap-3 md:grid-cols-2'>
-                                <div>
-                                  <Label className='text-xs font-medium text-slate-500'>Name</Label>
-                                  <Input
-                                    value={subCustomer.name}
-                                    onChange={(event) =>
-                                      updateNewCustomerSubCustomer(subCustomer.id, {
-                                        name: (event.target as HTMLInputElement).value,
-                                      })
-                                    }
-                                    placeholder='e.g. Snuggles'
-                                    disabled={!canEdit}
-                                  />
-                                </div>
-                                <div>
-                                  <Label className='text-xs font-medium text-slate-500'>Related site</Label>
-                                  <select
-                                    className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                                    value={subCustomer.siteId}
-                                    onChange={(event) =>
-                                      updateNewCustomerSubCustomer(subCustomer.id, {
-                                        siteId: (event.target as HTMLSelectElement).value,
-                                      })
-                                    }
-                                    disabled={!canEdit}
-                                  >
-                                    <option value=''>Unassigned</option>
-                                    {newCust.sites.map(site => (
-                                      <option key={site.id} value={site.id}>
-                                        {site.name.trim() || site.address.trim() || 'Unnamed site'}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-                              </div>
-                              <div className='grid gap-3 md:grid-cols-2'>
-                                <div>
-                                  <Label className='text-xs font-medium text-slate-500'>Address</Label>
-                                  <Input
-                                    value={subCustomer.address}
-                                    onChange={(event) =>
-                                      updateNewCustomerSubCustomer(subCustomer.id, {
-                                        address: (event.target as HTMLInputElement).value,
-                                      })
-                                    }
-                                    placeholder='Optional address'
-                                    disabled={!canEdit}
-                                  />
-                                </div>
-                                <div>
-                                  <Label className='text-xs font-medium text-slate-500'>Notes</Label>
-                                  <Input
-                                    value={subCustomer.notes}
-                                    onChange={(event) =>
-                                      updateNewCustomerSubCustomer(subCustomer.id, {
-                                        notes: (event.target as HTMLInputElement).value,
-                                      })
-                                    }
-                                    placeholder='Optional notes'
-                                    disabled={!canEdit}
-                                  />
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                    <div className='space-y-2'>
+                      <Label className='text-sm font-semibold text-slate-700'>Parent customer</Label>
+                      <select
+                        className='w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                        value={newCust.parentCustomerId}
+                        onChange={event =>
+                          setNewCust(prev => ({ ...prev, parentCustomerId: event.target.value }))
+                        }
+                        disabled={!canEdit || sortedCustomers.length === 0}
+                      >
+                        <option value=''>No parent (top-level customer)</option>
+                        {sortedCustomers.map(customer => (
+                          <option key={customer.id} value={customer.id}>
+                            {customer.name}
+                          </option>
+                        ))}
+                      </select>
+                      <p className='text-xs text-slate-500'>
+                        Choose an existing customer to nest this record underneath.
+                      </p>
                     </div>
+
                   </div>
                   {newCustomerError && (
                     <p className='mt-2 flex items-center gap-1 text-sm text-rose-600'>
@@ -6124,27 +5962,7 @@ function AppContent() {
                             })
                             .filter((site): site is NonNullable<typeof site> => site !== null)
 
-                          const validSiteIds = new Set(sitePayload.map(site => site.id))
-
-                          const subCustomerPayload = newCust.subCustomers
-                            .map(subCustomer => {
-                              const name = subCustomer.name.trim()
-                              if (!name) {
-                                return null
-                              }
-                              const address = subCustomer.address.trim()
-                              const notes = subCustomer.notes.trim()
-                              const siteId = subCustomer.siteId.trim()
-                              return {
-                                id: subCustomer.id,
-                                name,
-                                address: address || undefined,
-                                notes: notes || undefined,
-                                siteId: siteId && validSiteIds.has(siteId) ? siteId : undefined,
-                              }
-                            })
-                            .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-
+                          const parentCustomerId = newCust.parentCustomerId.trim()
                           const result = await createCustomer({
                             name: newCust.name,
                             address: newCust.address,
@@ -6157,7 +5975,7 @@ function AppContent() {
                               },
                             ],
                             sites: sitePayload,
-                            subCustomers: subCustomerPayload,
+                            parentCustomerId: parentCustomerId || undefined,
                           })
                           if (result) {
                             setNewCustomerError(result)
@@ -6171,7 +5989,7 @@ function AppContent() {
                             contactPhone: '',
                             contactEmail: '',
                             sites: [],
-                            subCustomers: [],
+                            parentCustomerId: '',
                           })
                           setShowNewCustomer(false)
                           setNewCustomerError(null)
@@ -6334,107 +6152,30 @@ function AppContent() {
                       )}
                     </div>
 
-                    <div className='space-y-3'>
-                      <div className='flex items-center justify-between gap-2'>
-                        <Label className='text-sm font-semibold text-slate-700'>Sub customers</Label>
-                        <Button
-                          type='button'
-                          variant='outline'
-                          onClick={addEditorSubCustomer}
-                          disabled={!canEdit || isSavingCustomerEditor}
-                        >
-                          <Plus size={16} /> Add sub customer
-                        </Button>
-                      </div>
-                      {customerEditorDraft.subCustomers.length === 0 ? (
-                        <p className='text-sm text-slate-500'>No sub customers recorded.</p>
-                      ) : (
-                        <div className='space-y-3'>
-                          {customerEditorDraft.subCustomers.map((subCustomer, index) => (
-                            <div
-                              key={subCustomer.id}
-                              className='space-y-3 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-sm'
-                            >
-                              <div className='flex items-center justify-between gap-2'>
-                                <div className='text-sm font-semibold text-slate-700'>Sub customer {index + 1}</div>
-                                <Button
-                                  type='button'
-                                  variant='ghost'
-                                  className='rounded-full px-2 py-1 text-slate-500 hover:text-rose-600'
-                                  onClick={() => removeEditorSubCustomer(subCustomer.id)}
-                                  disabled={!canEdit || isSavingCustomerEditor}
-                                >
-                                  <Trash2 size={16} />
-                                </Button>
-                              </div>
-                              <div className='grid gap-3 md:grid-cols-2'>
-                                <div>
-                                  <Label className='text-xs font-medium text-slate-500'>Name</Label>
-                                  <Input
-                                    value={subCustomer.name}
-                                    onChange={(event) =>
-                                      updateEditorSubCustomer(subCustomer.id, {
-                                        name: (event.target as HTMLInputElement).value,
-                                      })
-                                    }
-                                    placeholder='e.g. Snuggles'
-                                    disabled={!canEdit || isSavingCustomerEditor}
-                                  />
-                                </div>
-                                <div>
-                                  <Label className='text-xs font-medium text-slate-500'>Related site</Label>
-                                  <select
-                                    className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                                    value={subCustomer.siteId}
-                                    onChange={(event) =>
-                                      updateEditorSubCustomer(subCustomer.id, {
-                                        siteId: (event.target as HTMLSelectElement).value,
-                                      })
-                                    }
-                                    disabled={!canEdit || isSavingCustomerEditor}
-                                  >
-                                    <option value=''>Unassigned</option>
-                                    {customerEditorDraft.sites.map(site => (
-                                      <option key={site.id} value={site.id}>
-                                        {(site.name ?? '').trim() || (site.address ?? '').trim() || 'Unnamed site'}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-                              </div>
-                              <div className='grid gap-3 md:grid-cols-2'>
-                                <div>
-                                  <Label className='text-xs font-medium text-slate-500'>Address</Label>
-                                  <Input
-                                    value={subCustomer.address ?? ''}
-                                    onChange={(event) =>
-                                      updateEditorSubCustomer(subCustomer.id, {
-                                        address: (event.target as HTMLInputElement).value,
-                                      })
-                                    }
-                                    placeholder='Optional address'
-                                    disabled={!canEdit || isSavingCustomerEditor}
-                                  />
-                                </div>
-                                <div>
-                                  <Label className='text-xs font-medium text-slate-500'>Notes</Label>
-                                  <Input
-                                    value={subCustomer.notes ?? ''}
-                                    onChange={(event) =>
-                                      updateEditorSubCustomer(subCustomer.id, {
-                                        notes: (event.target as HTMLInputElement).value,
-                                      })
-                                    }
-                                    placeholder='Optional notes'
-                                    disabled={!canEdit || isSavingCustomerEditor}
-                                  />
-                                </div>
-                              </div>
-                            </div>
+                    <div className='space-y-2'>
+                      <Label className='text-sm font-semibold text-slate-700'>Parent customer</Label>
+                      <select
+                        className='w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                        value={customerEditorDraft.parentCustomerId}
+                        onChange={event =>
+                          setCustomerEditorDraft(prev => ({ ...prev, parentCustomerId: event.target.value }))
+                        }
+                        disabled={!canEdit || isSavingCustomerEditor}
+                      >
+                        <option value=''>No parent (top-level customer)</option>
+                        {sortedCustomers
+                          .filter(customer => customer.id !== selectedCustomer?.id)
+                          .map(customer => (
+                            <option key={customer.id} value={customer.id}>
+                              {customer.name}
+                            </option>
                           ))}
-                        </div>
-                      )}
+                      </select>
+                      <p className='text-xs text-slate-500'>
+                        Link this customer under a main customer to show a Dematic &gt; Aldi-style hierarchy.
+                      </p>
                     </div>
+
                   </div>
                   {customerEditorError && (
                     <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
