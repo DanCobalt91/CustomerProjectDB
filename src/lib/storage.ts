@@ -3,7 +3,6 @@ import type {
   BusinessSettings,
   Customer,
   CustomerSite,
-  CustomerSubCustomer,
   CustomerContact,
   Project,
   ProjectActiveSubStatus,
@@ -40,10 +39,6 @@ const DEFAULT_USER_PASSWORD = 'Demo@123'
 
 type ContactInput = Partial<Omit<CustomerContact, 'id'>> & { id?: string }
 type CustomerSiteInput = Partial<Omit<CustomerSite, 'id'>> & { id?: string }
-type CustomerSubCustomerInput = Partial<Omit<CustomerSubCustomer, 'id' | 'name'>> & {
-  id?: string
-  name?: string
-}
 type ProjectDocumentsUpdate = Partial<Record<ProjectFileCategory, ProjectFile[] | ProjectFile | null>>
 
 type StorageApi = {
@@ -56,7 +51,7 @@ type StorageApi = {
     address?: string
     contacts?: ContactInput[]
     sites?: CustomerSiteInput[]
-    subCustomers?: CustomerSubCustomerInput[]
+    parentCustomerId?: string
   }): Promise<Customer>
   updateCustomer(
     customerId: string,
@@ -65,7 +60,7 @@ type StorageApi = {
       address?: string | null
       contacts?: ContactInput[] | null
       sites?: CustomerSiteInput[] | null
-      subCustomers?: CustomerSubCustomerInput[] | null
+      parentCustomerId?: string | null
     },
   ): Promise<Customer>
   deleteCustomer(customerId: string): Promise<void>
@@ -179,7 +174,7 @@ export function createCustomer(data: {
   address?: string
   contacts?: ContactInput[]
   sites?: CustomerSiteInput[]
-  subCustomers?: CustomerSubCustomerInput[]
+  parentCustomerId?: string
 }): Promise<Customer> {
   return ensureLocalStorage().createCustomer(data)
 }
@@ -191,7 +186,7 @@ export function updateCustomer(
     address?: string | null
     contacts?: ContactInput[] | null
     sites?: CustomerSiteInput[] | null
-    subCustomers?: CustomerSubCustomerInput[] | null
+    parentCustomerId?: string | null
   },
 ): Promise<Customer> {
   return ensureLocalStorage().updateCustomer(customerId, data)
@@ -685,10 +680,11 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
-  function normalizeCustomerSubCustomer(
+  function normalizeLegacySubCustomer(
     value: unknown,
-    availableSites?: CustomerSite[],
-  ): CustomerSubCustomer | null {
+    parentId: string,
+    parentSites: CustomerSite[],
+  ): Customer | null {
     if (!value || typeof value !== 'object') {
       return null
     }
@@ -704,17 +700,42 @@ function createLocalStorageStorage(): StorageApi {
     const notes = toOptionalString(raw.notes)
     const siteIdRaw = toOptionalString((raw as { siteId?: unknown }).siteId)
 
-    let siteId: string | undefined
-    if (siteIdRaw && (!availableSites || availableSites.some(site => site.id === siteIdRaw))) {
-      siteId = siteIdRaw
+    const inheritedSite = siteIdRaw
+      ? parentSites.find(site => site.id === siteIdRaw)
+      : undefined
+
+    const sites: CustomerSite[] = []
+    const siteFromAddress = normalizeCustomerSite({ address, notes })
+    if (siteFromAddress) {
+      sites.push(siteFromAddress)
     }
+    if (sites.length === 0 && inheritedSite) {
+      sites.push({
+        id: createId(),
+        name: inheritedSite.name,
+        address: inheritedSite.address,
+        notes: inheritedSite.notes,
+      })
+    }
+    if (sites.length === 0) {
+      sites.push({
+        id: createId(),
+        name,
+        address: address ?? undefined,
+        notes: notes ?? undefined,
+      })
+    }
+
+    const primaryAddress = address ?? inheritedSite?.address
 
     return {
       id: idRaw || createId(),
       name,
-      address,
-      notes,
-      siteId,
+      address: primaryAddress ?? sites[0]?.address,
+      parentCustomerId: parentId,
+      sites: sortSites(sites),
+      contacts: [],
+      projects: [],
     }
   }
 
@@ -1026,10 +1047,6 @@ function createLocalStorageStorage(): StorageApi {
     return sortByText(sites, site => site.name || site.address || site.id)
   }
 
-  function sortSubCustomers(subCustomers: CustomerSubCustomer[]): CustomerSubCustomer[] {
-    return sortByText(subCustomers, subCustomer => subCustomer.name || subCustomer.id)
-  }
-
   function normalizeProject(value: unknown, availableSites?: CustomerSite[]): Project | null {
     if (!value || typeof value !== 'object') {
       return null
@@ -1126,7 +1143,9 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
-  function normalizeCustomer(value: unknown): Customer | null {
+  function normalizeCustomer(
+    value: unknown,
+  ): { customer: Customer; legacyChildren: Customer[] } | null {
     if (!value || typeof value !== 'object') {
       return null
     }
@@ -1174,23 +1193,26 @@ function createLocalStorageStorage(): StorageApi {
       }
     }
 
-    const subCustomersSource = Array.isArray((raw as { subCustomers?: unknown }).subCustomers)
+    const address = toOptionalString(raw.address) ?? sites[0]?.address
+    const parentCustomerId = toOptionalString((raw as { parentCustomerId?: unknown }).parentCustomerId)
+    const legacySubCustomersSource = Array.isArray((raw as { subCustomers?: unknown }).subCustomers)
       ? ((raw as { subCustomers?: unknown }).subCustomers as unknown[])
       : []
-    const subCustomers = subCustomersSource
-      .map(entry => normalizeCustomerSubCustomer(entry, sites))
-      .filter((entry): entry is CustomerSubCustomer => !!entry)
-
-    const address = toOptionalString(raw.address) ?? sites[0]?.address
+    const legacyChildren = legacySubCustomersSource
+      .map(entry => normalizeLegacySubCustomer(entry, id, sites))
+      .filter((entry): entry is Customer => !!entry)
 
     return {
-      id,
-      name,
-      address,
-      sites: sortSites(sites),
-      subCustomers: sortSubCustomers(subCustomers),
-      contacts: sortContacts(contacts),
-      projects: sortProjects(projects),
+      customer: {
+        id,
+        name,
+        address,
+        parentCustomerId: parentCustomerId ?? undefined,
+        sites: sortSites(sites),
+        contacts: sortContacts(contacts),
+        projects: sortProjects(projects),
+      },
+      legacyChildren,
     }
   }
 
@@ -1282,9 +1304,11 @@ function createLocalStorageStorage(): StorageApi {
       ? ((value as { customers?: unknown }).customers as unknown[])
       : []
 
-    const customers = rawCustomers
+    const normalizedCustomers = rawCustomers
       .map(normalizeCustomer)
-      .filter((customer): customer is Customer => !!customer)
+      .filter((entry): entry is { customer: Customer; legacyChildren: Customer[] } => !!entry)
+
+    const customers = normalizedCustomers.flatMap(entry => [entry.customer, ...entry.legacyChildren])
 
     const rawUsers = Array.isArray((value as { users?: unknown }).users)
       ? ((value as { users?: unknown }).users as unknown[])
@@ -1511,16 +1535,6 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
-  function cloneCustomerSubCustomer(subCustomer: CustomerSubCustomer): CustomerSubCustomer {
-    return {
-      id: subCustomer.id,
-      name: subCustomer.name,
-      address: subCustomer.address,
-      notes: subCustomer.notes,
-      siteId: subCustomer.siteId,
-    }
-  }
-
   function cloneUser(user: User): User {
     return {
       id: user.id,
@@ -1558,8 +1572,8 @@ function createLocalStorageStorage(): StorageApi {
       id: customer.id,
       name: customer.name,
       address: customer.address,
+      parentCustomerId: customer.parentCustomerId,
       sites: customer.sites.map(cloneCustomerSite),
-      subCustomers: customer.subCustomers.map(cloneCustomerSubCustomer),
       contacts: customer.contacts.map(cloneCustomerContact),
       projects: customer.projects.map(cloneProject),
     }
@@ -1695,7 +1709,7 @@ function createLocalStorageStorage(): StorageApi {
       address?: string
       contacts?: ContactInput[]
       sites?: CustomerSiteInput[]
-      subCustomers?: CustomerSubCustomerInput[]
+      parentCustomerId?: string
     }): Promise<Customer> {
       const db = loadDatabase()
       const sitesSource = Array.isArray(data.sites) ? data.sites : []
@@ -1717,19 +1731,20 @@ function createLocalStorageStorage(): StorageApi {
           .filter((contact): contact is CustomerContact => !!contact),
       )
 
-      const subCustomersSource = Array.isArray(data.subCustomers) ? data.subCustomers : []
-      const subCustomers = sortSubCustomers(
-        subCustomersSource
-          .map(entry => normalizeCustomerSubCustomer(entry, sites))
-          .filter((entry): entry is CustomerSubCustomer => !!entry),
-      )
+      let parentCustomerId: string | undefined
+      if (typeof data.parentCustomerId === 'string') {
+        const trimmedParentId = data.parentCustomerId.trim()
+        if (trimmedParentId && db.customers.some(customer => customer.id === trimmedParentId)) {
+          parentCustomerId = trimmedParentId
+        }
+      }
 
       const customer: Customer = {
         id: createId(),
         name: data.name.trim(),
         address: normalizeInput(data.address) ?? sites[0]?.address,
+        parentCustomerId,
         sites,
-        subCustomers,
         contacts,
         projects: [],
       }
@@ -1746,7 +1761,7 @@ function createLocalStorageStorage(): StorageApi {
         address?: string | null
         contacts?: ContactInput[] | null
         sites?: CustomerSiteInput[] | null
-        subCustomers?: CustomerSubCustomerInput[] | null
+        parentCustomerId?: string | null
       },
     ): Promise<Customer> {
       const db = loadDatabase()
@@ -1779,16 +1794,22 @@ function createLocalStorageStorage(): StorageApi {
               .map(entry => normalizeCustomerContact(entry, sites))
               .filter((contact): contact is CustomerContact => !!contact)
       const contacts = sortContacts(contactsSource)
-      const subCustomers =
-        data.subCustomers === undefined
-          ? customer.subCustomers
-          : data.subCustomers === null
-          ? []
-          : sortSubCustomers(
-              data.subCustomers
-                .map(entry => normalizeCustomerSubCustomer(entry, sites))
-                .filter((entry): entry is CustomerSubCustomer => !!entry),
-            )
+
+      let parentCustomerId = customer.parentCustomerId
+      if (data.parentCustomerId !== undefined) {
+        if (data.parentCustomerId === null) {
+          parentCustomerId = undefined
+        } else {
+          const trimmedParentId = data.parentCustomerId.trim()
+          if (trimmedParentId && trimmedParentId !== customerId) {
+            parentCustomerId = db.customers.some(entry => entry.id === trimmedParentId)
+              ? trimmedParentId
+              : undefined
+          } else {
+            parentCustomerId = undefined
+          }
+        }
+      }
 
       let nextAddress = applyNullable(customer.address, data.address)
       if (data.address === undefined && !nextAddress && sites.length > 0) {
@@ -1800,8 +1821,8 @@ function createLocalStorageStorage(): StorageApi {
         name: typeof data.name === 'string' ? data.name.trim() || customer.name : customer.name,
         address: nextAddress,
         sites,
-        subCustomers,
         contacts,
+        parentCustomerId,
       }
 
       const nextCustomers = [...db.customers]
@@ -1822,7 +1843,16 @@ function createLocalStorageStorage(): StorageApi {
 
       const nextCustomers = [...db.customers]
       nextCustomers.splice(located.index, 1)
-      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
+      const reassignedCustomers = nextCustomers.map(customer =>
+        customer.parentCustomerId === customerId
+          ? { ...customer, parentCustomerId: undefined }
+          : customer,
+      )
+      saveDatabase({
+        customers: sortCustomers(reassignedCustomers),
+        users: db.users,
+        businessSettings: db.businessSettings,
+      })
     },
 
     async createProject(
