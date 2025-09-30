@@ -135,7 +135,14 @@ type CustomerSiteDraft = {
   notes: string
 }
 
-type CustomerSiteTabKey = 'all' | 'unassigned' | string
+type CustomerSiteTabKey = string
+
+type CustomerSiteTab =
+  | { key: CustomerSiteTabKey; label: string; type: 'site'; site: CustomerSite }
+  | { key: CustomerSiteTabKey; label: string; type: 'child'; customer: Customer }
+  | { key: CustomerSiteTabKey; label: string; type: 'headOffice'; address: string }
+
+const HEAD_OFFICE_TAB_KEY: CustomerSiteTabKey = 'head-office'
 
 function createSiteDraft(site?: CustomerSite | null): CustomerSiteDraft {
   return {
@@ -144,6 +151,14 @@ function createSiteDraft(site?: CustomerSite | null): CustomerSiteDraft {
     address: site?.address ?? '',
     notes: site?.notes ?? '',
   }
+}
+
+function resolveCustomerPrimaryAddress(customer: Customer): string | null {
+  const siteAddress = customer.sites.find(site => site.address?.trim())?.address?.trim()
+  if (siteAddress) {
+    return siteAddress
+  }
+  return customer.address?.trim() || null
 }
 
 function stripPrefix(value: string, pattern: RegExp): string {
@@ -586,7 +601,7 @@ function AppContent() {
   }
   const [customerEditorError, setCustomerEditorError] = useState<string | null>(null)
   const [isSavingCustomerEditor, setIsSavingCustomerEditor] = useState(false)
-  const [customerSiteTab, setCustomerSiteTab] = useState<CustomerSiteTabKey>('all')
+  const [customerSiteTab, setCustomerSiteTab] = useState<CustomerSiteTabKey>('')
   const [activeContactIdsByTab, setActiveContactIdsByTab] = useState<Record<string, string | null>>({})
   const [showInlineProjectForm, setShowInlineProjectForm] = useState(false)
   const [customerProjectsTab, setCustomerProjectsTab] = useState<'active' | 'complete'>('active')
@@ -753,59 +768,12 @@ function AppContent() {
   }, [settingsSection])
 
 
-  const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
-  const selectedCustomerSites = selectedCustomer?.sites ?? []
-  const siteTabs = useMemo(() => {
-    if (!selectedCustomer) {
-      return [] as Array<{ key: CustomerSiteTabKey; label: string }>
-    }
-    const tabs: Array<{ key: CustomerSiteTabKey; label: string }> = [
-      { key: 'all', label: 'All sites' },
-    ]
-    selectedCustomer.sites.forEach(site => {
-      const name = site.name?.trim()
-      const address = site.address?.trim()
-      const label = name || (address ? address.split('\n')[0] : 'Unnamed site')
-      tabs.push({ key: site.id, label })
-    })
-    const hasUnassigned =
-      selectedCustomer.contacts.some(contact => !contact.siteId) ||
-      selectedCustomer.projects.some(project => !project.siteId) ||
-      selectedCustomer.sites.length === 0
-    if (hasUnassigned) {
-      tabs.push({ key: 'unassigned', label: 'Unassigned' })
-    }
-    return tabs
-  }, [selectedCustomer])
-  const contactsBySiteTab = useMemo(() => {
-    if (!selectedCustomer) {
-      return { all: [] as CustomerContact[], unassigned: [] as CustomerContact[] }
-    }
-    const map: Record<string, CustomerContact[]> = { all: selectedCustomer.contacts }
-    selectedCustomer.sites.forEach(site => {
-      map[site.id] = selectedCustomer.contacts.filter(contact => contact.siteId === site.id)
-    })
-    map.unassigned = selectedCustomer.contacts.filter(contact => !contact.siteId)
-    return map
-  }, [selectedCustomer])
-  const projectsBySiteTab = useMemo(() => {
-    if (!selectedCustomer) {
-      return { all: [] as Project[], unassigned: [] as Project[] }
-    }
-    const map: Record<string, Project[]> = { all: selectedCustomer.projects }
-    selectedCustomer.sites.forEach(site => {
-      map[site.id] = selectedCustomer.projects.filter(project => project.siteId === site.id)
-    })
-    map.unassigned = selectedCustomer.projects.filter(project => !project.siteId)
-    return map
-  }, [selectedCustomer])
   const customerLookup = useMemo(() => new Map(db.map(customer => [customer.id, customer] as const)), [db])
-  const parentCustomer = useMemo(() => {
-    if (!selectedCustomer?.parentCustomerId) {
-      return null
-    }
-    return customerLookup.get(selectedCustomer.parentCustomerId) ?? null
-  }, [customerLookup, selectedCustomer?.parentCustomerId])
+  const selectedCustomer = useMemo(
+    () => customerLookup.get(selectedCustomerId) ?? null,
+    [customerLookup, selectedCustomerId],
+  )
+  const selectedCustomerSites = selectedCustomer?.sites ?? []
   const childCustomers = useMemo(() => {
     if (!selectedCustomer) {
       return [] as Customer[]
@@ -814,34 +782,96 @@ function AppContent() {
       .filter(customer => customer.parentCustomerId === selectedCustomer.id)
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [db, selectedCustomer])
+  const siteTabs = useMemo(() => {
+    if (!selectedCustomer) {
+      return [] as CustomerSiteTab[]
+    }
+
+    const tabs: CustomerSiteTab[] = []
+
+    selectedCustomer.sites.forEach(site => {
+      const name = site.name?.trim()
+      const address = site.address?.trim()
+      const label = name || (address ? address.split('\n')[0] : 'Unnamed site')
+      tabs.push({ key: site.id, label, type: 'site', site })
+    })
+
+    if (tabs.length === 0) {
+      const primaryAddress = selectedCustomer.address?.trim() ?? ''
+      tabs.push({ key: HEAD_OFFICE_TAB_KEY, label: 'Head Office', type: 'headOffice', address: primaryAddress })
+    }
+
+    childCustomers.forEach(child => {
+      tabs.push({ key: `child-${child.id}`, label: child.name, type: 'child', customer: child })
+    })
+
+    return tabs
+  }, [childCustomers, selectedCustomer])
+  const headOfficeTab = siteTabs.find(tab => tab.type === 'headOffice') ?? null
+  const contactsBySiteTab = useMemo(() => {
+    if (!selectedCustomer) {
+      return {} as Record<string, CustomerContact[]>
+    }
+    const map: Record<string, CustomerContact[]> = {}
+    selectedCustomer.sites.forEach(site => {
+      map[site.id] = selectedCustomer.contacts.filter(contact => contact.siteId === site.id)
+    })
+    const unassignedContacts = selectedCustomer.contacts.filter(contact => !contact.siteId)
+    if (headOfficeTab) {
+      map[headOfficeTab.key] = unassignedContacts
+    }
+    return map
+  }, [headOfficeTab, selectedCustomer])
+  const projectsBySiteTab = useMemo(() => {
+    if (!selectedCustomer) {
+      return {} as Record<string, Project[]>
+    }
+    const map: Record<string, Project[]> = {}
+    selectedCustomer.sites.forEach(site => {
+      map[site.id] = selectedCustomer.projects.filter(project => project.siteId === site.id)
+    })
+    const unassignedProjects = selectedCustomer.projects.filter(project => !project.siteId)
+    if (headOfficeTab) {
+      map[headOfficeTab.key] = unassignedProjects
+    }
+    return map
+  }, [headOfficeTab, selectedCustomer])
+  const parentCustomer = useMemo(() => {
+    if (!selectedCustomer?.parentCustomerId) {
+      return null
+    }
+    return customerLookup.get(selectedCustomer.parentCustomerId) ?? null
+  }, [customerLookup, selectedCustomer?.parentCustomerId])
+  const activeSiteTab = siteTabs.find(tab => tab.key === customerSiteTab) ?? null
+  const activeCustomerSite = activeSiteTab?.type === 'site' ? activeSiteTab.site : null
+  const activeChildCustomer = activeSiteTab?.type === 'child' ? activeSiteTab.customer : null
+  const activeHeadOfficeAddress = activeSiteTab?.type === 'headOffice' ? activeSiteTab.address : null
   const selectedCustomerPrimarySite = selectedCustomerSites.find(site => site.address?.trim()) ?? null
-  const activeCustomerSite =
-    customerSiteTab !== 'all' && customerSiteTab !== 'unassigned'
-      ? selectedCustomerSites.find(site => site.id === customerSiteTab) ?? null
-      : null
   const selectedCustomerAddressForMap =
-    activeCustomerSite?.address?.trim() ||
-    selectedCustomerPrimarySite?.address?.trim() ||
-    selectedCustomer?.address?.trim() ||
-    null
+    (activeCustomerSite?.address?.trim() ||
+      (activeChildCustomer ? resolveCustomerPrimaryAddress(activeChildCustomer) : null) ||
+      activeHeadOfficeAddress ||
+      selectedCustomerPrimarySite?.address?.trim() ||
+      selectedCustomer?.address?.trim() ||
+      null)
   useEffect(() => {
     if (!selectedCustomer) {
-      if (customerSiteTab !== 'all') {
-        setCustomerSiteTab('all')
+      if (customerSiteTab !== '') {
+        setCustomerSiteTab('')
       }
       setActiveContactIdsByTab({})
       return
     }
     if (siteTabs.length === 0) {
-      if (customerSiteTab !== 'all') {
-        setCustomerSiteTab('all')
+      if (customerSiteTab !== '') {
+        setCustomerSiteTab('')
       }
       return
     }
     if (!siteTabs.some(tab => tab.key === customerSiteTab)) {
-      setCustomerSiteTab(siteTabs[0]?.key ?? 'all')
+      setCustomerSiteTab(siteTabs[0]?.key ?? '')
     }
-  }, [selectedCustomer, siteTabs, customerSiteTab])
+  }, [customerSiteTab, selectedCustomer, siteTabs])
   useEffect(() => {
     if (!selectedCustomer) {
       return
@@ -850,6 +880,13 @@ function AppContent() {
       let changed = false
       const next: Record<string, string | null> = {}
       for (const tab of siteTabs) {
+        if (tab.type === 'child') {
+          if ((prev[tab.key] ?? null) !== null) {
+            changed = true
+          }
+          next[tab.key] = null
+          continue
+        }
         const contactsForTab = contactsBySiteTab[tab.key] ?? []
         const previous = prev[tab.key] ?? null
         const selected = previous && contactsForTab.some(contact => contact.id === previous)
@@ -866,7 +903,38 @@ function AppContent() {
       return changed ? next : prev
     })
   }, [selectedCustomer, siteTabs, contactsBySiteTab])
-  const sortedCustomers = useMemo(() => [...db].sort((a, b) => a.name.localeCompare(b.name)), [db])
+  useEffect(() => {
+    if (showNewContactForm && (!activeSiteTab || activeSiteTab.type === 'child')) {
+      setShowNewContactForm(false)
+    }
+    if (showInlineProjectForm && (!activeSiteTab || activeSiteTab.type === 'child')) {
+      setShowInlineProjectForm(false)
+    }
+  }, [activeSiteTab, showInlineProjectForm, showNewContactForm])
+  const sortedCustomers = useMemo(() => {
+    const customers = [...db]
+    customers.sort((a, b) => {
+      const aIsChild = Boolean(a.parentCustomerId)
+      const bIsChild = Boolean(b.parentCustomerId)
+      if (aIsChild !== bIsChild) {
+        return aIsChild ? 1 : -1
+      }
+      if (aIsChild && bIsChild && a.parentCustomerId && b.parentCustomerId) {
+        if (a.parentCustomerId !== b.parentCustomerId) {
+          const parentA = customerLookup.get(a.parentCustomerId)
+          const parentB = customerLookup.get(b.parentCustomerId)
+          if (parentA && parentB) {
+            const parentComparison = parentA.name.localeCompare(parentB.name)
+            if (parentComparison !== 0) {
+              return parentComparison
+            }
+          }
+        }
+      }
+      return a.name.localeCompare(b.name)
+    })
+    return customers
+  }, [customerLookup, db])
   const hasCustomers = sortedCustomers.length > 0
   const newProjectCustomer = useMemo(() => {
     if (!hasCustomers) {
@@ -902,7 +970,7 @@ function AppContent() {
     setCustomerEditorError(null)
     setIsSavingCustomerEditor(false)
     closeContactEditor()
-    setCustomerSiteTab('all')
+      setCustomerSiteTab('')
     setCustomerProjectsTab('active')
   }, [selectedCustomer?.id, closeContactEditor])
   useEffect(() => {
@@ -1499,7 +1567,10 @@ function AppContent() {
       )
     }
 
-    const contactsForActiveTab = contactsBySiteTab[customerSiteTab] ?? []
+    const contactsForActiveTab =
+      activeSiteTab && activeSiteTab.type !== 'child'
+        ? contactsBySiteTab[customerSiteTab] ?? []
+        : []
     const storedActiveContactId = activeContactIdsByTab[customerSiteTab] ?? null
     const activeContactId =
       storedActiveContactId && contactsForActiveTab.some(contact => contact.id === storedActiveContactId)
@@ -1507,7 +1578,8 @@ function AppContent() {
         : contactsForActiveTab[0]?.id ?? null
     const activeContact = contactsForActiveTab.find(contact => contact.id === activeContactId) ?? null
     const hasContacts = contactsForActiveTab.length > 0
-    const projectsForCurrentSite = projectsBySiteTab[customerSiteTab] ?? []
+    const projectsForCurrentSite =
+      activeSiteTab && activeSiteTab.type !== 'child' ? projectsBySiteTab[customerSiteTab] ?? [] : []
     const activeProjects = projectsForCurrentSite.filter(project => project.status === 'Active')
     const completedProjects = projectsForCurrentSite.filter(project => project.status === 'Complete')
     const projectsForTab = customerProjectsTab === 'active' ? activeProjects : completedProjects
@@ -1522,6 +1594,13 @@ function AppContent() {
         empty: 'No completed projects yet.',
         count: completedProjects.length,
       },
+    }
+    if (!activeSiteTab || activeSiteTab.type === 'child') {
+      const emptyMessage = !activeSiteTab
+        ? 'Select a site to view projects.'
+        : 'View projects on the sub customer profile.'
+      projectTabCopy.active.empty = emptyMessage
+      projectTabCopy.complete.empty = emptyMessage
     }
     const activeTabCopy = projectTabCopy[customerProjectsTab]
 
@@ -1540,7 +1619,24 @@ function AppContent() {
                   Customers
                 </button>
                 <ChevronRight size={12} className='text-slate-400' aria-hidden />
-                <span className='text-slate-800 font-semibold'>{selectedCustomer.name}</span>
+                {parentCustomer ? (
+                  <>
+                    <button
+                      type='button'
+                      onClick={() => {
+                        setSelectedCustomerId(parentCustomer.id)
+                        setActivePage('customerDetail')
+                      }}
+                      className='inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium text-slate-600 transition hover:text-slate-900'
+                    >
+                      {parentCustomer.name}
+                    </button>
+                    <ChevronRight size={12} className='text-slate-400' aria-hidden />
+                    <span className='text-slate-800 font-semibold'>{selectedCustomer.name}</span>
+                  </>
+                ) : (
+                  <span className='text-slate-800 font-semibold'>{selectedCustomer.name}</span>
+                )}
               </nav>
               <div className='flex items-center gap-2'>
                 <Button
@@ -1582,7 +1678,7 @@ function AppContent() {
                     className='font-medium text-sky-600 hover:text-sky-700'
                     onClick={() => {
                       setSelectedCustomerId(parentCustomer.id)
-                      setActivePage('customers')
+                      setActivePage('customerDetail')
                     }}
                   >
                     {parentCustomer.name}
@@ -1599,20 +1695,56 @@ function AppContent() {
                 <div className='flex items-start justify-between gap-2'>
                   <div className='text-sm font-semibold text-slate-700'>Site locations</div>
                   {(() => {
-                    const siteForCopy = customerSiteTab === 'all' ? selectedCustomerPrimarySite : activeCustomerSite
-                    if (!siteForCopy?.address) {
+                    if (!activeSiteTab) {
                       return null
                     }
-                    const copyTitle = customerSiteTab === 'all' ? 'Copy primary site address' : 'Copy site address'
+                    if (activeSiteTab.type === 'site') {
+                      const address = activeSiteTab.site.address?.trim()
+                      if (!address) {
+                        return null
+                      }
+                      return (
+                        <Button
+                          variant='outline'
+                          onClick={() => navigator.clipboard.writeText(address)}
+                          className='rounded-full px-2 py-2'
+                          title='Copy site address'
+                        >
+                          <Copy size={16} />
+                          <span className='sr-only'>Copy site address</span>
+                        </Button>
+                      )
+                    }
+                    if (activeSiteTab.type === 'child') {
+                      const address = resolveCustomerPrimaryAddress(activeSiteTab.customer)
+                      if (!address) {
+                        return null
+                      }
+                      return (
+                        <Button
+                          variant='outline'
+                          onClick={() => navigator.clipboard.writeText(address)}
+                          className='rounded-full px-2 py-2'
+                          title='Copy sub customer address'
+                        >
+                          <Copy size={16} />
+                          <span className='sr-only'>Copy sub customer address</span>
+                        </Button>
+                      )
+                    }
+                    const address = activeSiteTab.address?.trim()
+                    if (!address) {
+                      return null
+                    }
                     return (
                       <Button
                         variant='outline'
-                        onClick={() => navigator.clipboard.writeText(siteForCopy.address ?? '')}
+                        onClick={() => navigator.clipboard.writeText(address)}
                         className='rounded-full px-2 py-2'
-                        title={copyTitle}
+                        title='Copy head office address'
                       >
                         <Copy size={16} />
-                        <span className='sr-only'>{copyTitle}</span>
+                        <span className='sr-only'>Copy head office address</span>
                       </Button>
                     )
                   })()}
@@ -1638,153 +1770,110 @@ function AppContent() {
                     })}
                   </div>
                 )}
-                {customerSiteTab === 'all' ? (
-                  selectedCustomerSites.length === 0 && childCustomers.length === 0 ? (
-                    <div className='mt-3 rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
+                <div className='mt-3'>
+                  {siteTabs.length === 0 ? (
+                    <div className='rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
                       No site locations recorded.
                     </div>
-                  ) : (
-                    <div className='mt-3 space-y-6'>
-                      {selectedCustomerSites.length > 0 ? (
-                        <div className='space-y-3'>
-                          {selectedCustomerSites.map(site => {
-                            const siteName = site.name?.trim() || site.address?.split('\n')[0] || 'Unnamed site'
-                            return (
-                              <div
-                                key={site.id}
-                                className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'
-                              >
-                                <div className='flex items-start justify-between gap-2'>
-                                  <div>
-                                    <div className='text-sm font-semibold text-slate-800'>{siteName}</div>
-                                    {site.notes ? (
-                                      <div className='text-xs text-slate-500'>{site.notes}</div>
-                                    ) : null}
-                                  </div>
-                                  {site.address ? (
-                                    <Button
-                                      type='button'
-                                      variant='ghost'
-                                      className='rounded-full px-2 py-1 text-slate-500 hover:text-sky-600'
-                                      onClick={() => navigator.clipboard.writeText(site.address ?? '')}
-                                      title='Copy site address'
-                                    >
-                                      <Copy size={16} />
-                                      <span className='sr-only'>Copy site address</span>
-                                    </Button>
-                                  ) : null}
-                                </div>
-                                <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
-                                  {site.address ? (
-                                    <span className='block whitespace-pre-wrap break-words text-slate-800'>{site.address}</span>
-                                  ) : (
-                                    <span className='text-slate-400'>No address provided.</span>
-                                  )}
-                                </div>
-                              </div>
-                            )
-                          })}
+                  ) : !activeSiteTab ? (
+                    <div className='rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
+                      Select a site to view details.
+                    </div>
+                  ) : activeSiteTab.type === 'site' ? (
+                    <div className='space-y-3'>
+                      <div className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'>
+                        <div className='flex items-start justify-between gap-2'>
+                          <div>
+                            <div className='text-sm font-semibold text-slate-800'>
+                              {activeCustomerSite?.name?.trim() || 'Selected site'}
+                            </div>
+                            {activeCustomerSite?.notes ? (
+                              <div className='text-xs text-slate-500'>{activeCustomerSite.notes}</div>
+                            ) : null}
+                          </div>
                         </div>
-                      ) : null}
-                      {childCustomers.length > 0 ? (
+                        <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                          {activeCustomerSite?.address ? (
+                            <span className='block whitespace-pre-wrap break-words text-slate-800'>
+                              {activeCustomerSite.address}
+                            </span>
+                          ) : (
+                            <span className='text-slate-400'>No address provided.</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : activeSiteTab.type === 'headOffice' ? (
+                    <div className='space-y-3'>
+                      <div className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'>
+                        <div className='text-sm font-semibold text-slate-800'>Head Office</div>
+                        <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                          {activeHeadOfficeAddress ? (
+                            <span className='block whitespace-pre-wrap break-words text-slate-800'>
+                              {activeHeadOfficeAddress}
+                            </span>
+                          ) : (
+                            <span className='text-slate-400'>No address provided.</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    (() => {
+                      if (!activeChildCustomer) {
+                        return (
+                          <div className='rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
+                            Sub customer details unavailable.
+                          </div>
+                        )
+                      }
+                      const childAddress = resolveCustomerPrimaryAddress(activeChildCustomer)
+                      return (
                         <div className='space-y-3'>
-                          <div className='text-sm font-semibold text-slate-700'>Sub customers</div>
-                          {childCustomers.map(child => {
-                            const childAddress = child.sites.find(site => site.address?.trim())?.address ?? child.address ?? ''
-                            return (
-                              <div
-                                key={child.id}
-                                className='space-y-3 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'
-                              >
-                                <div className='flex items-start justify-between gap-2'>
-                                  <div>
-                                    <div className='text-sm font-semibold text-slate-800'>{child.name}</div>
-                                    {childAddress ? (
-                                      <div className='text-xs text-slate-500'>{childAddress.split('\n')[0]}</div>
-                                    ) : null}
-                                  </div>
-                                  <Button
-                                    type='button'
-                                    variant='outline'
-                                    className='rounded-full px-3 py-1 text-xs font-medium'
-                                    onClick={() => {
-                                      setSelectedCustomerId(child.id)
-                                      setActivePage('customers')
-                                    }}
-                                  >
-                                    View customer
-                                  </Button>
-                                </div>
-                                <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
-                                  {childAddress ? (
-                                    <span className='block whitespace-pre-wrap break-words text-slate-800'>{childAddress}</span>
-                                  ) : (
-                                    <span className='text-slate-400'>No address provided.</span>
-                                  )}
-                                </div>
+                          <div className='space-y-3 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'>
+                            <div className='flex items-start justify-between gap-2'>
+                              <div>
+                                <div className='text-sm font-semibold text-slate-800'>{activeChildCustomer.name}</div>
                                 {childAddress ? (
-                                  <div className='overflow-hidden rounded-xl border border-slate-200/80 shadow-sm'>
-                                    <iframe
-                                      title={`Map preview for ${child.name}`}
-                                      src={`https://maps.google.com/maps?q=${encodeURIComponent(childAddress)}&z=15&output=embed`}
-                                      loading='lazy'
-                                      className='h-40 w-full border-0'
-                                      referrerPolicy='no-referrer-when-downgrade'
-                                    />
-                                  </div>
+                                  <div className='text-xs text-slate-500'>{childAddress.split('\n')[0]}</div>
                                 ) : null}
                               </div>
-                            )
-                          })}
-                        </div>
-                      ) : null}
-                    </div>
-                  )
-                ) : customerSiteTab === 'unassigned' ? (
-                  <div className='mt-3 rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
-                    Records without a linked site will appear under this tab.
-                  </div>
-                ) : activeCustomerSite ? (
-                  <div className='mt-3 space-y-3'>
-                    <div className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'>
-                      <div className='flex items-start justify-between gap-2'>
-                        <div>
-                          <div className='text-sm font-semibold text-slate-800'>
-                            {activeCustomerSite.name?.trim() || 'Selected site'}
+                              <Button
+                                type='button'
+                                variant='outline'
+                                className='rounded-full px-3 py-1 text-xs font-medium'
+                                onClick={() => {
+                                  setSelectedCustomerId(activeChildCustomer.id)
+                                  setActivePage('customerDetail')
+                                }}
+                              >
+                                View customer
+                              </Button>
+                            </div>
+                            <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                              {childAddress ? (
+                                <span className='block whitespace-pre-wrap break-words text-slate-800'>{childAddress}</span>
+                              ) : (
+                                <span className='text-slate-400'>No address provided.</span>
+                              )}
+                            </div>
+                            {childAddress ? (
+                              <div className='overflow-hidden rounded-xl border border-slate-200/80 shadow-sm'>
+                                <iframe
+                                  title={`Map preview for ${activeChildCustomer.name}`}
+                                  src={`https://maps.google.com/maps?q=${encodeURIComponent(childAddress)}&z=15&output=embed`}
+                                  loading='lazy'
+                                  className='h-40 w-full border-0'
+                                  referrerPolicy='no-referrer-when-downgrade'
+                                />
+                              </div>
+                            ) : null}
                           </div>
-                          {activeCustomerSite.notes ? (
-                            <div className='text-xs text-slate-500'>{activeCustomerSite.notes}</div>
-                          ) : null}
                         </div>
-                        {activeCustomerSite.address ? (
-                          <Button
-                            type='button'
-                            variant='ghost'
-                            className='rounded-full px-2 py-1 text-slate-500 hover:text-sky-600'
-                            onClick={() => navigator.clipboard.writeText(activeCustomerSite.address ?? '')}
-                            title='Copy site address'
-                          >
-                            <Copy size={16} />
-                            <span className='sr-only'>Copy site address</span>
-                          </Button>
-                        ) : null}
-                      </div>
-                      <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
-                        {activeCustomerSite.address ? (
-                          <span className='block whitespace-pre-wrap break-words text-slate-800'>
-                            {activeCustomerSite.address}
-                          </span>
-                        ) : (
-                          <span className='text-slate-400'>No address provided.</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className='mt-3 rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
-                    Selected site not found.
-                  </div>
-                )}
+                      )
+                    })()
+                  )}
+                </div>
                 {selectedCustomerAddressForMap ? (
                   <div className='mt-4 overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
                     <iframe
@@ -1806,13 +1895,14 @@ function AppContent() {
                   <Button
                     variant='outline'
                     onClick={() => {
+                      if (!activeSiteTab || activeSiteTab.type === 'child') {
+                        return
+                      }
                       setShowNewContactForm(prev => {
                         const next = !prev
                         if (next) {
                           const defaultSiteId =
-                            customerSiteTab !== 'all' && customerSiteTab !== 'unassigned'
-                              ? customerSiteTab
-                              : ''
+                            activeSiteTab?.type === 'site' ? activeSiteTab.site.id : ''
                           setNewContact({ name: '', position: '', phone: '', email: '', siteId: defaultSiteId })
                         } else {
                           setNewContact({ name: '', position: '', phone: '', email: '', siteId: '' })
@@ -1821,8 +1911,18 @@ function AppContent() {
                       })
                       setContactError(null)
                     }}
-                    title={canEdit ? (showNewContactForm ? 'Cancel adding contact' : 'Add contact') : 'Read-only access'}
-                    disabled={!canEdit}
+                    title={
+                      !canEdit
+                        ? 'Read-only access'
+                        : !activeSiteTab
+                        ? 'Select a site to manage contacts'
+                        : activeSiteTab.type === 'child'
+                        ? 'Manage contacts on the sub customer page'
+                        : showNewContactForm
+                        ? 'Cancel adding contact'
+                        : 'Add contact'
+                    }
+                    disabled={!canEdit || !activeSiteTab || activeSiteTab.type === 'child'}
                   >
                     {showNewContactForm ? (
                       <>
@@ -1934,7 +2034,13 @@ function AppContent() {
                   </>
                 ) : (
                   !showNewContactForm && (
-                    <p className='mt-4 text-sm text-slate-500'>No contacts yet.</p>
+                    <p className='mt-4 text-sm text-slate-500'>
+                      {activeSiteTab?.type === 'child'
+                        ? 'Manage contacts on the sub customer profile.'
+                        : !activeSiteTab
+                        ? 'Select a site to view contacts.'
+                        : 'No contacts yet.'}
+                    </p>
                   )
                 )}
               </div>
@@ -2043,10 +2149,23 @@ function AppContent() {
               <Button
                 variant='outline'
                 onClick={() => {
+                  if (!activeSiteTab || activeSiteTab.type === 'child') {
+                    return
+                  }
                   setShowInlineProjectForm(prev => !prev)
                 }}
-                title={canEdit ? (showInlineProjectForm ? 'Cancel adding project' : 'Add project') : 'Read-only access'}
-                disabled={!canEdit}
+                title={
+                  !canEdit
+                    ? 'Read-only access'
+                    : !activeSiteTab
+                    ? 'Select a site to manage projects'
+                    : activeSiteTab.type === 'child'
+                    ? 'Manage projects on the sub customer page'
+                    : showInlineProjectForm
+                    ? 'Cancel adding project'
+                    : 'Add project'
+                }
+                disabled={!canEdit || !activeSiteTab || activeSiteTab.type === 'child'}
               >
                 {showInlineProjectForm ? (
                   <>
@@ -2071,9 +2190,7 @@ function AppContent() {
                   disabled={!canEdit}
                   onAdded={() => setShowInlineProjectForm(false)}
                   sites={selectedCustomer.sites}
-                  defaultSiteId={
-                    customerSiteTab !== 'all' && customerSiteTab !== 'unassigned' ? customerSiteTab : ''
-                  }
+                  defaultSiteId={activeSiteTab?.type === 'site' ? activeSiteTab.site.id : ''}
                 />
               </div>
             )}
