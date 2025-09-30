@@ -207,6 +207,7 @@ export function createProject(
     number: string
     info?: ProjectInfo | null
     tasks?: Array<{ name: string; status?: ProjectTaskStatus; assigneeId?: string }>
+    siteId?: string | null
   },
 ): Promise<Project> {
   return ensureLocalStorage().createProject(customerId, data)
@@ -223,6 +224,7 @@ export function updateProject(
     customerSignOff?: ProjectCustomerSignOff | null
     info?: ProjectInfo | null
     onsiteReports?: ProjectOnsiteReport[] | null
+    siteId?: string | null
   },
 ): Promise<Project> {
   return ensureLocalStorage().updateProject(projectId, data)
@@ -716,7 +718,10 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
-  function normalizeCustomerContact(value: unknown): CustomerContact | null {
+  function normalizeCustomerContact(
+    value: unknown,
+    availableSites?: CustomerSite[],
+  ): CustomerContact | null {
     if (!value || typeof value !== 'object') {
       return null
     }
@@ -726,6 +731,12 @@ function createLocalStorageStorage(): StorageApi {
     const position = toOptionalString(raw.position)
     const phone = toOptionalString(raw.phone)
     const email = toOptionalString(raw.email)
+    const siteIdRaw = toOptionalString((raw as { siteId?: unknown }).siteId)
+
+    let siteId: string | undefined
+    if (siteIdRaw && (!availableSites || availableSites.some(site => site.id === siteIdRaw))) {
+      siteId = siteIdRaw
+    }
 
     if (!name && !position && !phone && !email) {
       return null
@@ -740,6 +751,7 @@ function createLocalStorageStorage(): StorageApi {
       position,
       phone,
       email,
+      siteId,
     }
   }
 
@@ -1018,7 +1030,7 @@ function createLocalStorageStorage(): StorageApi {
     return sortByText(subCustomers, subCustomer => subCustomer.name || subCustomer.id)
   }
 
-  function normalizeProject(value: unknown): Project | null {
+  function normalizeProject(value: unknown, availableSites?: CustomerSite[]): Project | null {
     if (!value || typeof value !== 'object') {
       return null
     }
@@ -1079,6 +1091,12 @@ function createLocalStorageStorage(): StorageApi {
       .filter((report): report is ProjectOnsiteReport => !!report)
 
     const info = normalizeProjectInfo((raw as { info?: unknown }).info)
+    const siteIdRaw = toOptionalString((raw as { siteId?: unknown }).siteId)
+
+    let siteId: string | undefined
+    if (siteIdRaw && (!availableSites || availableSites.some(site => site.id === siteIdRaw))) {
+      siteId = siteIdRaw
+    }
 
     return {
       id,
@@ -1086,6 +1104,7 @@ function createLocalStorageStorage(): StorageApi {
       status,
       activeSubStatus,
       note: toOptionalString(raw.note),
+      siteId,
       wos: sortWOs(wos),
       documents: hasProjectDocuments(documents) ? documents : undefined,
       statusHistory:
@@ -1119,11 +1138,6 @@ function createLocalStorageStorage(): StorageApi {
       return null
     }
 
-    const projectsSource = Array.isArray(raw.projects) ? (raw.projects as unknown[]) : []
-    const projects = projectsSource
-      .map(normalizeProject)
-      .filter((project): project is Project => !!project)
-
     const sitesSource = Array.isArray((raw as { sites?: unknown }).sites)
       ? ((raw as { sites?: unknown }).sites as unknown[])
       : []
@@ -1136,19 +1150,25 @@ function createLocalStorageStorage(): StorageApi {
       }
     }
 
+    const projectsSource = Array.isArray(raw.projects) ? (raw.projects as unknown[]) : []
+    const projects = projectsSource
+      .map(entry => normalizeProject(entry, sites))
+      .filter((project): project is Project => !!project)
+
     const contactsSource = Array.isArray((raw as { contacts?: unknown }).contacts)
       ? ((raw as { contacts?: unknown }).contacts as unknown[])
       : []
     let contacts = contactsSource
-      .map(normalizeCustomerContact)
+      .map(entry => normalizeCustomerContact(entry, sites))
       .filter((contact): contact is CustomerContact => !!contact)
 
     if (contacts.length === 0) {
       const fallbackContact = normalizeCustomerContact({
         name: (raw as { contactName?: unknown }).contactName,
+        position: (raw as { contactPosition?: unknown }).contactPosition,
         phone: (raw as { contactPhone?: unknown }).contactPhone,
         email: (raw as { contactEmail?: unknown }).contactEmail,
-      })
+      }, sites)
       if (fallbackContact) {
         contacts = [fallbackContact]
       }
@@ -1478,6 +1498,7 @@ function createLocalStorageStorage(): StorageApi {
       position: contact.position,
       phone: contact.phone,
       email: contact.email,
+      siteId: contact.siteId,
     }
   }
 
@@ -1519,6 +1540,7 @@ function createLocalStorageStorage(): StorageApi {
       status: project.status,
       activeSubStatus: project.activeSubStatus,
       note: project.note,
+      siteId: project.siteId,
       wos: project.wos.map(cloneWorkOrder),
       tasks: project.tasks ? project.tasks.map(cloneProjectTask) : [],
       documents: cloneProjectDocuments(project.documents),
@@ -1676,13 +1698,6 @@ function createLocalStorageStorage(): StorageApi {
       subCustomers?: CustomerSubCustomerInput[]
     }): Promise<Customer> {
       const db = loadDatabase()
-      const contactsSource = Array.isArray(data.contacts) ? data.contacts : []
-      const contacts = sortContacts(
-        contactsSource
-          .map(normalizeCustomerContact)
-          .filter((contact): contact is CustomerContact => !!contact),
-      )
-
       const sitesSource = Array.isArray(data.sites) ? data.sites : []
       let sites = sitesSource
         .map(normalizeCustomerSite)
@@ -1694,6 +1709,13 @@ function createLocalStorageStorage(): StorageApi {
         }
       }
       sites = sortSites(sites)
+
+      const contactsSource = Array.isArray(data.contacts) ? data.contacts : []
+      const contacts = sortContacts(
+        contactsSource
+          .map(entry => normalizeCustomerContact(entry, sites))
+          .filter((contact): contact is CustomerContact => !!contact),
+      )
 
       const subCustomersSource = Array.isArray(data.subCustomers) ? data.subCustomers : []
       const subCustomers = sortSubCustomers(
@@ -1734,16 +1756,6 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       const { index, customer } = located
-      const contacts =
-        data.contacts === undefined
-          ? customer.contacts
-          : data.contacts === null
-          ? []
-          : sortContacts(
-              data.contacts
-                .map(normalizeCustomerContact)
-                .filter((contact): contact is CustomerContact => !!contact),
-            )
       const sites =
         data.sites === undefined
           ? customer.sites
@@ -1754,6 +1766,19 @@ function createLocalStorageStorage(): StorageApi {
                 .map(normalizeCustomerSite)
                 .filter((site): site is CustomerSite => !!site),
             )
+      const contactsSource =
+        data.contacts === undefined
+          ? customer.contacts.map(contact =>
+              contact.siteId && !sites.some(site => site.id === contact.siteId)
+                ? { ...contact, siteId: undefined }
+                : contact,
+            )
+          : data.contacts === null
+          ? []
+          : data.contacts
+              .map(entry => normalizeCustomerContact(entry, sites))
+              .filter((contact): contact is CustomerContact => !!contact)
+      const contacts = sortContacts(contactsSource)
       const subCustomers =
         data.subCustomers === undefined
           ? customer.subCustomers
@@ -1806,6 +1831,7 @@ function createLocalStorageStorage(): StorageApi {
         number: string
         info?: ProjectInfo | null
         tasks?: Array<{ name: string; status?: ProjectTaskStatus; assigneeId?: string }>
+        siteId?: string | null
       },
     ): Promise<Project> {
       const db = loadDatabase()
@@ -1858,12 +1884,21 @@ function createLocalStorageStorage(): StorageApi {
 
       const initialTasks = normalizedTasks.length > 0 ? sortTasks(normalizedTasks) : []
 
+      let siteId: string | undefined
+      if (typeof data.siteId === 'string') {
+        const candidateSiteId = data.siteId.trim()
+        if (candidateSiteId && customer.sites.some(site => site.id === candidateSiteId)) {
+          siteId = candidateSiteId
+        }
+      }
+
       const project: Project = {
         id: createId(),
         number: normalizedNumber,
         status: DEFAULT_PROJECT_STATUS,
         activeSubStatus: DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
         note: undefined,
+        siteId,
         wos: [],
         tasks: initialTasks,
         documents: undefined,
@@ -2030,6 +2065,23 @@ function createLocalStorageStorage(): StorageApi {
         }
       }
 
+      let nextSiteId = project.siteId
+      if ((data as { siteId?: string | null }).siteId !== undefined) {
+        const requestedSiteId = (data as { siteId?: string | null }).siteId
+        if (requestedSiteId === null) {
+          nextSiteId = undefined
+        } else if (typeof requestedSiteId === 'string') {
+          const trimmedSiteId = requestedSiteId.trim()
+          if (trimmedSiteId && customer.sites.some(site => site.id === trimmedSiteId)) {
+            nextSiteId = trimmedSiteId
+          } else {
+            nextSiteId = undefined
+          }
+        } else {
+          nextSiteId = undefined
+        }
+      }
+
       const nextProject: Project = {
         ...project,
         status: nextStatus,
@@ -2040,6 +2092,7 @@ function createLocalStorageStorage(): StorageApi {
         customerSignOff: nextCustomerSignOff,
         info: nextInfo,
         onsiteReports: nextOnsiteReports,
+        siteId: nextSiteId,
       }
 
       const updatedProjects = [...customer.projects]

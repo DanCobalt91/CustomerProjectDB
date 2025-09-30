@@ -18,6 +18,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion'
 import type {
   Customer,
+  CustomerContact,
   CustomerSite,
   CustomerSubCustomer,
   Project,
@@ -142,6 +143,8 @@ type CustomerSubCustomerDraft = {
   notes: string
   siteId: string
 }
+
+type CustomerSiteTabKey = 'all' | 'unassigned' | string
 
 function createSiteDraft(site?: CustomerSite | null): CustomerSiteDraft {
   return {
@@ -596,7 +599,13 @@ function AppContent() {
   const [showNewCustomer, setShowNewCustomer] = useState(false)
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
   const [showNewContactForm, setShowNewContactForm] = useState(false)
-  const [newContact, setNewContact] = useState({ name: '', position: '', phone: '', email: '' })
+  const [newContact, setNewContact] = useState({
+    name: '',
+    position: '',
+    phone: '',
+    email: '',
+    siteId: '',
+  })
   const [contactError, setContactError] = useState<string | null>(null)
   const [showCustomerEditor, setShowCustomerEditor] = useState(false)
   const [customerEditorDraft, setCustomerEditorDraft] = useState({
@@ -651,7 +660,8 @@ function AppContent() {
   }
   const [customerEditorError, setCustomerEditorError] = useState<string | null>(null)
   const [isSavingCustomerEditor, setIsSavingCustomerEditor] = useState(false)
-  const [activeContactId, setActiveContactId] = useState<string | null>(null)
+  const [customerSiteTab, setCustomerSiteTab] = useState<CustomerSiteTabKey>('all')
+  const [activeContactIdsByTab, setActiveContactIdsByTab] = useState<Record<string, string | null>>({})
   const [showInlineProjectForm, setShowInlineProjectForm] = useState(false)
   const [customerProjectsTab, setCustomerProjectsTab] = useState<'active' | 'complete'>('active')
   const [isCompletedProjectsCollapsed, setIsCompletedProjectsCollapsed] = useState(true)
@@ -660,6 +670,7 @@ function AppContent() {
   const [showNewProject, setShowNewProject] = useState(false)
   const [newProjectCustomerId, setNewProjectCustomerId] = useState<string>('')
   const [newProjectNumber, setNewProjectNumber] = useState('')
+  const [newProjectSiteId, setNewProjectSiteId] = useState('')
   const [newProjectError, setNewProjectError] = useState<string | null>(null)
   const [isCreatingProject, setIsCreatingProject] = useState(false)
   const [newProjectInfoDraft, setNewProjectInfoDraft] = useState<ProjectInfoDraft>(() =>
@@ -733,6 +744,7 @@ function AppContent() {
     position: string
     phone: string
     email: string
+    siteId: string
   } | null>(null)
   const [contactEditorError, setContactEditorError] = useState<string | null>(null)
   const [isSavingContactEdit, setIsSavingContactEdit] = useState(false)
@@ -817,11 +829,124 @@ function AppContent() {
 
   const selectedCustomer = useMemo(() => db.find(c => c.id === selectedCustomerId) || null, [db, selectedCustomerId])
   const selectedCustomerSites = selectedCustomer?.sites ?? []
+  const siteTabs = useMemo(() => {
+    if (!selectedCustomer) {
+      return [] as Array<{ key: CustomerSiteTabKey; label: string }>
+    }
+    const tabs: Array<{ key: CustomerSiteTabKey; label: string }> = [
+      { key: 'all', label: 'All sites' },
+    ]
+    selectedCustomer.sites.forEach((site, index) => {
+      const name = site.name?.trim()
+      const address = site.address?.trim()
+      const label = name || (address ? address.split('\n')[0] : `Site ${index + 1}`)
+      tabs.push({ key: site.id, label })
+    })
+    const hasUnassigned =
+      selectedCustomer.contacts.some(contact => !contact.siteId) ||
+      selectedCustomer.projects.some(project => !project.siteId) ||
+      selectedCustomer.subCustomers.some(sub => !sub.siteId) ||
+      selectedCustomer.sites.length === 0
+    if (hasUnassigned) {
+      tabs.push({ key: 'unassigned', label: 'Unassigned' })
+    }
+    return tabs
+  }, [selectedCustomer])
+  const contactsBySiteTab = useMemo(() => {
+    if (!selectedCustomer) {
+      return { all: [] as CustomerContact[], unassigned: [] as CustomerContact[] }
+    }
+    const map: Record<string, CustomerContact[]> = { all: selectedCustomer.contacts }
+    selectedCustomer.sites.forEach(site => {
+      map[site.id] = selectedCustomer.contacts.filter(contact => contact.siteId === site.id)
+    })
+    map.unassigned = selectedCustomer.contacts.filter(contact => !contact.siteId)
+    return map
+  }, [selectedCustomer])
+  const projectsBySiteTab = useMemo(() => {
+    if (!selectedCustomer) {
+      return { all: [] as Project[], unassigned: [] as Project[] }
+    }
+    const map: Record<string, Project[]> = { all: selectedCustomer.projects }
+    selectedCustomer.sites.forEach(site => {
+      map[site.id] = selectedCustomer.projects.filter(project => project.siteId === site.id)
+    })
+    map.unassigned = selectedCustomer.projects.filter(project => !project.siteId)
+    return map
+  }, [selectedCustomer])
+  const subCustomersBySiteTab = useMemo(() => {
+    if (!selectedCustomer) {
+      return { all: [] as CustomerSubCustomer[], unassigned: [] as CustomerSubCustomer[] }
+    }
+    const map: Record<string, CustomerSubCustomer[]> = { all: selectedCustomer.subCustomers }
+    selectedCustomer.sites.forEach(site => {
+      map[site.id] = selectedCustomer.subCustomers.filter(sub => sub.siteId === site.id)
+    })
+    map.unassigned = selectedCustomer.subCustomers.filter(sub => !sub.siteId)
+    return map
+  }, [selectedCustomer])
   const selectedCustomerPrimarySite = selectedCustomerSites.find(site => site.address?.trim()) ?? null
+  const activeCustomerSite =
+    customerSiteTab !== 'all' && customerSiteTab !== 'unassigned'
+      ? selectedCustomerSites.find(site => site.id === customerSiteTab) ?? null
+      : null
   const selectedCustomerAddressForMap =
-    selectedCustomerPrimarySite?.address?.trim() || selectedCustomer?.address?.trim() || null
+    activeCustomerSite?.address?.trim() ||
+    selectedCustomerPrimarySite?.address?.trim() ||
+    selectedCustomer?.address?.trim() ||
+    null
+  useEffect(() => {
+    if (!selectedCustomer) {
+      if (customerSiteTab !== 'all') {
+        setCustomerSiteTab('all')
+      }
+      setActiveContactIdsByTab({})
+      return
+    }
+    if (siteTabs.length === 0) {
+      if (customerSiteTab !== 'all') {
+        setCustomerSiteTab('all')
+      }
+      return
+    }
+    if (!siteTabs.some(tab => tab.key === customerSiteTab)) {
+      setCustomerSiteTab(siteTabs[0]?.key ?? 'all')
+    }
+  }, [selectedCustomer, siteTabs, customerSiteTab])
+  useEffect(() => {
+    if (!selectedCustomer) {
+      return
+    }
+    setActiveContactIdsByTab(prev => {
+      let changed = false
+      const next: Record<string, string | null> = {}
+      for (const tab of siteTabs) {
+        const contactsForTab = contactsBySiteTab[tab.key] ?? []
+        const previous = prev[tab.key] ?? null
+        const selected = previous && contactsForTab.some(contact => contact.id === previous)
+          ? previous
+          : contactsForTab[0]?.id ?? null
+        next[tab.key] = selected
+        if (previous !== selected) {
+          changed = true
+        }
+      }
+      if (Object.keys(prev).length !== siteTabs.length) {
+        changed = true
+      }
+      return changed ? next : prev
+    })
+  }, [selectedCustomer, siteTabs, contactsBySiteTab])
   const sortedCustomers = useMemo(() => [...db].sort((a, b) => a.name.localeCompare(b.name)), [db])
   const hasCustomers = sortedCustomers.length > 0
+  const newProjectCustomer = useMemo(() => {
+    if (!hasCustomers) {
+      return null
+    }
+    return (
+      sortedCustomers.find(customer => customer.id === newProjectCustomerId) ?? sortedCustomers[0] ?? null
+    )
+  }, [sortedCustomers, newProjectCustomerId, hasCustomers])
   const currentUser = useMemo<User>(() => {
     if (users.length === 0) {
       return LOCAL_WORKSPACE_USER
@@ -835,7 +960,7 @@ function AppContent() {
 
   useEffect(() => {
     setShowNewContactForm(false)
-    setNewContact({ name: '', position: '', phone: '', email: '' })
+    setNewContact({ name: '', position: '', phone: '', email: '', siteId: '' })
     setContactError(null)
     setShowInlineProjectForm(false)
     setShowCustomerEditor(false)
@@ -850,8 +975,18 @@ function AppContent() {
     setCustomerEditorError(null)
     setIsSavingCustomerEditor(false)
     closeContactEditor()
+    setCustomerSiteTab('all')
     setCustomerProjectsTab('active')
   }, [selectedCustomer?.id, closeContactEditor])
+  useEffect(() => {
+    if (!newProjectCustomer) {
+      setNewProjectSiteId('')
+      return
+    }
+    if (!newProjectCustomer.sites.some(site => site.id === newProjectSiteId)) {
+      setNewProjectSiteId('')
+    }
+  }, [newProjectCustomer, newProjectSiteId])
 
   useEffect(() => {
     if (!contactEditor) {
@@ -867,19 +1002,6 @@ function AppContent() {
       closeContactEditor()
     }
   }, [db, contactEditor, closeContactEditor])
-
-  useEffect(() => {
-    if (!selectedCustomer || selectedCustomer.contacts.length === 0) {
-      setActiveContactId(null)
-      return
-    }
-    setActiveContactId(prev => {
-      if (prev && selectedCustomer.contacts.some(contact => contact.id === prev)) {
-        return prev
-      }
-      return selectedCustomer.contacts[0]?.id ?? null
-    })
-  }, [selectedCustomer])
 
   type GlobalSearchMatch =
     | {
@@ -1250,6 +1372,12 @@ function AppContent() {
       setNewProjectCustomerId(customerId)
     }
 
+    const projectCustomer = db.find(c => c.id === customerId) ?? null
+    const validSiteId =
+      newProjectSiteId && projectCustomer?.sites.some(site => site.id === newProjectSiteId)
+        ? newProjectSiteId
+        : ''
+
     const { info, error: infoError } = parseProjectInfoDraft(newProjectInfoDraft, users)
     if (infoError) {
       setNewProjectError(infoError)
@@ -1269,6 +1397,7 @@ function AppContent() {
         number: trimmedNumber,
         info: info ?? null,
         tasks: initialTasks,
+        siteId: validSiteId || undefined,
       })
       if (typeof result === 'string') {
         setNewProjectError(result)
@@ -1277,6 +1406,7 @@ function AppContent() {
 
       setShowNewProject(false)
       setNewProjectNumber('')
+      setNewProjectSiteId('')
       setNewProjectError(null)
       setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, computeProjectDateDefaults(businessSettings)))
       setNewProjectTaskSelections(createDefaultTaskSelectionMap())
@@ -1403,14 +1533,18 @@ function AppContent() {
       )
     }
 
-    const hasContacts = selectedCustomer.contacts.length > 0
-    const activeContact =
-      hasContacts
-        ? selectedCustomer.contacts.find(contact => contact.id === activeContactId) ??
-          selectedCustomer.contacts[0]
-        : null
-    const activeProjects = selectedCustomer.projects.filter(project => project.status === 'Active')
-    const completedProjects = selectedCustomer.projects.filter(project => project.status === 'Complete')
+    const contactsForActiveTab = contactsBySiteTab[customerSiteTab] ?? []
+    const storedActiveContactId = activeContactIdsByTab[customerSiteTab] ?? null
+    const activeContactId =
+      storedActiveContactId && contactsForActiveTab.some(contact => contact.id === storedActiveContactId)
+        ? storedActiveContactId
+        : contactsForActiveTab[0]?.id ?? null
+    const activeContact = contactsForActiveTab.find(contact => contact.id === activeContactId) ?? null
+    const hasContacts = contactsForActiveTab.length > 0
+    const projectsForCurrentSite = projectsBySiteTab[customerSiteTab] ?? []
+    const activeProjects = projectsForCurrentSite.filter(project => project.status === 'Active')
+    const completedProjects = projectsForCurrentSite.filter(project => project.status === 'Complete')
+    const subCustomersForActiveTab = subCustomersBySiteTab[customerSiteTab] ?? []
     const projectsForTab = customerProjectsTab === 'active' ? activeProjects : completedProjects
     const projectTabCopy: Record<'active' | 'complete', { label: string; empty: string; count: number }> = {
       active: {
@@ -1484,63 +1618,134 @@ function AppContent() {
               <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
                 <div className='flex items-start justify-between gap-2'>
                   <div className='text-sm font-semibold text-slate-700'>Site locations</div>
-                  {selectedCustomerPrimarySite?.address ? (
-                    <Button
-                      variant='outline'
-                      onClick={() =>
-                        selectedCustomerPrimarySite.address &&
-                        navigator.clipboard.writeText(selectedCustomerPrimarySite.address)
-                      }
-                      className='rounded-full px-2 py-2'
-                      title='Copy primary site address'
-                    >
-                      <Copy size={16} />
-                      <span className='sr-only'>Copy primary site address</span>
-                    </Button>
-                  ) : null}
-                </div>
-                {selectedCustomerSites.length === 0 ? (
-                  <div className='mt-3 rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
-                    No site locations recorded.
-                  </div>
-                ) : (
-                  <div className='mt-3 space-y-3'>
-                    {selectedCustomerSites.map((site, index) => (
-                      <div
-                        key={site.id}
-                        className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'
+                  {(() => {
+                    const siteForCopy = customerSiteTab === 'all' ? selectedCustomerPrimarySite : activeCustomerSite
+                    if (!siteForCopy?.address) {
+                      return null
+                    }
+                    const copyTitle = customerSiteTab === 'all' ? 'Copy primary site address' : 'Copy site address'
+                    return (
+                      <Button
+                        variant='outline'
+                        onClick={() => navigator.clipboard.writeText(siteForCopy.address ?? '')}
+                        className='rounded-full px-2 py-2'
+                        title={copyTitle}
                       >
-                        <div className='flex items-start justify-between gap-2'>
-                          <div>
-                            <div className='text-sm font-semibold text-slate-800'>
-                              {site.name?.trim() || `Site ${index + 1}`}
+                        <Copy size={16} />
+                        <span className='sr-only'>{copyTitle}</span>
+                      </Button>
+                    )
+                  })()}
+                </div>
+                {siteTabs.length > 1 && (
+                  <div className='mt-3 flex flex-wrap gap-2'>
+                    {siteTabs.map(tab => {
+                      const isActive = tab.key === customerSiteTab
+                      return (
+                        <button
+                          key={tab.key}
+                          type='button'
+                          onClick={() => setCustomerSiteTab(tab.key)}
+                          className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
+                            isActive
+                              ? 'border-sky-300 bg-sky-50 text-sky-700 shadow-sm'
+                              : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {customerSiteTab === 'all' ? (
+                  selectedCustomerSites.length === 0 ? (
+                    <div className='mt-3 rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
+                      No site locations recorded.
+                    </div>
+                  ) : (
+                    <div className='mt-3 space-y-3'>
+                      {selectedCustomerSites.map((site, index) => (
+                        <div
+                          key={site.id}
+                          className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'
+                        >
+                          <div className='flex items-start justify-between gap-2'>
+                            <div>
+                              <div className='text-sm font-semibold text-slate-800'>
+                                {site.name?.trim() || `Site ${index + 1}`}
+                              </div>
+                              {site.notes ? (
+                                <div className='text-xs text-slate-500'>{site.notes}</div>
+                              ) : null}
                             </div>
-                            {site.notes ? (
-                              <div className='text-xs text-slate-500'>{site.notes}</div>
+                            {site.address ? (
+                              <Button
+                                type='button'
+                                variant='ghost'
+                                className='rounded-full px-2 py-1 text-slate-500 hover:text-sky-600'
+                                onClick={() => navigator.clipboard.writeText(site.address ?? '')}
+                                title='Copy site address'
+                              >
+                                <Copy size={16} />
+                                <span className='sr-only'>Copy site address</span>
+                              </Button>
                             ) : null}
                           </div>
-                          {site.address ? (
-                            <Button
-                              type='button'
-                              variant='ghost'
-                              className='rounded-full px-2 py-1 text-slate-500 hover:text-sky-600'
-                              onClick={() => navigator.clipboard.writeText(site.address ?? '')}
-                              title='Copy site address'
-                            >
-                              <Copy size={16} />
-                              <span className='sr-only'>Copy site address</span>
-                            </Button>
+                          <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                            {site.address ? (
+                              <span className='block whitespace-pre-wrap break-words text-slate-800'>{site.address}</span>
+                            ) : (
+                              <span className='text-slate-400'>No address provided.</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                ) : customerSiteTab === 'unassigned' ? (
+                  <div className='mt-3 rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
+                    Records without a linked site will appear under this tab.
+                  </div>
+                ) : activeCustomerSite ? (
+                  <div className='mt-3 space-y-3'>
+                    <div className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'>
+                      <div className='flex items-start justify-between gap-2'>
+                        <div>
+                          <div className='text-sm font-semibold text-slate-800'>
+                            {activeCustomerSite.name?.trim() || 'Selected site'}
+                          </div>
+                          {activeCustomerSite.notes ? (
+                            <div className='text-xs text-slate-500'>{activeCustomerSite.notes}</div>
                           ) : null}
                         </div>
-                        <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
-                          {site.address ? (
-                            <span className='block whitespace-pre-wrap break-words text-slate-800'>{site.address}</span>
-                          ) : (
-                            <span className='text-slate-400'>No address provided.</span>
-                          )}
-                        </div>
+                        {activeCustomerSite.address ? (
+                          <Button
+                            type='button'
+                            variant='ghost'
+                            className='rounded-full px-2 py-1 text-slate-500 hover:text-sky-600'
+                            onClick={() => navigator.clipboard.writeText(activeCustomerSite.address ?? '')}
+                            title='Copy site address'
+                          >
+                            <Copy size={16} />
+                            <span className='sr-only'>Copy site address</span>
+                          </Button>
+                        ) : null}
                       </div>
-                    ))}
+                      <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                        {activeCustomerSite.address ? (
+                          <span className='block whitespace-pre-wrap break-words text-slate-800'>
+                            {activeCustomerSite.address}
+                          </span>
+                        ) : (
+                          <span className='text-slate-400'>No address provided.</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className='mt-3 rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
+                    Selected site not found.
                   </div>
                 )}
                 {selectedCustomerAddressForMap ? (
@@ -1558,11 +1763,11 @@ function AppContent() {
 
               <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
                 <div className='text-sm font-semibold text-slate-700'>Sub customers</div>
-                {selectedCustomer.subCustomers.length === 0 ? (
+                {subCustomersForActiveTab.length === 0 ? (
                   <p className='mt-2 text-sm text-slate-500'>No sub customers recorded.</p>
                 ) : (
                   <div className='mt-3 space-y-3'>
-                    {selectedCustomer.subCustomers.map(subCustomer => {
+                    {subCustomersForActiveTab.map(subCustomer => {
                       const relatedSite = selectedCustomerSites.find(site => site.id === subCustomer.siteId) ?? null
                       return (
                         <div
@@ -1599,7 +1804,19 @@ function AppContent() {
                   <Button
                     variant='outline'
                     onClick={() => {
-                      setShowNewContactForm(prev => !prev)
+                      setShowNewContactForm(prev => {
+                        const next = !prev
+                        if (next) {
+                          const defaultSiteId =
+                            customerSiteTab !== 'all' && customerSiteTab !== 'unassigned'
+                              ? customerSiteTab
+                              : ''
+                          setNewContact({ name: '', position: '', phone: '', email: '', siteId: defaultSiteId })
+                        } else {
+                          setNewContact({ name: '', position: '', phone: '', email: '', siteId: '' })
+                        }
+                        return next
+                      })
                       setContactError(null)
                     }}
                     title={canEdit ? (showNewContactForm ? 'Cancel adding contact' : 'Add contact') : 'Read-only access'}
@@ -1618,15 +1835,20 @@ function AppContent() {
                 </div>
                 {hasContacts ? (
                   <>
-                    {selectedCustomer.contacts.length > 1 && (
+                    {contactsForActiveTab.length > 1 && (
                       <div className='mt-4 flex flex-wrap items-center gap-2'>
-                        {selectedCustomer.contacts.map((contact, index) => {
+                        {contactsForActiveTab.map((contact, index) => {
                           const isActive = contact.id === activeContactId
                           return (
                             <button
                               key={contact.id}
                               type='button'
-                              onClick={() => setActiveContactId(contact.id)}
+                              onClick={() =>
+                                setActiveContactIdsByTab(prev => ({
+                                  ...prev,
+                                  [customerSiteTab]: contact.id,
+                                }))
+                              }
                               className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
                                 isActive
                                   ? 'border-sky-300 bg-sky-50 text-sky-700 shadow-sm'
@@ -1649,6 +1871,15 @@ function AppContent() {
                             <div className='text-xs text-slate-500'>
                               {activeContact.position || 'No position recorded.'}
                             </div>
+                            <div className='text-xs text-slate-400'>
+                              {activeContact.siteId
+                                ? `Site: ${
+                                    selectedCustomerSites.find(site => site.id === activeContact.siteId)?.name?.trim() ||
+                                    selectedCustomerSites.find(site => site.id === activeContact.siteId)?.address?.trim() ||
+                                    'Unnamed site'
+                                  }`
+                                : 'Site: Unassigned'}
+                            </div>
                           </div>
                           <div className='flex items-center gap-1'>
                             <Button
@@ -1661,6 +1892,7 @@ function AppContent() {
                                   position: activeContact.position ?? '',
                                   phone: activeContact.phone ?? '',
                                   email: activeContact.email ?? '',
+                                  siteId: activeContact.siteId ?? '',
                                 })
                               }
                               title={canEdit ? 'Edit contact' : 'Read-only access'}
@@ -1744,6 +1976,27 @@ function AppContent() {
                         disabled={!canEdit}
                       />
                     </div>
+                    <div className='md:col-span-2'>
+                      <Label>Site</Label>
+                      <select
+                        className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                        value={newContact.siteId}
+                        onChange={(e) =>
+                          setNewContact({
+                            ...newContact,
+                            siteId: (e.target as HTMLSelectElement).value,
+                          })
+                        }
+                        disabled={!canEdit}
+                      >
+                        <option value=''>Unassigned</option>
+                        {selectedCustomerSites.map(site => (
+                          <option key={site.id} value={site.id}>
+                            {site.name?.trim() || site.address?.trim() || 'Unnamed site'}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                   <div className='mt-3 flex flex-wrap items-center gap-2'>
                     <Button
@@ -1753,7 +2006,7 @@ function AppContent() {
                         if (result) {
                           setContactError(result)
                         } else {
-                          setNewContact({ name: '', position: '', phone: '', email: '' })
+                          setNewContact({ name: '', position: '', phone: '', email: '', siteId: '' })
                           setContactError(null)
                           setShowNewContactForm(false)
                         }
@@ -1767,7 +2020,7 @@ function AppContent() {
                       variant='ghost'
                       onClick={() => {
                         setShowNewContactForm(false)
-                        setNewContact({ name: '', position: '', phone: '', email: '' })
+                        setNewContact({ name: '', position: '', phone: '', email: '', siteId: '' })
                         setContactError(null)
                       }}
                     >
@@ -1807,9 +2060,18 @@ function AppContent() {
             {showInlineProjectForm && (
               <div>
                 <AddProjectForm
-                  onAdd={(num) => addProject(selectedCustomer.id, { number: num })}
+                  onAdd={(num, siteId) =>
+                    addProject(selectedCustomer.id, {
+                      number: num,
+                      siteId: siteId || undefined,
+                    })
+                  }
                   disabled={!canEdit}
                   onAdded={() => setShowInlineProjectForm(false)}
+                  sites={selectedCustomer.sites}
+                  defaultSiteId={
+                    customerSiteTab !== 'all' && customerSiteTab !== 'unassigned' ? customerSiteTab : ''
+                  }
                 />
               </div>
             )}
@@ -2256,6 +2518,9 @@ function AppContent() {
         }
         onUpdateProjectInfo={(info) =>
           updateProjectInfo(selectedProjectData.customer.id, selectedProjectData.project.id, info)
+        }
+        onUpdateProjectSite={(siteId) =>
+          updateProjectSite(selectedProjectData.customer.id, selectedProjectData.project.id, siteId)
         }
         onAddWO={(data) => addWO(selectedProjectData.customer.id, selectedProjectData.project.id, data)}
         onDeleteWO={(woId) => deleteWO(selectedProjectData.customer.id, selectedProjectData.project.id, woId)}
@@ -3666,7 +3931,7 @@ function AppContent() {
     updates: {
       name?: string
       address?: string | null
-      contacts?: Array<{ id?: string; name?: string; position?: string; phone?: string; email?: string }> | null
+      contacts?: Array<{ id?: string; name?: string; position?: string; phone?: string; email?: string; siteId?: string }> | null
       sites?: Array<{ id?: string; name?: string; address?: string; notes?: string }> | null
       subCustomers?: Array<{
         id?: string
@@ -4356,7 +4621,7 @@ function AppContent() {
 
   async function addContact(
     customer: Customer,
-    data: { name: string; position: string; phone: string; email: string },
+    data: { name: string; position: string; phone: string; email: string; siteId: string },
   ): Promise<string | null> {
     if (!canEdit) {
       const message = 'Not authorized to update contacts.'
@@ -4367,6 +4632,8 @@ function AppContent() {
     const position = data.position.trim()
     const phone = data.phone.trim()
     const email = data.email.trim()
+    const siteId = data.siteId.trim()
+    const validSiteId = siteId && customer.sites.some(site => site.id === siteId) ? siteId : ''
     if (!name && !position && !phone && !email) {
       return 'Enter at least one detail for the contact.'
     }
@@ -4378,12 +4645,14 @@ function AppContent() {
         position: contact.position,
         phone: contact.phone,
         email: contact.email,
+        siteId: contact.siteId,
       })),
       {
         name: name || undefined,
         position: position || undefined,
         phone: phone || undefined,
         email: email || undefined,
+        siteId: validSiteId || undefined,
       },
     ]
 
@@ -4392,7 +4661,19 @@ function AppContent() {
       const createdContact = saved.contacts.find(contact => !customer.contacts.some(existing => existing.id === contact.id))
       const nextActive = createdContact ?? saved.contacts[0]
       if (nextActive) {
-        setActiveContactId(nextActive.id)
+        const targetKeys: CustomerSiteTabKey[] = ['all']
+        if (nextActive.siteId) {
+          targetKeys.push(nextActive.siteId)
+        } else {
+          targetKeys.push('unassigned')
+        }
+        setActiveContactIdsByTab(prev => {
+          const next = { ...prev }
+          for (const key of targetKeys) {
+            next[key] = nextActive.id
+          }
+          return next
+        })
       }
       return null
     } catch (error) {
@@ -4403,7 +4684,7 @@ function AppContent() {
   async function updateContactDetails(
     customer: Customer,
     contactId: string,
-    details: { name: string; position: string; phone: string; email: string },
+    details: { name: string; position: string; phone: string; email: string; siteId: string },
   ): Promise<string | null> {
     if (!canEdit) {
       const message = 'Not authorized to update contacts.'
@@ -4415,6 +4696,8 @@ function AppContent() {
     const position = details.position.trim()
     const phone = details.phone.trim()
     const email = details.email.trim()
+    const siteId = details.siteId.trim()
+    const validSiteId = siteId && customer.sites.some(site => site.id === siteId) ? siteId : ''
 
     if (!name && !position && !phone && !email) {
       return 'Enter at least one detail for the contact.'
@@ -4428,6 +4711,7 @@ function AppContent() {
             position: contact.position,
             phone: contact.phone,
             email: contact.email,
+            siteId: contact.siteId,
           }
         : {
             id: contact.id,
@@ -4435,6 +4719,7 @@ function AppContent() {
             position: position || undefined,
             phone: phone || undefined,
             email: email || undefined,
+            siteId: validSiteId || undefined,
           },
     )
 
@@ -4460,6 +4745,7 @@ function AppContent() {
         position: contact.position,
         phone: contact.phone,
         email: contact.email,
+        siteId: contact.siteId,
       }))
 
     try {
@@ -4551,7 +4837,7 @@ function AppContent() {
       return
     }
 
-    const { customerId, contactId, name, position, phone, email } = contactEditor
+    const { customerId, contactId, name, position, phone, email, siteId } = contactEditor
     const customer = db.find(c => c.id === customerId)
     if (!customer) {
       setContactEditorError('Selected contact no longer exists.')
@@ -4566,6 +4852,7 @@ function AppContent() {
         position,
         phone,
         email,
+        siteId,
       })
       if (result) {
         setContactEditorError(result)
@@ -4633,6 +4920,37 @@ function AppContent() {
       } catch (error) {
         console.error('Failed to update project information', error)
         const message = toErrorMessage(error, 'Failed to update project information.')
+        setActionError(message)
+      }
+    })()
+  }
+
+  function updateProjectSite(customerId: string, projectId: string, siteId: string | null) {
+    if (!canEdit) {
+      setActionError('Not authorized to update project information.')
+      return
+    }
+
+    setDb(prev =>
+      prev.map(c =>
+        c.id !== customerId
+          ? c
+          : {
+              ...c,
+              projects: c.projects.map(p =>
+                p.id !== projectId ? p : { ...p, siteId: siteId ?? undefined },
+              ),
+            },
+      ),
+    )
+
+    void (async () => {
+      try {
+        await updateProjectRecord(projectId, { siteId: siteId ?? null })
+        setActionError(null)
+      } catch (error) {
+        console.error('Failed to update project site', error)
+        const message = toErrorMessage(error, 'Failed to update project site.')
         setActionError(message)
       }
     })()
@@ -5009,6 +5327,7 @@ function AppContent() {
       number: string
       info?: ProjectInfo | null
       tasks?: Array<{ name: string; status?: ProjectTaskStatus; assigneeId?: string }>
+      siteId?: string | undefined
     },
   ): Promise<{ projectId: string; customerId: string } | string> {
     if (!canEdit) {
@@ -5021,11 +5340,17 @@ function AppContent() {
     const normalized = trimmed.toUpperCase()
     const finalNumber = normalized.startsWith('P') ? normalized : `P${normalized}`
     if (projectNumberExists(finalNumber)) return 'A project with this number already exists.'
+    const projectCustomer = db.find(c => c.id === customerId) ?? null
+    const validSiteId =
+      data.siteId && projectCustomer?.sites.some(site => site.id === data.siteId)
+        ? data.siteId
+        : undefined
     try {
       const project = await createProjectRecord(customerId, {
         number: finalNumber,
         info: data.info ?? null,
         tasks: data.tasks,
+        siteId: validSiteId ?? null,
       })
       setDb(prev =>
         prev.map(c =>
@@ -5046,7 +5371,7 @@ function AppContent() {
     data: {
       name: string
       address?: string
-      contacts?: Array<{ name?: string; position?: string; phone?: string; email?: string }>
+      contacts?: Array<{ name?: string; position?: string; phone?: string; email?: string; siteId?: string }>
       sites?: Array<{ id: string; name?: string; address?: string; notes?: string }>
       subCustomers?: Array<{
         id: string
@@ -5071,6 +5396,7 @@ function AppContent() {
         position: contact.position?.trim() || undefined,
         phone: contact.phone?.trim() || undefined,
         email: contact.email?.trim() || undefined,
+        siteId: contact.siteId?.trim() || undefined,
       }))
       .filter(contact => contact.name || contact.position || contact.phone || contact.email)
     const payload = {
@@ -6162,6 +6488,7 @@ function AppContent() {
                       setShowNewProject(false)
                       setNewProjectError(null)
                       setNewProjectNumber('')
+                      setNewProjectSiteId('')
                       setIsCreatingProject(false)
                       setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, computeProjectDateDefaults(businessSettings)))
                       setNewProjectTaskSelections(createDefaultTaskSelectionMap())
@@ -6209,6 +6536,23 @@ function AppContent() {
                             disabled={isCreatingProject || !canEdit}
                           />
                         </div>
+                      </div>
+                      <div>
+                        <Label htmlFor='new-project-site'>Site</Label>
+                        <select
+                          id='new-project-site'
+                          className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                          value={newProjectSiteId}
+                          onChange={(e) => setNewProjectSiteId((e.target as HTMLSelectElement).value)}
+                          disabled={isCreatingProject || !canEdit}
+                        >
+                          <option value=''>Unassigned</option>
+                          {newProjectCustomer?.sites.map(site => (
+                            <option key={site.id} value={site.id}>
+                              {site.name?.trim() || site.address?.trim() || 'Unnamed site'}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                       <div className='grid gap-3 md:grid-cols-2'>
                         <div>
@@ -6462,6 +6806,26 @@ function AppContent() {
                       disabled={!canEdit || isSavingContactEdit}
                     />
                   </div>
+                  <div className='md:col-span-2'>
+                    <Label>Site</Label>
+                    <select
+                      className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                      value={contactEditor.siteId}
+                      onChange={(e) => {
+                        const value = (e.target as HTMLSelectElement).value
+                        setContactEditor(prev => (prev ? { ...prev, siteId: value } : prev))
+                        if (contactEditorError) setContactEditorError(null)
+                      }}
+                      disabled={!canEdit || isSavingContactEdit}
+                    >
+                      <option value=''>Unassigned</option>
+                      {selectedCustomerSites.map(site => (
+                        <option key={site.id} value={site.id}>
+                          {site.name?.trim() || site.address?.trim() || 'Unnamed site'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
                 {contactEditorError && (
                   <p className='mt-2 flex items-center gap-1 text-sm text-rose-600'>
@@ -6495,14 +6859,22 @@ function AddProjectForm({
   onAdd,
   disabled = false,
   onAdded,
+  sites,
+  defaultSiteId = '',
 }: {
-  onAdd: (num: string) => Promise<{ projectId: string; customerId: string } | string>
+  onAdd: (num: string, siteId: string) => Promise<{ projectId: string; customerId: string } | string>
   disabled?: boolean
   onAdded?: () => void
+  sites: CustomerSite[]
+  defaultSiteId?: string
 }) {
   const [val, setVal] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [siteId, setSiteId] = useState(defaultSiteId)
+  useEffect(() => {
+    setSiteId(defaultSiteId)
+  }, [defaultSiteId])
   const isDisabled = disabled
 
   const handleAdd = async () => {
@@ -6517,12 +6889,13 @@ function AddProjectForm({
     }
     setIsSaving(true)
     try {
-      const result = await onAdd(trimmed)
+      const result = await onAdd(trimmed, siteId)
       if (typeof result === 'string') {
         setError(result)
         return
       }
       setVal('')
+      setSiteId(defaultSiteId)
       setError(null)
       onAdded?.()
     } finally {
@@ -6552,6 +6925,24 @@ function AddProjectForm({
         <Button onClick={handleAdd} disabled={isSaving || isDisabled} title={isDisabled ? 'Read-only access' : 'Add project'}>
           <Plus size={16} /> Add
         </Button>
+      </div>
+      <div>
+        <Label>Site</Label>
+        <select
+          className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+          value={siteId}
+          onChange={(e) => {
+            setSiteId((e.target as HTMLSelectElement).value)
+          }}
+          disabled={isDisabled}
+        >
+          <option value=''>Unassigned</option>
+          {sites.map(site => (
+            <option key={site.id} value={site.id}>
+              {site.name?.trim() || site.address?.trim() || 'Unnamed site'}
+            </option>
+          ))}
+        </select>
       </div>
       {error && (
         <p className='flex items-center gap-1 text-sm text-rose-600'>
