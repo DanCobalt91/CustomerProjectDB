@@ -762,10 +762,10 @@ function AppContent() {
     const tabs: Array<{ key: CustomerSiteTabKey; label: string }> = [
       { key: 'all', label: 'All sites' },
     ]
-    selectedCustomer.sites.forEach((site, index) => {
+    selectedCustomer.sites.forEach(site => {
       const name = site.name?.trim()
       const address = site.address?.trim()
-      const label = name || (address ? address.split('\n')[0] : `Site ${index + 1}`)
+      const label = name || (address ? address.split('\n')[0] : 'Unnamed site')
       tabs.push({ key: site.id, label })
     })
     const hasUnassigned =
@@ -1361,91 +1361,124 @@ function AppContent() {
   }
 
 
-  const renderCustomerListCard = () => (
-    <Card className='panel h-fit'>
-      <CardHeader className='flex-col gap-1'>
-        <div className='text-lg font-semibold text-slate-900'>Customers</div>
-        <div className='text-sm text-slate-500'>
-          {customerCount === 1 ? '1 customer listed' : `${customerCount} customers listed`}
-        </div>
-      </CardHeader>
-      <CardContent>
-        {sortedCustomers.length === 0 ? (
-          <p className='text-sm text-slate-500'>Add a customer to see it listed here.</p>
-        ) : (
-          <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
-            <div className='overflow-x-auto'>
-              <table className='min-w-full divide-y divide-slate-200 bg-white text-sm text-slate-700'>
-                <thead className='bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500'>
-                  <tr>
-                    <th scope='col' className='px-4 py-3 text-left font-semibold'>Customer</th>
-                    <th scope='col' className='px-4 py-3 text-left font-semibold'>Projects</th>
-                    <th scope='col' className='px-4 py-3 text-left font-semibold'>Primary contact</th>
-                    <th scope='col' className='px-4 py-3 text-right font-semibold'>Actions</th>
-                  </tr>
-                </thead>
-                <tbody className='divide-y divide-slate-100'>
-                  {sortedCustomers.map(customer => {
-                    const isSelected = selectedCustomerId === customer.id && activePage === 'customerDetail'
-                    const projectCount = customer.projects.length
-                    const primaryContact = customer.contacts.find(contact => contact.name?.trim()) ?? null
-                    const parent = customer.parentCustomerId
-                      ? customerLookup.get(customer.parentCustomerId) ?? null
-                      : null
-                    const displayName = parent
-                      ? `${parent.name} > ${customer.name}`
-                      : customer.name
-                    return (
-                      <tr
-                        key={customer.id}
-                        className={`${isSelected ? 'bg-indigo-50/70' : 'hover:bg-slate-50/70'} transition-colors`}
-                      >
-                        <td className='px-4 py-3'>
-                          <div className='flex flex-col gap-1'>
-                            <span className='text-sm font-semibold text-slate-900'>{displayName}</span>
-                            <span className='text-xs text-slate-500'>
-                              {customer.sites.find(site => site.address?.trim())?.address ??
-                                customer.address ??
-                                'No address on file.'}
-                            </span>
-                          </div>
-                        </td>
-                        <td className='whitespace-nowrap px-4 py-3 text-sm text-slate-600'>{projectCount}</td>
-                        <td className='px-4 py-3 text-sm text-slate-600'>
-                          {primaryContact ? (
-                            <div className='flex flex-col'>
-                              <span className='font-medium text-slate-700'>{primaryContact.name}</span>
-                              {primaryContact.position ? (
-                                <span className='text-xs text-slate-500'>{primaryContact.position}</span>
-                              ) : null}
-                            </div>
-                          ) : (
-                            <span className='text-xs text-slate-400'>No contacts recorded</span>
-                          )}
-                        </td>
-                        <td className='px-4 py-3 text-right'>
-                          <Button
-                            variant='outline'
-                            onClick={() => {
-                              setSelectedCustomerId(customer.id)
-                              setSelectedProjectId(null)
-                              setActivePage('customerDetail')
-                            }}
-                          >
-                            View
-                          </Button>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+  const renderCustomerListCard = () => {
+    const activeCustomers = sortedCustomers.filter(customer =>
+      customer.projects.some(project => project.status === 'Active'),
+    )
+    const inactiveCustomers = sortedCustomers.filter(
+      customer => !customer.projects.some(project => project.status === 'Active'),
+    )
+
+    const navigateToCustomer = (customerId: string) => {
+      setSelectedCustomerId(customerId)
+      setSelectedProjectId(null)
+      setActivePage('customerDetail')
+    }
+
+    const renderCustomerSection = (
+      title: string,
+      customers: Customer[],
+      options: { showActiveProjectCount: boolean },
+    ) => {
+      if (customers.length === 0) {
+        return (
+          <div className='rounded-2xl border border-dashed border-slate-200/80 bg-slate-50/60 p-4 text-sm text-slate-500'>
+            {title === 'Active customers'
+              ? 'No customers currently have active projects.'
+              : 'No inactive customers to display.'}
           </div>
-        )}
-      </CardContent>
-    </Card>
-  )
+        )
+      }
+
+      return (
+        <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
+          <div className='overflow-x-auto'>
+            <table className='min-w-full divide-y divide-slate-200 bg-white text-sm text-slate-700'>
+              <thead className='bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500'>
+                <tr>
+                  <th scope='col' className='px-4 py-3 text-left font-semibold'>Customer</th>
+                  <th scope='col' className='px-4 py-3 text-left font-semibold'>Total projects</th>
+                  {options.showActiveProjectCount ? (
+                    <th scope='col' className='px-4 py-3 text-left font-semibold'>Active projects</th>
+                  ) : null}
+                </tr>
+              </thead>
+              <tbody className='divide-y divide-slate-100'>
+                {customers.map(customer => {
+                  const isSelected = selectedCustomerId === customer.id && activePage === 'customerDetail'
+                  const totalProjects = customer.projects.length
+                  const activeProjects = customer.projects.filter(project => project.status === 'Active').length
+                  const parent = customer.parentCustomerId
+                    ? customerLookup.get(customer.parentCustomerId) ?? null
+                    : null
+                  const displayName = parent ? `${parent.name} > ${customer.name}` : customer.name
+                  const address =
+                    customer.sites.find(site => site.address?.trim())?.address ??
+                    customer.address ??
+                    'No address on file.'
+                  return (
+                    <tr
+                      key={customer.id}
+                      role='button'
+                      tabIndex={0}
+                      onClick={() => navigateToCustomer(customer.id)}
+                      onKeyDown={(event: KeyboardEvent<HTMLTableRowElement>) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault()
+                          navigateToCustomer(customer.id)
+                        }
+                      }}
+                      className={`${
+                        isSelected ? 'bg-indigo-50/70' : 'hover:bg-slate-50/70'
+                      } cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500`}
+                    >
+                      <td className='px-4 py-3'>
+                        <div className='flex flex-col gap-1'>
+                          <span className='text-sm font-semibold text-slate-900'>{displayName}</span>
+                          <span className='text-xs text-slate-500'>{address}</span>
+                        </div>
+                      </td>
+                      <td className='whitespace-nowrap px-4 py-3 text-sm text-slate-600'>{totalProjects}</td>
+                      {options.showActiveProjectCount ? (
+                        <td className='whitespace-nowrap px-4 py-3 text-sm text-slate-600'>{activeProjects}</td>
+                      ) : null}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )
+    }
+
+    return (
+      <Card className='panel h-fit'>
+        <CardHeader className='flex-col gap-1'>
+          <div className='text-lg font-semibold text-slate-900'>Customers</div>
+          <div className='text-sm text-slate-500'>
+            {customerCount === 1 ? '1 customer listed' : `${customerCount} customers listed`}
+          </div>
+        </CardHeader>
+        <CardContent>
+          {sortedCustomers.length === 0 ? (
+            <p className='text-sm text-slate-500'>Add a customer to see it listed here.</p>
+          ) : (
+            <div className='space-y-6'>
+              <div className='space-y-3'>
+                <div className='text-sm font-semibold uppercase tracking-wide text-slate-500'>Active customers</div>
+                {renderCustomerSection('Active customers', activeCustomers, { showActiveProjectCount: true })}
+              </div>
+              <div className='space-y-3'>
+                <div className='text-sm font-semibold uppercase tracking-wide text-slate-500'>Inactive customers</div>
+                {renderCustomerSection('Inactive customers', inactiveCustomers, { showActiveProjectCount: false })}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
 
   const renderCustomersIndex = () => <div className='space-y-6'>{renderCustomerListCard()}</div>
 
@@ -1606,48 +1639,105 @@ function AppContent() {
                   </div>
                 )}
                 {customerSiteTab === 'all' ? (
-                  selectedCustomerSites.length === 0 ? (
+                  selectedCustomerSites.length === 0 && childCustomers.length === 0 ? (
                     <div className='mt-3 rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
                       No site locations recorded.
                     </div>
                   ) : (
-                    <div className='mt-3 space-y-3'>
-                      {selectedCustomerSites.map((site, index) => (
-                        <div
-                          key={site.id}
-                          className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'
-                        >
-                          <div className='flex items-start justify-between gap-2'>
-                            <div>
-                              <div className='text-sm font-semibold text-slate-800'>
-                                {site.name?.trim() || `Site ${index + 1}`}
-                              </div>
-                              {site.notes ? (
-                                <div className='text-xs text-slate-500'>{site.notes}</div>
-                              ) : null}
-                            </div>
-                            {site.address ? (
-                              <Button
-                                type='button'
-                                variant='ghost'
-                                className='rounded-full px-2 py-1 text-slate-500 hover:text-sky-600'
-                                onClick={() => navigator.clipboard.writeText(site.address ?? '')}
-                                title='Copy site address'
+                    <div className='mt-3 space-y-6'>
+                      {selectedCustomerSites.length > 0 ? (
+                        <div className='space-y-3'>
+                          {selectedCustomerSites.map(site => {
+                            const siteName = site.name?.trim() || site.address?.split('\n')[0] || 'Unnamed site'
+                            return (
+                              <div
+                                key={site.id}
+                                className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'
                               >
-                                <Copy size={16} />
-                                <span className='sr-only'>Copy site address</span>
-                              </Button>
-                            ) : null}
-                          </div>
-                          <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
-                            {site.address ? (
-                              <span className='block whitespace-pre-wrap break-words text-slate-800'>{site.address}</span>
-                            ) : (
-                              <span className='text-slate-400'>No address provided.</span>
-                            )}
-                          </div>
+                                <div className='flex items-start justify-between gap-2'>
+                                  <div>
+                                    <div className='text-sm font-semibold text-slate-800'>{siteName}</div>
+                                    {site.notes ? (
+                                      <div className='text-xs text-slate-500'>{site.notes}</div>
+                                    ) : null}
+                                  </div>
+                                  {site.address ? (
+                                    <Button
+                                      type='button'
+                                      variant='ghost'
+                                      className='rounded-full px-2 py-1 text-slate-500 hover:text-sky-600'
+                                      onClick={() => navigator.clipboard.writeText(site.address ?? '')}
+                                      title='Copy site address'
+                                    >
+                                      <Copy size={16} />
+                                      <span className='sr-only'>Copy site address</span>
+                                    </Button>
+                                  ) : null}
+                                </div>
+                                <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                                  {site.address ? (
+                                    <span className='block whitespace-pre-wrap break-words text-slate-800'>{site.address}</span>
+                                  ) : (
+                                    <span className='text-slate-400'>No address provided.</span>
+                                  )}
+                                </div>
+                              </div>
+                            )
+                          })}
                         </div>
-                      ))}
+                      ) : null}
+                      {childCustomers.length > 0 ? (
+                        <div className='space-y-3'>
+                          <div className='text-sm font-semibold text-slate-700'>Sub customers</div>
+                          {childCustomers.map(child => {
+                            const childAddress = child.sites.find(site => site.address?.trim())?.address ?? child.address ?? ''
+                            return (
+                              <div
+                                key={child.id}
+                                className='space-y-3 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'
+                              >
+                                <div className='flex items-start justify-between gap-2'>
+                                  <div>
+                                    <div className='text-sm font-semibold text-slate-800'>{child.name}</div>
+                                    {childAddress ? (
+                                      <div className='text-xs text-slate-500'>{childAddress.split('\n')[0]}</div>
+                                    ) : null}
+                                  </div>
+                                  <Button
+                                    type='button'
+                                    variant='outline'
+                                    className='rounded-full px-3 py-1 text-xs font-medium'
+                                    onClick={() => {
+                                      setSelectedCustomerId(child.id)
+                                      setActivePage('customers')
+                                    }}
+                                  >
+                                    View customer
+                                  </Button>
+                                </div>
+                                <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                                  {childAddress ? (
+                                    <span className='block whitespace-pre-wrap break-words text-slate-800'>{childAddress}</span>
+                                  ) : (
+                                    <span className='text-slate-400'>No address provided.</span>
+                                  )}
+                                </div>
+                                {childAddress ? (
+                                  <div className='overflow-hidden rounded-xl border border-slate-200/80 shadow-sm'>
+                                    <iframe
+                                      title={`Map preview for ${child.name}`}
+                                      src={`https://maps.google.com/maps?q=${encodeURIComponent(childAddress)}&z=15&output=embed`}
+                                      loading='lazy'
+                                      className='h-40 w-full border-0'
+                                      referrerPolicy='no-referrer-when-downgrade'
+                                    />
+                                  </div>
+                                ) : null}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : null}
                     </div>
                   )
                 ) : customerSiteTab === 'unassigned' ? (
@@ -1708,41 +1798,6 @@ function AppContent() {
                 ) : null}
               </div>
 
-              <div className='rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
-                <div className='text-sm font-semibold text-slate-700'>Sub customers</div>
-                {childCustomers.length === 0 ? (
-                  <p className='mt-2 text-sm text-slate-500'>No sub customers recorded.</p>
-                ) : (
-                  <div className='mt-3 space-y-3'>
-                    {childCustomers.map(child => (
-                      <div
-                        key={child.id}
-                        className='flex items-start justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'
-                      >
-                        <div>
-                          <div className='text-sm font-semibold text-slate-800'>{child.name}</div>
-                          {child.address ? (
-                            <div className='mt-1 text-xs text-slate-500'>
-                              {child.address.split('\n')[0]}
-                            </div>
-                          ) : null}
-                        </div>
-                        <Button
-                          type='button'
-                          variant='outline'
-                          className='rounded-full px-2 py-1 text-xs'
-                          onClick={() => {
-                            setSelectedCustomerId(child.id)
-                            setActivePage('customers')
-                          }}
-                        >
-                          View
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
             </div>
             <div className='flex min-w-0 flex-col gap-4'>
               <div className='w-full rounded-3xl border border-slate-200/80 bg-white/80 p-5 shadow-sm'>
