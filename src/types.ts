@@ -171,6 +171,7 @@ export type Project = {
   status: ProjectStatus;
   activeSubStatus?: ProjectActiveSubStatus;
   note?: string; // ⬅️ new
+  siteId?: string;
   wos: WO[];
   documents?: ProjectDocuments;
   statusHistory?: ProjectStatusLogEntry[];
@@ -201,6 +202,7 @@ export type CustomerContact = {
   position?: string;
   phone?: string;
   email?: string;
+  siteId?: string;
 };
 
 export type Customer = {

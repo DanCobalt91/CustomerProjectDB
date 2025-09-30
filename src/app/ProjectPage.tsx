@@ -67,6 +67,7 @@ export type ProjectPageProps = {
     context?: { changedBy: string },
   ) => void
   onUpdateProjectInfo: (info: ProjectInfo | null) => void
+  onUpdateProjectSite: (siteId: string | null) => void
   onAddWO: (data: { number: string; type: WOType; note?: string }) => Promise<string | null>
   onDeleteWO: (woId: string) => void
   onUploadDocument: (category: ProjectFileCategory, file: File) => Promise<string | null>
@@ -357,6 +358,7 @@ export default function ProjectPage({
   onUpdateProjectNote,
   onUpdateProjectStatus,
   onUpdateProjectInfo,
+  onUpdateProjectSite,
   onAddWO,
   onDeleteWO,
   onUploadDocument,
@@ -2860,6 +2862,24 @@ export default function ProjectPage({
                   ) : (
                     <span className='italic text-slate-400'>No project note added.</span>
                   )}
+                </div>
+                <div className='flex flex-wrap items-center gap-2 text-xs text-slate-500'>
+                  <span className='font-semibold uppercase tracking-wide text-slate-500'>Site</span>
+                  <select
+                    className='rounded-xl border border-slate-200 bg-white/80 px-2 py-1 text-xs font-medium text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                    value={project.siteId ?? ''}
+                    onChange={(event) =>
+                      onUpdateProjectSite((event.target as HTMLSelectElement).value || null)
+                    }
+                    disabled={!canEdit}
+                  >
+                    <option value=''>Unassigned</option>
+                    {customer.sites.map(site => (
+                      <option key={site.id} value={site.id}>
+                        {site.name?.trim() || site.address?.trim() || 'Unnamed site'}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
             </div>
