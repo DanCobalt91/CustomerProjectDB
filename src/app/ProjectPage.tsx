@@ -160,7 +160,6 @@ const PROJECT_TABS = [
 
 type ProjectTab = (typeof PROJECT_TABS)[number]['value']
 type UploadCategory = ProjectFileCategory | 'finalAcceptance'
-type ProjectFileTab = 'all' | ProjectFileCategory
 type TaskFormState = {
   name: string
   start: string
@@ -183,13 +182,25 @@ type OnsiteReportDraft = {
   signedByPosition: string
 }
 
+type ProjectFileTab =
+  | 'all'
+  | ProjectFileCategory
+  | 'onsiteReports'
+  | 'finalAcceptance'
+
 const PROJECT_FILE_TAB_OPTIONS: Array<{ value: ProjectFileTab; label: string }> = [
   { value: 'all', label: 'All files' },
   { value: 'fds', label: 'FDS' },
   { value: 'mechanical', label: 'Mechanical' },
   { value: 'electrical', label: 'Electrical' },
   { value: 'installation', label: 'Installation' },
+  { value: 'onsiteReports', label: 'Onsite reports' },
+  { value: 'finalAcceptance', label: 'Final acceptance' },
 ]
+
+function isProjectFileCategoryTab(value: ProjectFileTab): value is ProjectFileCategory {
+  return PROJECT_FILE_CATEGORIES.includes(value as ProjectFileCategory)
+}
 
 function stripPrefix(value: string, pattern: RegExp): string {
   const trimmed = value.trim()
@@ -439,6 +450,7 @@ export default function ProjectPage({
   })
   const [taskError, setTaskError] = useState<string | null>(null)
   const [isSavingTask, setIsSavingTask] = useState(false)
+  const [isTaskModalOpen, setIsTaskModalOpen] = useState(false)
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null)
   const [taskEditDraft, setTaskEditDraft] = useState<TaskFormState>({
     name: '',
@@ -450,6 +462,30 @@ export default function ProjectPage({
   const lastTaskScheduleDefaultsRef = useRef(taskScheduleDefaults)
   const [taskEditError, setTaskEditError] = useState<string | null>(null)
   const [isSavingTaskEdit, setIsSavingTaskEdit] = useState(false)
+
+  const resetTaskForm = useCallback(() => {
+    setTaskForm({
+      name: '',
+      start: taskScheduleDefaults.start,
+      end: taskScheduleDefaults.end,
+      assigneeId: '',
+      status: PROJECT_TASK_STATUSES[0],
+    })
+    setTaskError(null)
+  }, [taskScheduleDefaults])
+
+  const openTaskModal = useCallback(() => {
+    resetTaskForm()
+    setIsTaskModalOpen(true)
+  }, [resetTaskForm])
+
+  const closeTaskModal = useCallback(() => {
+    if (isSavingTask) {
+      return
+    }
+    setIsTaskModalOpen(false)
+    setTaskError(null)
+  }, [isSavingTask])
 
   useEffect(() => {
     const previous = lastTaskScheduleDefaultsRef.current
@@ -516,8 +552,9 @@ export default function ProjectPage({
       (count, category) => count + (project.documents?.[category]?.length ?? 0),
       0,
     )
-    return projectFilesCount + (project.customerSignOff ? 1 : 0)
-  }, [project.customerSignOff, project.documents])
+    const onsiteCount = project.onsiteReports?.length ?? 0
+    return projectFilesCount + (project.customerSignOff ? 1 : 0) + onsiteCount
+  }, [project.customerSignOff, project.documents, project.onsiteReports])
   const hasProjectInfo = useMemo(() => {
     const info = project.info
     if (!info) {
@@ -717,7 +754,12 @@ export default function ProjectPage({
       setIsUploadDialogOpen(true)
       return
     }
-    const defaultCategory: UploadCategory = activeFileTab === 'all' ? 'fds' : activeFileTab
+    let defaultCategory: UploadCategory = 'fds'
+    if (activeFileTab === 'finalAcceptance') {
+      defaultCategory = 'finalAcceptance'
+    } else if (isProjectFileCategoryTab(activeFileTab)) {
+      defaultCategory = activeFileTab
+    }
     setUploadDialogCategory(defaultCategory)
     setUploadDialogFile(null)
     setUploadDialogError(null)
@@ -1361,14 +1403,8 @@ export default function ProjectPage({
         setTaskError(error)
         return
       }
-      setTaskForm({
-        name: '',
-        start: taskScheduleDefaults.start,
-        end: taskScheduleDefaults.end,
-        assigneeId: '',
-        status: PROJECT_TASK_STATUSES[0],
-      })
-      setTaskError(null)
+      resetTaskForm()
+      setIsTaskModalOpen(false)
     } finally {
       setIsSavingTask(false)
     }
@@ -1691,13 +1727,341 @@ export default function ProjectPage({
       renderCategorySection(category, false),
     ).filter(Boolean) as JSX.Element[]
 
-    const onsiteHeader = (
-      <div className='flex flex-wrap items-start justify-between gap-3'>
-        <div>
-          <div className='text-sm font-semibold text-slate-800'>Onsite reports</div>
-          <p className='text-xs text-slate-500'>Capture onsite visit summaries and customer signatures.</p>
+    const renderDocumentsView = () => {
+      if (activeFileTab === 'all') {
+        return categoriesWithFiles.length === 0 ? (
+          <div className='rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
+            No project files uploaded yet.
+          </div>
+        ) : (
+          <div className='space-y-4'>{allCategorySections}</div>
+        )
+      }
+      if (isProjectFileCategoryTab(activeFileTab)) {
+        const section = renderCategorySection(activeFileTab, true)
+        return <div className='space-y-4'>{section}</div>
+      }
+      return null
+    }
+
+    const renderFinalAcceptanceView = () => (
+      <div className='space-y-4'>
+        <div className='flex flex-wrap items-start justify-between gap-3'>
+          <p className='text-xs text-slate-400'>
+            Use the upload button above to attach a signed final acceptance document.
+          </p>
+          {!isGeneratingSignOff && (
+            <Button
+              variant='outline'
+              onClick={startGeneratingSignOff}
+              disabled={!canEdit}
+              title={canEdit ? 'Generate final acceptance' : 'Read-only access'}
+            >
+              <FileText size={16} /> Generate Final Acceptance
+            </Button>
+          )}
         </div>
-        {!isCreatingOnsiteReport && (
+        {isUploadingSignOff && <p className='text-xs text-slate-500'>Uploading…</p>}
+        {signOffError && !isGeneratingSignOff && (
+          <p className='flex items-center gap-1 text-sm text-rose-600'>
+            <AlertCircle size={14} /> {signOffError}
+          </p>
+        )}
+        <div className='space-y-4'>
+          {isGeneratingSignOff
+            ? renderCustomerSignOffForm()
+            : customerSignOff
+            ? renderCustomerSignOffSummary()
+            : (
+                <div className='rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
+                  No final acceptance recorded yet.
+                </div>
+              )}
+        </div>
+      </div>
+    )
+
+    const renderOnsiteReportsView = () => (
+      <div className='space-y-4'>
+        {onsiteReportError && !isCreatingOnsiteReport && (
+          <p className='flex items-center gap-1 text-sm text-rose-600'>
+            <AlertCircle size={14} /> {onsiteReportError}
+          </p>
+        )}
+        {isCreatingOnsiteReport && (
+          <div className='rounded-2xl border border-slate-200/80 bg-white/90 p-5 shadow-sm'>
+            <div className='grid gap-3 md:grid-cols-2'>
+              <div>
+                <Label htmlFor='onsite-date'>Report date</Label>
+                <input
+                  id='onsite-date'
+                  type='date'
+                  className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                  value={onsiteReportDraft.reportDate}
+                  onChange={event => updateOnsiteReportField('reportDate', (event.target as HTMLInputElement).value)}
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+              <div>
+                <Label htmlFor='onsite-engineer'>Engineer</Label>
+                <Input
+                  id='onsite-engineer'
+                  value={onsiteReportDraft.engineerName}
+                  onChange={event => updateOnsiteReportField('engineerName', (event.target as HTMLInputElement).value)}
+                  placeholder='Engineer name'
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+              <div>
+                <Label htmlFor='onsite-arrival'>Arrival time</Label>
+                <input
+                  id='onsite-arrival'
+                  type='time'
+                  className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                  value={onsiteReportDraft.arrivalTime}
+                  onChange={event => updateOnsiteReportField('arrivalTime', (event.target as HTMLInputElement).value)}
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+              <div>
+                <Label htmlFor='onsite-departure'>Departure time</Label>
+                <input
+                  id='onsite-departure'
+                  type='time'
+                  className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                  value={onsiteReportDraft.departureTime}
+                  onChange={event => updateOnsiteReportField('departureTime', (event.target as HTMLInputElement).value)}
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+              <div>
+                <Label htmlFor='onsite-contact'>Customer contact</Label>
+                <Input
+                  id='onsite-contact'
+                  value={onsiteReportDraft.customerContact}
+                  onChange={event => updateOnsiteReportField('customerContact', (event.target as HTMLInputElement).value)}
+                  placeholder='Customer representative'
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+              <div>
+                <Label htmlFor='onsite-position'>Customer position</Label>
+                <Input
+                  id='onsite-position'
+                  value={onsiteReportDraft.signedByPosition}
+                  onChange={event => updateOnsiteReportField('signedByPosition', (event.target as HTMLInputElement).value)}
+                  placeholder='e.g. Operations Manager'
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+              <div className='md:col-span-2'>
+                <Label htmlFor='onsite-site-address'>Site address</Label>
+                <textarea
+                  id='onsite-site-address'
+                  className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                  rows={2}
+                  value={onsiteReportDraft.siteAddress}
+                  onChange={event => updateOnsiteReportField('siteAddress', (event.target as HTMLTextAreaElement).value)}
+                  placeholder='Where was the work completed?'
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+              <div className='md:col-span-2'>
+                <Label htmlFor='onsite-work-summary'>Work summary</Label>
+                <textarea
+                  id='onsite-work-summary'
+                  className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                  rows={4}
+                  value={onsiteReportDraft.workSummary}
+                  onChange={event => updateOnsiteReportField('workSummary', (event.target as HTMLTextAreaElement).value)}
+                  placeholder='Describe the work carried out onsite'
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+              <div className='md:col-span-2'>
+                <Label htmlFor='onsite-materials'>Materials used</Label>
+                <textarea
+                  id='onsite-materials'
+                  className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                  rows={3}
+                  value={onsiteReportDraft.materialsUsed}
+                  onChange={event => updateOnsiteReportField('materialsUsed', (event.target as HTMLTextAreaElement).value)}
+                  placeholder='List any materials or parts used'
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+              <div className='md:col-span-2'>
+                <Label htmlFor='onsite-notes'>Additional notes</Label>
+                <textarea
+                  id='onsite-notes'
+                  className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                  rows={3}
+                  value={onsiteReportDraft.additionalNotes}
+                  onChange={event => updateOnsiteReportField('additionalNotes', (event.target as HTMLTextAreaElement).value)}
+                  placeholder='Any additional remarks'
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+              <div>
+                <Label htmlFor='onsite-signee'>Customer name</Label>
+                <Input
+                  id='onsite-signee'
+                  value={onsiteReportDraft.signedByName}
+                  onChange={event => updateOnsiteReportField('signedByName', (event.target as HTMLInputElement).value)}
+                  placeholder='Customer name'
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+            </div>
+            <div className='mt-4 space-y-2'>
+              <Label>Signature</Label>
+              <p className='text-xs text-slate-500'>Ask the customer to sign below.</p>
+              <div className='overflow-hidden rounded-2xl border border-slate-200 bg-white'>
+                <canvas
+                  ref={onsiteSignatureCanvasRef}
+                  className='h-36 w-full'
+                  style={{ touchAction: 'none' }}
+                  onPointerDown={handleOnsiteSignaturePointerDown}
+                  onPointerMove={handleOnsiteSignaturePointerMove}
+                  onPointerUp={handleOnsiteSignaturePointerUp}
+                  onPointerLeave={handleOnsiteSignaturePointerLeave}
+                />
+              </div>
+              <div className='flex flex-wrap items-center gap-2'>
+                <Button variant='outline' onClick={resetOnsiteSignature} disabled={isSavingOnsiteReport || !canEdit}>
+                  <X size={16} /> Clear signature
+                </Button>
+                <span className='text-xs text-slate-500'>
+                  {onsiteHasSignature ? 'Signature captured.' : 'Use your cursor or finger to sign.'}
+                </span>
+              </div>
+            </div>
+            {onsiteReportError && (
+              <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
+                <AlertCircle size={14} /> {onsiteReportError}
+              </p>
+            )}
+            <div className='mt-4 flex flex-wrap items-center gap-2'>
+              <Button onClick={() => void handleSaveOnsiteReport()} disabled={isSavingOnsiteReport || !canEdit}>
+                {isSavingOnsiteReport ? 'Saving…' : 'Save onsite report'}
+              </Button>
+              <Button variant='ghost' onClick={cancelOnsiteReport} disabled={isSavingOnsiteReport}>
+                <X size={16} /> Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+        {sortedOnsiteReports.length === 0 ? (
+          <div className='rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
+            No onsite reports recorded yet.
+          </div>
+        ) : (
+          <div className='space-y-4'>
+            {sortedOnsiteReports.map(report => {
+              const createdDisplay = formatTimestamp(report.createdAt)
+              return (
+                <div key={report.id} className='rounded-2xl border border-slate-200/80 bg-white/90 p-5 shadow-sm'>
+                  <div className='flex flex-wrap items-start justify-between gap-3'>
+                    <div className='space-y-1'>
+                      <div className='text-sm font-semibold text-slate-800'>Report on {report.reportDate || '—'}</div>
+                      <div className='text-xs text-slate-500'>Engineer: {report.engineerName || '—'}</div>
+                      {(report.arrivalTime || report.departureTime) && (
+                        <div className='text-xs text-slate-500'>
+                          Arrival {report.arrivalTime || '—'} · Departure {report.departureTime || '—'}
+                        </div>
+                      )}
+                      {createdDisplay && (
+                        <div className='text-xs text-slate-400'>Created {createdDisplay}</div>
+                      )}
+                      {report.customerContact && (
+                        <div className='text-xs text-slate-500'>Customer contact: {report.customerContact}</div>
+                      )}
+                      {report.siteAddress && (
+                        <div className='text-xs text-slate-500 whitespace-pre-wrap'>Site address: {report.siteAddress}</div>
+                      )}
+                    </div>
+                    <div className='flex flex-wrap items-center gap-2'>
+                      <Button variant='outline' onClick={() => handleDownloadOnsiteReport(report)}>
+                        <Download size={16} /> Download PDF
+                      </Button>
+                      {canEdit && (
+                        <Button
+                          variant='ghost'
+                          className='text-rose-600 hover:bg-rose-50'
+                          onClick={() => void handleRemoveOnsiteReport(report.id)}
+                          disabled={removingOnsiteReportId === report.id}
+                        >
+                          <Trash2 size={16} /> Remove
+                        </Button>
+                      )}
+                      {removingOnsiteReportId === report.id && (
+                        <span className='text-xs text-slate-500'>Removing…</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className='mt-4 grid gap-4 md:grid-cols-2'>
+                    <div>
+                      <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Work summary</div>
+                      <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>
+                        {report.workSummary || 'Not provided.'}
+                      </p>
+                    </div>
+                    <div>
+                      <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Materials used</div>
+                      <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>
+                        {report.materialsUsed || 'Not provided.'}
+                      </p>
+                    </div>
+                    <div className='md:col-span-2'>
+                      <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Additional notes</div>
+                      <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>
+                        {report.additionalNotes || 'Not provided.'}
+                      </p>
+                    </div>
+                    <div>
+                      <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Customer name</div>
+                      <p className='mt-2 text-sm text-slate-700'>
+                        {report.signedByName || '—'}
+                        {report.signedByPosition ? ` — ${report.signedByPosition}` : ''}
+                      </p>
+                    </div>
+                  </div>
+                  {report.signatureDataUrl && (
+                    <div className='mt-4'>
+                      <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Signature</div>
+                      <div className='mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white p-3'>
+                        <img
+                          src={report.signatureDataUrl}
+                          alt={`Onsite report signature for ${report.signedByName ?? 'customer'}`}
+                          className='max-h-32 w-full object-contain'
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    )
+
+    const isFinalAcceptanceView = activeFileTab === 'finalAcceptance'
+    const isOnsiteReportsView = activeFileTab === 'onsiteReports'
+    const headerTitle = isFinalAcceptanceView
+      ? 'Final acceptance'
+      : isOnsiteReportsView
+      ? 'Onsite reports'
+      : 'Project files'
+    const headerDescription = isFinalAcceptanceView
+      ? 'Generate or upload the signed final acceptance for this project.'
+      : isOnsiteReportsView
+      ? 'Capture onsite visit summaries and customer signatures.'
+      : 'Upload design documentation and installation packs for this project.'
+    let headerActions: JSX.Element | null = null
+    if (isOnsiteReportsView) {
+      headerActions =
+        !isCreatingOnsiteReport ? (
           <Button
             variant='outline'
             onClick={startOnsiteReport}
@@ -1706,358 +2070,75 @@ export default function ProjectPage({
           >
             <FileText size={16} /> New Onsite Report
           </Button>
-        )}
-      </div>
-    )
+        ) : null
+    } else if (isFinalAcceptanceView) {
+      headerActions = (
+        <div className='flex flex-wrap items-center gap-2'>
+          <Button
+            variant='outline'
+            onClick={openUploadDialog}
+            disabled={!canEdit || isUploadingSignOff}
+            title={canEdit ? 'Upload final acceptance' : 'Read-only access'}
+          >
+            <Upload size={16} /> Upload
+          </Button>
+        </div>
+      )
+    } else {
+      headerActions = (
+        <Button
+          variant='outline'
+          onClick={openUploadDialog}
+          disabled={!canEdit}
+          className='rounded-full px-2 py-2'
+          title={canEdit ? 'Upload file' : 'Read-only access'}
+        >
+          <Upload size={16} />
+          <span className='sr-only'>Upload file</span>
+        </Button>
+      )
+    }
 
     return (
       <div className='space-y-6'>
         <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
-          <div className='flex flex-wrap items-center justify-between gap-3'>
-            <div>
-              <div className='text-sm font-semibold text-slate-800'>Project files</div>
-              <p className='text-xs text-slate-500'>Upload design documentation and installation packs for this project.</p>
-            </div>
-            <Button
-              variant='outline'
-              onClick={openUploadDialog}
-              disabled={!canEdit}
-              className='rounded-full px-2 py-2'
-              title={canEdit ? 'Upload file' : 'Read-only access'}
-            >
-              <Upload size={16} />
-              <span className='sr-only'>Upload file</span>
-            </Button>
-          </div>
-          <div className='mt-4 flex flex-wrap gap-2'>
-            {PROJECT_FILE_TAB_OPTIONS.map(option => (
-              <button
-                key={option.value}
-                type='button'
-                onClick={() => setActiveFileTab(option.value)}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition ${
-                  activeFileTab === option.value
-                    ? 'bg-sky-600 text-white shadow-sm'
-                    : 'bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-          {activeFileTab === 'all' ? (
-            categoriesWithFiles.length === 0 ? (
-              <div className='mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
-                No project files uploaded yet.
-              </div>
-            ) : (
-              <div className='mt-4 space-y-4'>{allCategorySections}</div>
-            )
-          ) : (
-            <div className='mt-4 space-y-4'>{renderCategorySection(activeFileTab, true)}</div>
-          )}
-        </section>
-
-        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
           <div className='flex flex-wrap items-start justify-between gap-3'>
             <div>
-              <div className='text-sm font-semibold text-slate-800'>Final Acceptance</div>
-              <p className='text-xs text-slate-500'>Generate or upload the signed final acceptance for this project.</p>
-              <p className='mt-2 text-xs text-slate-400'>Use the upload button above to attach a signed final acceptance document.</p>
+              <div className='text-sm font-semibold text-slate-800'>{headerTitle}</div>
+              <p className='text-xs text-slate-500'>{headerDescription}</p>
+              {isFinalAcceptanceView ? (
+                <p className='mt-2 text-xs text-slate-400'>
+                  Use the upload button above to attach a signed final acceptance document.
+                </p>
+              ) : null}
             </div>
-            {!isGeneratingSignOff && (
-              <Button
-                variant='outline'
-                onClick={startGeneratingSignOff}
-                disabled={!canEdit}
-                title={canEdit ? 'Generate final acceptance' : 'Read-only access'}
-              >
-                <FileText size={16} /> Generate Final Acceptance
-              </Button>
-            )}
+            {headerActions}
           </div>
-          {isUploadingSignOff && <p className='mt-3 text-xs text-slate-500'>Uploading…</p>}
-          {signOffError && !isGeneratingSignOff && (
-            <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
-              <AlertCircle size={14} /> {signOffError}
-            </p>
-          )}
-          <div className='mt-4 space-y-4'>
-            {isGeneratingSignOff
-              ? renderCustomerSignOffForm()
-              : customerSignOff
-              ? renderCustomerSignOffSummary()
-              : (
-                  <div className='rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
-                    No final acceptance recorded yet.
-                  </div>
-                )}
+          <div className='mt-4 flex flex-wrap gap-2'>
+            {PROJECT_FILE_TAB_OPTIONS.map(option => {
+              const isActive = activeFileTab === option.value
+              return (
+                <button
+                  key={option.value}
+                  type='button'
+                  onClick={() => setActiveFileTab(option.value)}
+                  className={`rounded-full px-3 py-1 text-xs font-medium transition ${
+                    isActive
+                      ? 'bg-sky-600 text-white shadow-sm'
+                      : 'bg-white text-slate-600 shadow-sm ring-1 ring-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              )
+            })}
           </div>
-        </section>
-
-        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
-          {onsiteHeader}
-          {onsiteReportError && !isCreatingOnsiteReport && (
-            <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
-              <AlertCircle size={14} /> {onsiteReportError}
-            </p>
-          )}
           <div className='mt-4 space-y-4'>
-            {isCreatingOnsiteReport && (
-              <div className='rounded-2xl border border-slate-200/80 bg-white/90 p-5 shadow-sm'>
-                <div className='grid gap-3 md:grid-cols-2'>
-                  <div>
-                    <Label htmlFor='onsite-date'>Report date</Label>
-                    <input
-                      id='onsite-date'
-                      type='date'
-                      className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                      value={onsiteReportDraft.reportDate}
-                      onChange={event => updateOnsiteReportField('reportDate', (event.target as HTMLInputElement).value)}
-                      disabled={!canEdit || isSavingOnsiteReport}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor='onsite-engineer'>Engineer</Label>
-                    <Input
-                      id='onsite-engineer'
-                      value={onsiteReportDraft.engineerName}
-                      onChange={event => updateOnsiteReportField('engineerName', (event.target as HTMLInputElement).value)}
-                      placeholder='Engineer name'
-                      disabled={!canEdit || isSavingOnsiteReport}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor='onsite-arrival'>Arrival time</Label>
-                    <input
-                      id='onsite-arrival'
-                      type='time'
-                      className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                      value={onsiteReportDraft.arrivalTime}
-                      onChange={event => updateOnsiteReportField('arrivalTime', (event.target as HTMLInputElement).value)}
-                      disabled={!canEdit || isSavingOnsiteReport}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor='onsite-departure'>Departure time</Label>
-                    <input
-                      id='onsite-departure'
-                      type='time'
-                      className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                      value={onsiteReportDraft.departureTime}
-                      onChange={event => updateOnsiteReportField('departureTime', (event.target as HTMLInputElement).value)}
-                      disabled={!canEdit || isSavingOnsiteReport}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor='onsite-contact'>Customer contact</Label>
-                    <Input
-                      id='onsite-contact'
-                      value={onsiteReportDraft.customerContact}
-                      onChange={event => updateOnsiteReportField('customerContact', (event.target as HTMLInputElement).value)}
-                      placeholder='Customer representative'
-                      disabled={!canEdit || isSavingOnsiteReport}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor='onsite-position'>Customer position</Label>
-                    <Input
-                      id='onsite-position'
-                      value={onsiteReportDraft.signedByPosition}
-                      onChange={event => updateOnsiteReportField('signedByPosition', (event.target as HTMLInputElement).value)}
-                      placeholder='e.g. Operations Manager'
-                      disabled={!canEdit || isSavingOnsiteReport}
-                    />
-                  </div>
-                  <div className='md:col-span-2'>
-                    <Label htmlFor='onsite-site-address'>Site address</Label>
-                    <textarea
-                      id='onsite-site-address'
-                      className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                      rows={2}
-                      value={onsiteReportDraft.siteAddress}
-                      onChange={event => updateOnsiteReportField('siteAddress', (event.target as HTMLTextAreaElement).value)}
-                      placeholder='Where was the work completed?'
-                      disabled={!canEdit || isSavingOnsiteReport}
-                    />
-                  </div>
-                  <div className='md:col-span-2'>
-                    <Label htmlFor='onsite-work-summary'>Work summary</Label>
-                    <textarea
-                      id='onsite-work-summary'
-                      className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                      rows={4}
-                      value={onsiteReportDraft.workSummary}
-                      onChange={event => updateOnsiteReportField('workSummary', (event.target as HTMLTextAreaElement).value)}
-                      placeholder='Describe the work carried out onsite'
-                      disabled={!canEdit || isSavingOnsiteReport}
-                    />
-                  </div>
-                  <div className='md:col-span-2'>
-                    <Label htmlFor='onsite-materials'>Materials used</Label>
-                    <textarea
-                      id='onsite-materials'
-                      className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                      rows={3}
-                      value={onsiteReportDraft.materialsUsed}
-                      onChange={event => updateOnsiteReportField('materialsUsed', (event.target as HTMLTextAreaElement).value)}
-                      placeholder='List any materials or parts used'
-                      disabled={!canEdit || isSavingOnsiteReport}
-                    />
-                  </div>
-                  <div className='md:col-span-2'>
-                    <Label htmlFor='onsite-notes'>Additional notes</Label>
-                    <textarea
-                      id='onsite-notes'
-                      className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                      rows={3}
-                      value={onsiteReportDraft.additionalNotes}
-                      onChange={event => updateOnsiteReportField('additionalNotes', (event.target as HTMLTextAreaElement).value)}
-                      placeholder='Any additional remarks'
-                      disabled={!canEdit || isSavingOnsiteReport}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor='onsite-signee'>Customer name</Label>
-                    <Input
-                      id='onsite-signee'
-                      value={onsiteReportDraft.signedByName}
-                      onChange={event => updateOnsiteReportField('signedByName', (event.target as HTMLInputElement).value)}
-                      placeholder='Customer name'
-                      disabled={!canEdit || isSavingOnsiteReport}
-                    />
-                  </div>
-                </div>
-                <div className='mt-4 space-y-2'>
-                  <Label>Signature</Label>
-                  <p className='text-xs text-slate-500'>Ask the customer to sign below.</p>
-                  <div className='overflow-hidden rounded-2xl border border-slate-200 bg-white'>
-                    <canvas
-                      ref={onsiteSignatureCanvasRef}
-                      className='h-36 w-full'
-                      style={{ touchAction: 'none' }}
-                      onPointerDown={handleOnsiteSignaturePointerDown}
-                      onPointerMove={handleOnsiteSignaturePointerMove}
-                      onPointerUp={handleOnsiteSignaturePointerUp}
-                      onPointerLeave={handleOnsiteSignaturePointerLeave}
-                    />
-                  </div>
-                  <div className='flex flex-wrap items-center gap-2'>
-                    <Button variant='outline' onClick={resetOnsiteSignature} disabled={isSavingOnsiteReport || !canEdit}>
-                      <X size={16} /> Clear signature
-                    </Button>
-                    <span className='text-xs text-slate-500'>
-                      {onsiteHasSignature ? 'Signature captured.' : 'Use your cursor or finger to sign.'}
-                    </span>
-                  </div>
-                </div>
-                {onsiteReportError && (
-                  <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
-                    <AlertCircle size={14} /> {onsiteReportError}
-                  </p>
-                )}
-                <div className='mt-4 flex flex-wrap items-center gap-2'>
-                  <Button onClick={() => void handleSaveOnsiteReport()} disabled={isSavingOnsiteReport || !canEdit}>
-                    {isSavingOnsiteReport ? 'Saving…' : 'Save onsite report'}
-                  </Button>
-                  <Button variant='ghost' onClick={cancelOnsiteReport} disabled={isSavingOnsiteReport}>
-                    <X size={16} /> Cancel
-                  </Button>
-                </div>
-              </div>
-            )}
-            {sortedOnsiteReports.length === 0 ? (
-              <div className='rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
-                No onsite reports recorded yet.
-              </div>
-            ) : (
-              <div className='space-y-4'>
-                {sortedOnsiteReports.map(report => {
-                  const createdDisplay = formatTimestamp(report.createdAt)
-                  return (
-                    <div key={report.id} className='rounded-2xl border border-slate-200/80 bg-white/90 p-5 shadow-sm'>
-                      <div className='flex flex-wrap items-start justify-between gap-3'>
-                        <div className='space-y-1'>
-                          <div className='text-sm font-semibold text-slate-800'>Report on {report.reportDate || '—'}</div>
-                          <div className='text-xs text-slate-500'>Engineer: {report.engineerName || '—'}</div>
-                          {(report.arrivalTime || report.departureTime) && (
-                            <div className='text-xs text-slate-500'>
-                              Arrival {report.arrivalTime || '—'} · Departure {report.departureTime || '—'}
-                            </div>
-                          )}
-                          {createdDisplay && (
-                            <div className='text-xs text-slate-400'>Created {createdDisplay}</div>
-                          )}
-                          {report.customerContact && (
-                            <div className='text-xs text-slate-500'>Customer contact: {report.customerContact}</div>
-                          )}
-                          {report.siteAddress && (
-                            <div className='text-xs text-slate-500 whitespace-pre-wrap'>Site address: {report.siteAddress}</div>
-                          )}
-                        </div>
-                        <div className='flex flex-wrap items-center gap-2'>
-                          <Button variant='outline' onClick={() => handleDownloadOnsiteReport(report)}>
-                            <Download size={16} /> Download PDF
-                          </Button>
-                          {canEdit && (
-                            <Button
-                              variant='ghost'
-                              className='text-rose-600 hover:bg-rose-50'
-                              onClick={() => void handleRemoveOnsiteReport(report.id)}
-                              disabled={removingOnsiteReportId === report.id}
-                            >
-                              <Trash2 size={16} /> Remove
-                            </Button>
-                          )}
-                          {removingOnsiteReportId === report.id && (
-                            <span className='text-xs text-slate-500'>Removing…</span>
-                          )}
-                        </div>
-                      </div>
-                      <div className='mt-4 grid gap-4 md:grid-cols-2'>
-                        <div>
-                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Work summary</div>
-                          <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>
-                            {report.workSummary || 'Not provided.'}
-                          </p>
-                        </div>
-                        <div>
-                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Materials used</div>
-                          <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>
-                            {report.materialsUsed || 'Not provided.'}
-                          </p>
-                        </div>
-                        <div className='md:col-span-2'>
-                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Additional notes</div>
-                          <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>
-                            {report.additionalNotes || 'Not provided.'}
-                          </p>
-                        </div>
-                        <div>
-                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Customer name</div>
-                          <p className='mt-2 text-sm text-slate-700'>
-                            {report.signedByName || '—'}
-                            {report.signedByPosition ? ` — ${report.signedByPosition}` : ''}
-                          </p>
-                        </div>
-                      </div>
-                      {report.signatureDataUrl && (
-                        <div className='mt-4'>
-                          <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Signature</div>
-                          <div className='mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white p-3'>
-                            <img
-                              src={report.signatureDataUrl}
-                              alt={`Onsite report signature for ${report.signedByName ?? 'customer'}`}
-                              className='max-h-32 w-full object-contain'
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+            {isOnsiteReportsView
+              ? renderOnsiteReportsView()
+              : isFinalAcceptanceView
+              ? renderFinalAcceptanceView()
+              : renderDocumentsView()}
           </div>
         </section>
       </div>
@@ -2293,42 +2374,6 @@ export default function ProjectPage({
           )}
         </section>
 
-        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
-          <div className='flex flex-wrap items-start justify-between gap-3'>
-            <div>
-              <div className='text-sm font-semibold text-slate-800'>Final Acceptance</div>
-              <p className='text-xs text-slate-500'>Generate or upload the signed final acceptance for this project.</p>
-              <p className='mt-2 text-xs text-slate-400'>Use the upload button above to attach a signed final acceptance document.</p>
-            </div>
-            {!isGeneratingSignOff && (
-              <Button
-                variant='outline'
-                onClick={startGeneratingSignOff}
-                disabled={!canEdit}
-                title={canEdit ? 'Generate final acceptance' : 'Read-only access'}
-              >
-                <FileText size={16} /> Generate Final Acceptance
-              </Button>
-            )}
-          </div>
-          {isUploadingSignOff && <p className='mt-3 text-xs text-slate-500'>Uploading…</p>}
-          {signOffError && !isGeneratingSignOff && (
-            <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
-              <AlertCircle size={14} /> {signOffError}
-            </p>
-          )}
-          <div className='mt-4 space-y-4'>
-            {isGeneratingSignOff
-              ? renderCustomerSignOffForm()
-              : customerSignOff
-              ? renderCustomerSignOffSummary()
-              : (
-                  <div className='rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500'>
-                    No final acceptance recorded yet.
-                  </div>
-                )}
-          </div>
-        </section>
       </div>
     )
   }
@@ -2502,6 +2547,11 @@ export default function ProjectPage({
 
     return (
       <div className='space-y-6'>
+        <div className='flex justify-end'>
+          <Button onClick={openTaskModal} disabled={!canEdit}>
+            <Plus size={16} /> Add Task
+          </Button>
+        </div>
         <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
           <div className='mb-4 flex flex-wrap items-center justify-between gap-3'>
             <div className='text-sm font-semibold text-slate-800'>Project timeline</div>
@@ -2520,103 +2570,6 @@ export default function ProjectPage({
             <p className='text-sm text-slate-500'>Add a task with a start and end time to see it on the timeline.</p>
           )}
         </section>
-
-        <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
-          <div className='mb-3 text-sm font-semibold text-slate-800'>Create task</div>
-          <div className='grid gap-3 md:grid-cols-2'>
-            <div>
-              <Label htmlFor='task-name'>Task name</Label>
-              <Input
-                id='task-name'
-                value={taskForm.name}
-                onChange={event => {
-                  setTaskForm(prev => ({ ...prev, name: event.target.value }))
-                  if (taskError) setTaskError(null)
-                }}
-                placeholder='e.g. Install conveyors'
-                disabled={!canEdit}
-              />
-            </div>
-            <div>
-              <Label htmlFor='task-assignee'>Assignee</Label>
-              <select
-                id='task-assignee'
-                className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                value={taskForm.assigneeId}
-                onChange={event => {
-                  setTaskForm(prev => ({ ...prev, assigneeId: (event.target as HTMLSelectElement).value }))
-                  if (taskError) setTaskError(null)
-                }}
-                disabled={!canEdit}
-              >
-                <option value=''>Unassigned</option>
-                {sortedUsers.map(user => (
-                  <option key={user.id} value={user.id}>
-                    {user.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <Label htmlFor='task-start'>Start</Label>
-              <input
-                id='task-start'
-                type='datetime-local'
-                className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                value={taskForm.start}
-                onChange={event => {
-                  setTaskForm(prev => ({ ...prev, start: (event.target as HTMLInputElement).value }))
-                  if (taskError) setTaskError(null)
-                }}
-                disabled={!canEdit}
-              />
-            </div>
-            <div>
-              <Label htmlFor='task-end'>End</Label>
-              <input
-                id='task-end'
-                type='datetime-local'
-                className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                value={taskForm.end}
-                onChange={event => {
-                  setTaskForm(prev => ({ ...prev, end: (event.target as HTMLInputElement).value }))
-                  if (taskError) setTaskError(null)
-                }}
-                disabled={!canEdit}
-              />
-            </div>
-            <div>
-              <Label htmlFor='task-status'>Status</Label>
-              <select
-                id='task-status'
-                className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                value={taskForm.status}
-                onChange={event => {
-                  setTaskForm(prev => ({ ...prev, status: event.target.value as ProjectTaskStatus }))
-                  if (taskError) setTaskError(null)
-                }}
-                disabled={!canEdit}
-              >
-                {PROJECT_TASK_STATUSES.map(status => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          {taskError && (
-            <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
-              <AlertCircle size={14} /> {taskError}
-            </p>
-          )}
-          <div className='mt-3 flex justify-end'>
-            <Button onClick={() => void handleCreateTask()} disabled={isSavingTask || !canEdit}>
-              <Plus size={16} /> Add Task
-            </Button>
-          </div>
-        </section>
-
         <section className='rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
           <div className='mb-3 flex flex-wrap items-center justify-between gap-2'>
             <div className='text-sm font-semibold text-slate-800'>Existing tasks</div>
@@ -2625,7 +2578,7 @@ export default function ProjectPage({
             </span>
           </div>
           {!hasTasks ? (
-            <p className='text-sm text-slate-500'>Use the form above to add the first task for this project.</p>
+            <p className='text-sm text-slate-500'>Use the “Add Task” button to schedule the first task for this project.</p>
           ) : (
             <div className='space-y-3'>
               {tasks.map(task => {
@@ -2989,6 +2942,138 @@ export default function ProjectPage({
         </div>
       </CardContent>
       </Card>
+      <AnimatePresence>
+        {isTaskModalOpen && (
+          <motion.div
+            key='task-dialog'
+            className='fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4'
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={closeTaskModal}
+          >
+            <motion.div
+              className='w-full max-w-xl'
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              onClick={event => event.stopPropagation()}
+            >
+              <Card className='panel'>
+                <CardHeader className='flex items-center justify-between'>
+                  <div className='flex items-center gap-2'>
+                    <Plus size={18} /> <span className='font-medium'>Add task</span>
+                  </div>
+                  <Button variant='ghost' onClick={closeTaskModal} title='Close' disabled={isSavingTask}>
+                    <X size={16} />
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  <div className='grid gap-3 md:grid-cols-2'>
+                    <div>
+                      <Label htmlFor='modal-task-name'>Task name</Label>
+                      <Input
+                        id='modal-task-name'
+                        value={taskForm.name}
+                        onChange={event => {
+                          setTaskForm(prev => ({ ...prev, name: event.target.value }))
+                          if (taskError) setTaskError(null)
+                        }}
+                        placeholder='e.g. Install conveyors'
+                        disabled={!canEdit || isSavingTask}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor='modal-task-assignee'>Assignee</Label>
+                      <select
+                        id='modal-task-assignee'
+                        className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                        value={taskForm.assigneeId}
+                        onChange={event => {
+                          setTaskForm(prev => ({ ...prev, assigneeId: (event.target as HTMLSelectElement).value }))
+                          if (taskError) setTaskError(null)
+                        }}
+                        disabled={!canEdit || isSavingTask}
+                      >
+                        <option value=''>Unassigned</option>
+                        {sortedUsers.map(user => (
+                          <option key={user.id} value={user.id}>
+                            {user.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <Label htmlFor='modal-task-start'>Start</Label>
+                      <input
+                        id='modal-task-start'
+                        type='datetime-local'
+                        className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                        value={taskForm.start}
+                        onChange={event => {
+                          setTaskForm(prev => ({ ...prev, start: (event.target as HTMLInputElement).value }))
+                          if (taskError) setTaskError(null)
+                        }}
+                        disabled={!canEdit || isSavingTask}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor='modal-task-end'>End</Label>
+                      <input
+                        id='modal-task-end'
+                        type='datetime-local'
+                        className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                        value={taskForm.end}
+                        onChange={event => {
+                          setTaskForm(prev => ({ ...prev, end: (event.target as HTMLInputElement).value }))
+                          if (taskError) setTaskError(null)
+                        }}
+                        disabled={!canEdit || isSavingTask}
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor='modal-task-status'>Status</Label>
+                      <select
+                        id='modal-task-status'
+                        className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                        value={taskForm.status}
+                        onChange={event => {
+                          setTaskForm(prev => ({ ...prev, status: event.target.value as ProjectTaskStatus }))
+                          if (taskError) setTaskError(null)
+                        }}
+                        disabled={!canEdit || isSavingTask}
+                      >
+                        {PROJECT_TASK_STATUSES.map(status => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  {taskError && (
+                    <p className='mt-3 flex items-center gap-1 text-sm text-rose-600'>
+                      <AlertCircle size={14} /> {taskError}
+                    </p>
+                  )}
+                  <div className='mt-4 flex justify-end gap-2'>
+                    <Button variant='outline' onClick={closeTaskModal} disabled={isSavingTask}>
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => void handleCreateTask()}
+                      disabled={isSavingTask || !canEdit}
+                      title={canEdit ? 'Add task' : 'Read-only access'}
+                    >
+                      {isSavingTask ? 'Saving…' : 'Add Task'}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {isUploadDialogOpen && (
           <motion.div

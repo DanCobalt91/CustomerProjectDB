@@ -279,13 +279,13 @@ function computeProjectDateDefaults(settings: BusinessSettings): ProjectInfoDraf
 
 function computeTaskScheduleDefaults(settings: BusinessSettings): { start: string; end: string } {
   const today = new Date()
-  const startDate = findNextWorkingDate(settings, today, true)
-  const startHours = settings.hours[getBusinessDayKey(startDate)] ?? DEFAULT_BUSINESS_SETTINGS.hours.monday
-  const startDateTime = applyTimeToDate(startDate, startHours.start)
-  const completionBase = addMonths(startDate, 1)
-  const completionDate = findNextWorkingDate(settings, completionBase, true)
-  const completionHours = settings.hours[getBusinessDayKey(completionDate)] ?? DEFAULT_BUSINESS_SETTINGS.hours.monday
-  const endDateTime = applyTimeToDate(completionDate, completionHours.end)
+  const startHours =
+    settings.hours[getBusinessDayKey(today)] ?? DEFAULT_BUSINESS_SETTINGS.hours.monday
+  const startDateTime = applyTimeToDate(today, startHours.start)
+  const endDate = new Date(today.getTime())
+  endDate.setDate(endDate.getDate() + 7)
+  const endHours = settings.hours[getBusinessDayKey(endDate)] ?? DEFAULT_BUSINESS_SETTINGS.hours.monday
+  const endDateTime = applyTimeToDate(endDate, endHours.end)
   return {
     start: formatDateTimeForInput(startDateTime),
     end: formatDateTimeForInput(endDateTime),
@@ -789,17 +789,15 @@ function AppContent() {
 
     const tabs: CustomerSiteTab[] = []
 
+    const primaryAddress = selectedCustomer.address?.trim() ?? ''
+    tabs.push({ key: HEAD_OFFICE_TAB_KEY, label: 'Head Office', type: 'headOffice', address: primaryAddress })
+
     selectedCustomer.sites.forEach(site => {
       const name = site.name?.trim()
       const address = site.address?.trim()
       const label = name || (address ? address.split('\n')[0] : 'Unnamed site')
       tabs.push({ key: site.id, label, type: 'site', site })
     })
-
-    if (tabs.length === 0) {
-      const primaryAddress = selectedCustomer.address?.trim() ?? ''
-      tabs.push({ key: HEAD_OFFICE_TAB_KEY, label: 'Head Office', type: 'headOffice', address: primaryAddress })
-    }
 
     childCustomers.forEach(child => {
       tabs.push({ key: `child-${child.id}`, label: child.name, type: 'child', customer: child })
@@ -816,9 +814,12 @@ function AppContent() {
     selectedCustomer.sites.forEach(site => {
       map[site.id] = selectedCustomer.contacts.filter(contact => contact.siteId === site.id)
     })
+    const headOfficeContacts = headOfficeTab
+      ? selectedCustomer.contacts.filter(contact => contact.siteId === headOfficeTab.key)
+      : []
     const unassignedContacts = selectedCustomer.contacts.filter(contact => !contact.siteId)
     if (headOfficeTab) {
-      map[headOfficeTab.key] = unassignedContacts
+      map[headOfficeTab.key] = [...headOfficeContacts, ...unassignedContacts]
     }
     return map
   }, [headOfficeTab, selectedCustomer])
@@ -830,9 +831,12 @@ function AppContent() {
     selectedCustomer.sites.forEach(site => {
       map[site.id] = selectedCustomer.projects.filter(project => project.siteId === site.id)
     })
+    const headOfficeProjects = headOfficeTab
+      ? selectedCustomer.projects.filter(project => project.siteId === headOfficeTab.key)
+      : []
     const unassignedProjects = selectedCustomer.projects.filter(project => !project.siteId)
     if (headOfficeTab) {
-      map[headOfficeTab.key] = unassignedProjects
+      map[headOfficeTab.key] = [...headOfficeProjects, ...unassignedProjects]
     }
     return map
   }, [headOfficeTab, selectedCustomer])
@@ -1874,7 +1878,7 @@ function AppContent() {
                     })()
                   )}
                 </div>
-                {selectedCustomerAddressForMap ? (
+                {activeSiteTab?.type !== 'child' && selectedCustomerAddressForMap ? (
                   <div className='mt-4 overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
                     <iframe
                       title={`Map preview for ${selectedCustomer.name}`}
@@ -1902,7 +1906,11 @@ function AppContent() {
                         const next = !prev
                         if (next) {
                           const defaultSiteId =
-                            activeSiteTab?.type === 'site' ? activeSiteTab.site.id : ''
+                            activeSiteTab?.type === 'site'
+                              ? activeSiteTab.site.id
+                              : activeSiteTab?.type === 'headOffice'
+                              ? headOfficeTab?.key ?? ''
+                              : ''
                           setNewContact({ name: '', position: '', phone: '', email: '', siteId: defaultSiteId })
                         } else {
                           setNewContact({ name: '', position: '', phone: '', email: '', siteId: '' })
@@ -1974,13 +1982,14 @@ function AppContent() {
                               {activeContact.position || 'No position recorded.'}
                             </div>
                             <div className='text-xs text-slate-400'>
+                              Site:{' '}
                               {activeContact.siteId
-                                ? `Site: ${
-                                    selectedCustomerSites.find(site => site.id === activeContact.siteId)?.name?.trim() ||
+                                ? activeContact.siteId === headOfficeTab?.key
+                                  ? 'Head Office'
+                                  : selectedCustomerSites.find(site => site.id === activeContact.siteId)?.name?.trim() ||
                                     selectedCustomerSites.find(site => site.id === activeContact.siteId)?.address?.trim() ||
                                     'Unnamed site'
-                                  }`
-                                : 'Site: Unassigned'}
+                                : 'Unassigned'}
                             </div>
                           </div>
                           <div className='flex items-center gap-1'>
@@ -2021,12 +2030,14 @@ function AppContent() {
                             value={activeContact.phone}
                             placeholder='Not provided'
                             copyTitle='Copy phone number'
+                            linkType='phone'
                           />
                           <ContactInfoField
                             label='Email'
                             value={activeContact.email}
                             placeholder='Not provided'
                             copyTitle='Copy email address'
+                            linkType='email'
                           />
                         </div>
                       </div>
@@ -2098,6 +2109,9 @@ function AppContent() {
                         disabled={!canEdit}
                       >
                         <option value=''>Unassigned</option>
+                        {headOfficeTab ? (
+                          <option value={headOfficeTab.key}>Head Office</option>
+                        ) : null}
                         {selectedCustomerSites.map(site => (
                           <option key={site.id} value={site.id}>
                             {site.name?.trim() || site.address?.trim() || 'Unnamed site'}
@@ -4746,7 +4760,11 @@ function AppContent() {
     const phone = data.phone.trim()
     const email = data.email.trim()
     const siteId = data.siteId.trim()
-    const validSiteId = siteId && customer.sites.some(site => site.id === siteId) ? siteId : ''
+    const isHeadOfficeSelection = siteId === HEAD_OFFICE_TAB_KEY
+    const validSiteId =
+      siteId && (customer.sites.some(site => site.id === siteId) || isHeadOfficeSelection)
+        ? siteId
+        : ''
     if (!name && !position && !phone && !email) {
       return 'Enter at least one detail for the contact.'
     }
@@ -4810,7 +4828,11 @@ function AppContent() {
     const phone = details.phone.trim()
     const email = details.email.trim()
     const siteId = details.siteId.trim()
-    const validSiteId = siteId && customer.sites.some(site => site.id === siteId) ? siteId : ''
+    const isHeadOfficeSelection = siteId === HEAD_OFFICE_TAB_KEY
+    const validSiteId =
+      siteId && (customer.sites.some(site => site.id === siteId) || isHeadOfficeSelection)
+        ? siteId
+        : ''
 
     if (!name && !position && !phone && !email) {
       return 'Enter at least one detail for the contact.'
@@ -5515,20 +5537,47 @@ function AppContent() {
     value,
     placeholder = 'Not provided',
     copyTitle,
+    linkType,
   }: {
     label: string
     value?: string
     placeholder?: string
     copyTitle: string
+    linkType?: 'phone' | 'email'
   }) {
     const display = value?.trim()
     const hasValue = !!display
+    let linkHref: string | null = null
+    if (hasValue && display) {
+      if (linkType === 'phone') {
+        const cleaned = display.replace(/[\s()-]/g, '')
+        if (cleaned) {
+          linkHref = `tel:${cleaned}`
+        }
+      } else if (linkType === 'email') {
+        linkHref = `mailto:${encodeURIComponent(display)}`
+      }
+    }
     return (
       <div className='rounded-2xl border border-slate-200 bg-white/90 px-3 py-2 shadow-sm'>
         <div className='flex flex-wrap items-center gap-2 text-sm'>
           <span className='text-xs font-semibold uppercase tracking-wide text-slate-500'>{label}</span>
-          <span className={`flex-1 text-sm ${hasValue ? 'text-slate-800' : 'text-slate-400'}`}>
-            {hasValue ? display : placeholder}
+          <span
+            className={`flex-1 text-sm ${
+              hasValue ? (linkHref ? '' : 'text-slate-800') : 'text-slate-400'
+            }`}
+          >
+            {hasValue ? (
+              linkHref ? (
+                <a href={linkHref} className='text-sky-600 hover:underline'>
+                  {display}
+                </a>
+              ) : (
+                display
+              )
+            ) : (
+              placeholder
+            )}
           </span>
           {hasValue ? (
             <Button
@@ -6732,6 +6781,9 @@ function AppContent() {
                       disabled={!canEdit || isSavingContactEdit}
                     >
                       <option value=''>Unassigned</option>
+                      {headOfficeTab ? (
+                        <option value={headOfficeTab.key}>Head Office</option>
+                      ) : null}
                       {selectedCustomerSites.map(site => (
                         <option key={site.id} value={site.id}>
                           {site.name?.trim() || site.address?.trim() || 'Unnamed site'}
