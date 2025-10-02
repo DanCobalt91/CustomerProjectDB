@@ -76,7 +76,7 @@ import { generateCustomerSignOffPdf, generateOnsiteReportPdf } from '../lib/sign
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
-import SerialNumberListInput from '../components/ui/SerialNumberListInput'
+import MachineToolListInput from '../components/ui/MachineToolListInput'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import ProjectPage from './ProjectPage'
 import PieChart from '../components/ui/PieChart'
@@ -732,6 +732,7 @@ function AppContent() {
   const [isSavingCustomerEditor, setIsSavingCustomerEditor] = useState(false)
   const [customerSiteTab, setCustomerSiteTab] = useState<CustomerSiteTabKey>('')
   const [activeContactIdsByTab, setActiveContactIdsByTab] = useState<Record<string, string | null>>({})
+  const [customerProjectSection, setCustomerProjectSection] = useState<'projects' | 'lines'>('projects')
   const [customerProjectsTab, setCustomerProjectsTab] = useState<'active' | 'complete'>('active')
   const [isCompletedProjectsCollapsed, setIsCompletedProjectsCollapsed] = useState(true)
 
@@ -1775,6 +1776,27 @@ function AppContent() {
       projectTabCopy.complete.empty = emptyMessage
     }
     const activeTabCopy = projectTabCopy[customerProjectsTab]
+    const canViewLines = !!activeSiteTab && activeSiteTab.type !== 'child'
+    const lineItems = canViewLines
+      ? projectsForCurrentSite.flatMap(project => {
+          const machines = project.info?.machines ?? []
+          return machines.map((machine, index) => ({
+            id: `${project.id}-${index}`,
+            machineSerialNumber: machine.machineSerialNumber.trim(),
+            toolSerialNumbers: machine.toolSerialNumbers,
+            project,
+          }))
+        })
+      : []
+    lineItems.sort((a, b) => {
+      const machineCompare = a.machineSerialNumber.localeCompare(b.machineSerialNumber, undefined, {
+        sensitivity: 'base',
+      })
+      if (machineCompare !== 0) {
+        return machineCompare
+      }
+      return a.project.number.localeCompare(b.project.number, undefined, { sensitivity: 'base' })
+    })
 
     return (
       <Card className='panel'>
@@ -2327,115 +2349,256 @@ function AppContent() {
 
           <div className='mt-8 space-y-4'>
             <div className='flex flex-wrap items-center justify-between gap-2'>
-              <div className='text-sm font-semibold text-slate-700'>Projects</div>
-              <Button
-                variant='outline'
-                onClick={() => {
-                  if (!activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer) {
-                    return
-                  }
-                  const preferredSiteId =
-                    activeSiteTab.type === 'site' ? activeSiteTab.site.id : undefined
-                  openNewProjectModal({ customerId: selectedCustomer.id, siteId: preferredSiteId })
-                }}
-                title={
-                  !canEdit
-                    ? 'Read-only access'
-                    : !activeSiteTab
-                    ? 'Select a site to manage projects'
-                    : activeSiteTab.type === 'child'
-                    ? 'Manage projects on the sub customer page'
-                    : 'Add project'
-                }
-                disabled={!canEdit || !activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer}
-              >
-                <Plus size={16} /> Add Project
-              </Button>
-            </div>
-            <div className='flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2'>
-              {([
-                { value: 'active' as const, label: 'Active' },
-                { value: 'complete' as const, label: 'Complete' },
-              ]).map(tab => {
-                const isActive = customerProjectsTab === tab.value
-                const copy = projectTabCopy[tab.value]
-                return (
-                  <button
-                    key={tab.value}
-                    type='button'
-                    className={`rounded-full px-3 py-1 text-sm font-medium transition ${
-                      isActive
-                        ? 'bg-slate-900 text-white shadow'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                    onClick={() => setCustomerProjectsTab(tab.value)}
-                  >
-                    <span>{tab.label}</span>
-                    <span className='ml-2 inline-flex min-w-[1.5rem] justify-center rounded-full bg-black/10 px-2 py-0.5 text-xs font-semibold'>
-                      {copy.count}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-            <div className='space-y-3'>
-              {projectsForTab.length === 0 ? (
-                <div className='text-sm text-slate-500'>{activeTabCopy.empty}</div>
-              ) : (
-                projectsForTab.map(project => {
-                  const projectNote = project.note?.trim()
-                  const statusBucket = resolveProjectStatusBucket(project)
-                  const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
-                  const statusLabel = formatProjectStatus(project.status, project.activeSubStatus)
+              <div className='flex flex-wrap items-center gap-2'>
+                {[
+                  { value: 'projects' as const, label: 'Projects', count: projectsForCurrentSite.length },
+                  { value: 'lines' as const, label: 'Lines', count: lineItems.length },
+                ].map(tab => {
+                  const isActive = customerProjectSection === tab.value
                   return (
-                    <Card key={project.id} className='panel'>
-                      <CardHeader className='flex-col items-start gap-4 border-b-0 sm:flex-row sm:items-center sm:gap-3'>
-                        <div className='flex flex-col gap-2'>
-                          <div className='flex flex-wrap items-center gap-2 text-lg font-semibold text-slate-800'>
-                            <span>Project: {project.number}</span>
-                            <span
-                              className='rounded-full border px-3 py-1 text-xs font-semibold'
-                              style={{
-                                color: statusMeta.color,
-                                backgroundColor: `${statusMeta.color}1a`,
-                                borderColor: `${statusMeta.color}33`,
-                              }}
-                            >
-                              {statusLabel}
-                            </span>
-                          </div>
-                          {projectNote ? <p className='text-sm text-slate-500'>{projectNote}</p> : null}
-                        </div>
-                        <div className='flex flex-wrap items-center gap-2 sm:ml-auto'>
-                          <Button
-                            onClick={() => {
-                              setSelectedCustomerId(selectedCustomer.id)
-                              setSelectedProjectId(project.id)
-                              setActivePage('projectDetail')
-                            }}
-                          >
-                            <ChevronRight size={16} /> View project
-                          </Button>
-                          <Button
-                            variant='ghost'
-                            className='text-rose-600 hover:bg-rose-50'
-                            onClick={() => {
-                              const confirmed = window.confirm('Delete this project and all associated records?')
-                              if (!confirmed) return
-                              void deleteProject(selectedCustomer.id, project.id)
-                            }}
-                            title={canEdit ? 'Delete project' : 'Read-only access'}
-                            disabled={!canEdit}
-                          >
-                            <Trash2 size={16} />
-                          </Button>
-                        </div>
-                      </CardHeader>
-                    </Card>
+                    <button
+                      key={tab.value}
+                      type='button'
+                      className={`rounded-full px-3 py-1 text-sm font-medium transition ${
+                        isActive
+                          ? 'bg-slate-900 text-white shadow'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      }`}
+                      onClick={() => setCustomerProjectSection(tab.value)}
+                    >
+                      <span>{tab.label}</span>
+                      <span className='ml-2 inline-flex min-w-[1.5rem] justify-center rounded-full bg-black/10 px-2 py-0.5 text-xs font-semibold'>
+                        {tab.count}
+                      </span>
+                    </button>
                   )
-                })
+                })}
+              </div>
+              {customerProjectSection === 'projects' ? (
+                <Button
+                  variant='outline'
+                  onClick={() => {
+                    if (!activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer) {
+                      return
+                    }
+                    const preferredSiteId =
+                      activeSiteTab.type === 'site' ? activeSiteTab.site.id : undefined
+                    openNewProjectModal({ customerId: selectedCustomer.id, siteId: preferredSiteId })
+                  }}
+                  title={
+                    !canEdit
+                      ? 'Read-only access'
+                      : !activeSiteTab
+                      ? 'Select a site to manage projects'
+                      : activeSiteTab.type === 'child'
+                      ? 'Manage projects on the sub customer page'
+                      : 'Add project'
+                  }
+                  disabled={!canEdit || !activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer}
+                >
+                  <Plus size={16} /> Add Project
+                </Button>
+              ) : (
+                <Button
+                  variant='outline'
+                  onClick={() => {
+                    if (!activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer) {
+                      return
+                    }
+                    const preferredSiteId =
+                      activeSiteTab.type === 'site' ? activeSiteTab.site.id : undefined
+                    setCustomerProjectSection('projects')
+                    openNewProjectModal({ customerId: selectedCustomer.id, siteId: preferredSiteId })
+                  }}
+                  title={
+                    !canEdit
+                      ? 'Read-only access'
+                      : !activeSiteTab
+                      ? 'Select a site to record machines'
+                      : activeSiteTab.type === 'child'
+                      ? 'Manage machines on the sub customer page'
+                      : 'Add machine'
+                  }
+                  disabled={!canEdit || !activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer}
+                >
+                  <Plus size={16} /> Add Machine
+                </Button>
               )}
             </div>
+
+            {customerProjectSection === 'projects' ? (
+              <>
+                <div className='flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2'>
+                  {([
+                    { value: 'active' as const, label: 'Active' },
+                    { value: 'complete' as const, label: 'Complete' },
+                  ]).map(tab => {
+                    const isActive = customerProjectsTab === tab.value
+                    const copy = projectTabCopy[tab.value]
+                    return (
+                      <button
+                        key={tab.value}
+                        type='button'
+                        className={`rounded-full px-3 py-1 text-sm font-medium transition ${
+                          isActive
+                            ? 'bg-slate-900 text-white shadow'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                        onClick={() => setCustomerProjectsTab(tab.value)}
+                      >
+                        <span>{tab.label}</span>
+                        <span className='ml-2 inline-flex min-w-[1.5rem] justify-center rounded-full bg-black/10 px-2 py-0.5 text-xs font-semibold'>
+                          {copy.count}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+                <div className='space-y-3'>
+                  {projectsForTab.length === 0 ? (
+                    <div className='text-sm text-slate-500'>{activeTabCopy.empty}</div>
+                  ) : (
+                    projectsForTab.map(project => {
+                      const projectNote = project.note?.trim()
+                      const statusBucket = resolveProjectStatusBucket(project)
+                      const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
+                      const statusLabel = formatProjectStatus(project.status, project.activeSubStatus)
+                      return (
+                        <Card key={project.id} className='panel'>
+                          <CardHeader className='flex-col items-start gap-4 border-b-0 sm:flex-row sm:items-center sm:gap-3'>
+                            <div className='flex flex-col gap-2'>
+                              <div className='flex flex-wrap items-center gap-2 text-lg font-semibold text-slate-800'>
+                                <span>Project: {project.number}</span>
+                                <span
+                                  className='rounded-full border px-3 py-1 text-xs font-semibold'
+                                  style={{
+                                    color: statusMeta.color,
+                                    backgroundColor: `${statusMeta.color}1a`,
+                                    borderColor: `${statusMeta.color}33`,
+                                  }}
+                                >
+                                  {statusLabel}
+                                </span>
+                              </div>
+                              {projectNote ? <p className='text-sm text-slate-500'>{projectNote}</p> : null}
+                            </div>
+                            <div className='flex flex-wrap items-center gap-2 sm:ml-auto'>
+                              <Button
+                                onClick={() => {
+                                  setSelectedCustomerId(selectedCustomer.id)
+                                  setSelectedProjectId(project.id)
+                                  setActivePage('projectDetail')
+                                }}
+                              >
+                                <ChevronRight size={16} /> View project
+                              </Button>
+                              <Button
+                                variant='ghost'
+                                className='text-rose-600 hover:bg-rose-50'
+                                onClick={() => {
+                                  const confirmed = window.confirm('Delete this project and all associated records?')
+                                  if (!confirmed) return
+                                  void deleteProject(selectedCustomer.id, project.id)
+                                }}
+                                title={canEdit ? 'Delete project' : 'Read-only access'}
+                                disabled={!canEdit}
+                              >
+                                <Trash2 size={16} />
+                              </Button>
+                            </div>
+                          </CardHeader>
+                        </Card>
+                      )
+                    })
+                  )}
+                </div>
+              </>
+            ) : (
+              <div className='space-y-3'>
+                {!canViewLines ? (
+                  <div className='text-sm text-slate-500'>
+                    {!activeSiteTab
+                      ? 'Select a site to view machines.'
+                      : 'View machines on the sub customer page.'}
+                  </div>
+                ) : lineItems.length === 0 ? (
+                  <div className='text-sm text-slate-500'>No machines recorded for this site yet.</div>
+                ) : (
+                  <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
+                    <div className='overflow-x-auto'>
+                      <table className='min-w-full divide-y divide-slate-200 bg-white text-sm text-slate-700'>
+                        <thead className='bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500'>
+                          <tr>
+                            <th scope='col' className='px-4 py-3 text-left font-semibold'>Machine Serial</th>
+                            <th scope='col' className='px-4 py-3 text-left font-semibold'>Tool Serials</th>
+                            <th scope='col' className='px-4 py-3 text-left font-semibold'>Project</th>
+                          </tr>
+                        </thead>
+                        <tbody className='divide-y divide-slate-100'>
+                          {lineItems.map(item => {
+                            const statusBucket = resolveProjectStatusBucket(item.project)
+                            const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
+                            const statusLabel = formatProjectStatus(item.project.status, item.project.activeSubStatus)
+                            const machineLabel = item.machineSerialNumber || 'Not specified'
+                            return (
+                              <tr key={item.id} className='hover:bg-slate-50/70'>
+                                <td className='whitespace-nowrap px-4 py-3 font-medium text-slate-800'>
+                                  {machineLabel}
+                                </td>
+                                <td className='px-4 py-3'>
+                                  {item.toolSerialNumbers.length > 0 ? (
+                                    <div className='flex flex-wrap gap-1'>
+                                      {item.toolSerialNumbers.map((tool, index) => (
+                                        <span
+                                          key={`${item.id}-tool-${index}`}
+                                          className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700'
+                                        >
+                                          {tool}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span className='text-xs text-slate-400'>No tools recorded</span>
+                                  )}
+                                </td>
+                                <td className='px-4 py-3'>
+                                  <div className='flex flex-col gap-1'>
+                                    <span className='font-semibold text-slate-800'>Project: {item.project.number}</span>
+                                    <span
+                                      className='inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold'
+                                      style={{
+                                        color: statusMeta.color,
+                                        backgroundColor: `${statusMeta.color}1a`,
+                                        borderColor: `${statusMeta.color}33`,
+                                      }}
+                                    >
+                                      {statusLabel}
+                                    </span>
+                                    <div>
+                                      <Button
+                                        size='sm'
+                                        variant='outline'
+                                        onClick={() => {
+                                          setSelectedCustomerId(selectedCustomer.id)
+                                          setSelectedProjectId(item.project.id)
+                                          setActivePage('projectDetail')
+                                        }}
+                                      >
+                                        <ChevronRight size={16} /> View project
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -4553,11 +4716,11 @@ function AppContent() {
     const infoSnapshot = existingProject.info
       ? {
           ...existingProject.info,
-          machineSerialNumbers: existingProject.info.machineSerialNumbers
-            ? [...existingProject.info.machineSerialNumbers]
-            : undefined,
-          toolSerialNumbers: existingProject.info.toolSerialNumbers
-            ? [...existingProject.info.toolSerialNumbers]
+          machines: existingProject.info.machines
+            ? existingProject.info.machines.map(machine => ({
+                machineSerialNumber: machine.machineSerialNumber,
+                toolSerialNumbers: [...machine.toolSerialNumbers],
+              }))
             : undefined,
         }
       : undefined
@@ -4705,8 +4868,7 @@ function AppContent() {
         projectNumber: project.number,
         customerName: customer.name,
         lineReference: info?.lineReference,
-        machineSerialNumbers: info?.machineSerialNumbers,
-        toolSerialNumbers: info?.toolSerialNumbers,
+        machines: info?.machines,
         cobaltOrderNumber: info?.cobaltOrderNumber,
         customerOrderNumber: info?.customerOrderNumber,
         salespersonName: info?.salespersonName,
@@ -6782,21 +6944,10 @@ function AppContent() {
                               ))}
                           </select>
                         </div>
-                        <SerialNumberListInput
-                          id='new-project-machine-serials'
-                          label='Machine Serial Numbers'
-                          values={newProjectInfoDraft.machineSerialNumbers}
-                          onChange={values => updateNewProjectInfoField('machineSerialNumbers', values)}
-                          placeholder='e.g. SN-001234'
-                          disabled={isCreatingProject || !canEdit}
-                          className='md:col-span-2'
-                        />
-                        <SerialNumberListInput
-                          id='new-project-tool-serials'
-                          label='Tool Serial Numbers'
-                          values={newProjectInfoDraft.toolSerialNumbers}
-                          onChange={values => updateNewProjectInfoField('toolSerialNumbers', values)}
-                          placeholder='e.g. TOOL-045'
+                        <MachineToolListInput
+                          id='new-project-machines'
+                          machines={newProjectInfoDraft.machines}
+                          onChange={machines => updateNewProjectInfoField('machines', machines)}
                           disabled={isCreatingProject || !canEdit}
                           className='md:col-span-2'
                         />

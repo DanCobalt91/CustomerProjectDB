@@ -1,14 +1,20 @@
-import type { ProjectInfo, User } from '../types'
+import type { ProjectInfo, ProjectMachine, User } from '../types'
+import { createId } from './id'
 
 export type ProjectInfoDraftDefaults = {
   startDate?: string
   proposedCompletionDate?: string
 }
 
+export type ProjectMachineDraft = {
+  id: string
+  machineSerialNumber: string
+  toolSerialNumbers: string[]
+}
+
 export type ProjectInfoDraft = {
   lineReference: string
-  machineSerialNumbers: string[]
-  toolSerialNumbers: string[]
+  machines: ProjectMachineDraft[]
   cobaltOrderNumber: string
   customerOrderNumber: string
   salespersonId: string
@@ -35,10 +41,61 @@ export function createProjectInfoDraft(
     }
   }
 
+  const machines: ProjectMachineDraft[] = []
+  if (info?.machines && info.machines.length > 0) {
+    machines.push(
+      ...info.machines.map(machine => ({
+        id: createId(),
+        machineSerialNumber: machine.machineSerialNumber,
+        toolSerialNumbers: machine.toolSerialNumbers ? [...machine.toolSerialNumbers] : [],
+      })),
+    )
+  } else if (info) {
+    const legacy = info as { machineSerialNumbers?: unknown; toolSerialNumbers?: unknown }
+    const legacyMachineSerials = Array.isArray(legacy.machineSerialNumbers)
+      ? (legacy.machineSerialNumbers as string[])
+      : []
+    const legacyToolSerials = Array.isArray(legacy.toolSerialNumbers)
+      ? (legacy.toolSerialNumbers as string[])
+      : []
+
+    if (legacyMachineSerials.length > 0) {
+      machines.push(
+        ...legacyMachineSerials.map(serial => ({
+          id: createId(),
+          machineSerialNumber: serial,
+          toolSerialNumbers: [],
+        })),
+      )
+    }
+
+    if (legacyToolSerials.length > 0) {
+      if (machines.length === 1) {
+        machines[0] = {
+          ...machines[0],
+          toolSerialNumbers: [...legacyToolSerials],
+        }
+      } else if (machines.length === 0) {
+        machines.push(
+          ...legacyToolSerials.map(serial => ({
+            id: createId(),
+            machineSerialNumber: '',
+            toolSerialNumbers: [serial],
+          })),
+        )
+      } else {
+        machines.push({
+          id: createId(),
+          machineSerialNumber: '',
+          toolSerialNumbers: [...legacyToolSerials],
+        })
+      }
+    }
+  }
+
   return {
     lineReference: info?.lineReference ?? '',
-    machineSerialNumbers: info?.machineSerialNumbers ? [...info.machineSerialNumbers] : [],
-    toolSerialNumbers: info?.toolSerialNumbers ? [...info.toolSerialNumbers] : [],
+    machines,
     cobaltOrderNumber: info?.cobaltOrderNumber ?? '',
     customerOrderNumber: info?.customerOrderNumber ?? '',
     salespersonId,
@@ -52,12 +109,42 @@ export function parseProjectInfoDraft(
   users: User[],
 ): { info: ProjectInfo | null; error?: string } {
   const lineReference = draft.lineReference.trim()
-  const machineSerialNumbers = draft.machineSerialNumbers
-    .map(entry => entry.trim())
-    .filter(entry => entry.length > 0)
-  const toolSerialNumbers = draft.toolSerialNumbers
-    .map(entry => entry.trim())
-    .filter(entry => entry.length > 0)
+  const machines: ProjectMachine[] = []
+  const seenMachineSerials = new Set<string>()
+  for (const machine of draft.machines) {
+    const machineSerialNumber = machine.machineSerialNumber.trim()
+    const normalizedTools: string[] = []
+    const seenTools = new Set<string>()
+    for (const tool of machine.toolSerialNumbers) {
+      const trimmed = tool.trim()
+      if (!trimmed) {
+        continue
+      }
+      const normalized = trimmed.toLowerCase()
+      if (seenTools.has(normalized)) {
+        continue
+      }
+      seenTools.add(normalized)
+      normalizedTools.push(trimmed)
+    }
+
+    if (!machineSerialNumber) {
+      if (normalizedTools.length > 0) {
+        return {
+          info: null,
+          error: 'Enter a machine serial number before adding tool serial numbers.',
+        }
+      }
+      continue
+    }
+
+    const normalizedMachine = machineSerialNumber.toLowerCase()
+    if (seenMachineSerials.has(normalizedMachine)) {
+      return { info: null, error: 'Machine serial numbers must be unique.' }
+    }
+    seenMachineSerials.add(normalizedMachine)
+    machines.push({ machineSerialNumber, toolSerialNumbers: normalizedTools })
+  }
   const cobaltOrderNumber = draft.cobaltOrderNumber.trim()
   const customerOrderNumber = draft.customerOrderNumber.trim()
   const startDate = draft.startDate.trim()
@@ -82,8 +169,7 @@ export function parseProjectInfoDraft(
 
   const info: ProjectInfo = {}
   if (lineReference) info.lineReference = lineReference
-  if (machineSerialNumbers.length > 0) info.machineSerialNumbers = machineSerialNumbers
-  if (toolSerialNumbers.length > 0) info.toolSerialNumbers = toolSerialNumbers
+  if (machines.length > 0) info.machines = machines
   if (cobaltOrderNumber) info.cobaltOrderNumber = cobaltOrderNumber
   if (customerOrderNumber) info.customerOrderNumber = customerOrderNumber
   if (salespersonId) info.salespersonId = salespersonId

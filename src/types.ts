@@ -52,10 +52,14 @@ export type ProjectStatusLogEntry = {
   changedBy: string;
 };
 
+export type ProjectMachine = {
+  machineSerialNumber: string;
+  toolSerialNumbers: string[];
+};
+
 export type ProjectInfo = {
   lineReference?: string;
-  machineSerialNumbers?: string[];
-  toolSerialNumbers?: string[];
+  machines?: ProjectMachine[];
   cobaltOrderNumber?: string;
   customerOrderNumber?: string;
   salespersonId?: string;

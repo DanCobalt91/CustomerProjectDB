@@ -4,6 +4,7 @@ import {
   type CustomerSignOffDecision,
   type CustomerSignOffSignatureDimensions,
   type CustomerSignOffSignatureStroke,
+  type ProjectMachine,
 } from '../types'
 
 export const CUSTOMER_SIGN_OFF_OPTION_COPY: Record<
@@ -40,6 +41,7 @@ export type CustomerSignOffPdfInput = {
   projectNumber: string
   customerName: string
   lineReference?: string
+  machines?: ProjectMachine[]
   machineSerialNumbers?: string[]
   toolSerialNumbers?: string[]
   cobaltOrderNumber?: string
@@ -426,6 +428,35 @@ export async function generateCustomerSignOffPdf(data: CustomerSignOffPdfInput):
     cursor -= 8
   }
 
+  const formatMachinesAndTools = (): string => {
+    if (data.machines && data.machines.length > 0) {
+      return data.machines
+        .map(machine => {
+          const machineLabel = machine.machineSerialNumber.trim() || 'Not specified'
+          const tools = machine.toolSerialNumbers.map(entry => entry.trim()).filter(entry => entry.length > 0)
+          if (tools.length === 0) {
+            return `${machineLabel} — No tools recorded`
+          }
+          return `${machineLabel} — Tools: ${tools.join(', ')}`
+        })
+        .join('\n')
+    }
+
+    const machineSerials = data.machineSerialNumbers ?? []
+    const toolSerials = data.toolSerialNumbers ?? []
+    if (machineSerials.length === 0 && toolSerials.length === 0) {
+      return ''
+    }
+    const parts: string[] = []
+    if (machineSerials.length > 0) {
+      parts.push(`Machines: ${machineSerials.join(', ')}`)
+    }
+    if (toolSerials.length > 0) {
+      parts.push(`Tools: ${toolSerials.join(', ')}`)
+    }
+    return parts.join('\n')
+  }
+
   if (logoPlacement) {
     builder.content += `q ${formatNumber(logoPlacement.drawWidth)} 0 0 ${formatNumber(logoPlacement.drawHeight)} ${formatNumber(logoPlacement.drawX)} ${formatNumber(logoPlacement.drawY)} cm /${logoPlacement.name} Do Q\n`
   }
@@ -443,8 +474,7 @@ export async function generateCustomerSignOffPdf(data: CustomerSignOffPdfInput):
 
   drawHeading('Project Information', 16, 16)
   drawLabelValue('Line No/Name', data.lineReference ?? 'Not provided')
-  drawLabelValue('Machine Serial Numbers', formatList(data.machineSerialNumbers))
-  drawLabelValue('Tool Serial Numbers', formatList(data.toolSerialNumbers))
+  drawLabelValue('Machines & Tools', formatMachinesAndTools())
   drawLabelValue('Cobalt Order Number', data.cobaltOrderNumber ?? 'Not provided')
   drawLabelValue('Customer Order Number', data.customerOrderNumber ?? 'Not provided')
   drawLabelValue('Salesperson', data.salespersonName ?? 'Not provided')
