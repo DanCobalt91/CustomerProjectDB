@@ -13,6 +13,7 @@ type SerialNumberListInputProps = {
   disabled?: boolean
   placeholder?: string
   className?: string
+  validateAdd?: (serial: string, existing: string[]) => string | null
 }
 
 export default function SerialNumberListInput({
@@ -23,6 +24,7 @@ export default function SerialNumberListInput({
   disabled = false,
   placeholder,
   className = '',
+  validateAdd,
 }: SerialNumberListInputProps) {
   const [inputValue, setInputValue] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -40,10 +42,18 @@ export default function SerialNumberListInput({
       return
     }
 
+    if (validateAdd) {
+      const validationError = validateAdd(trimmed, values)
+      if (validationError) {
+        setError(validationError)
+        return
+      }
+    }
+
     onChange([...values, trimmed])
     setInputValue('')
     setError(null)
-  }, [inputValue, onChange, values])
+  }, [inputValue, onChange, validateAdd, values])
 
   const handleRemove = useCallback(
     (index: number) => {

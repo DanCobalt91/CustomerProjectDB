@@ -43,7 +43,7 @@ import {
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
-import SerialNumberListInput from '../components/ui/SerialNumberListInput'
+import MachineToolListInput from '../components/ui/MachineToolListInput'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { CUSTOMER_SIGN_OFF_OPTIONS, CUSTOMER_SIGN_OFF_OPTION_COPY } from '../lib/signOff'
 import TaskGanttChart from '../components/ui/TaskGanttChart'
@@ -2273,8 +2273,7 @@ export default function ProjectPage({
 
   const renderProjectInfo = () => {
     const info = project.info
-    const machineSerialNumbers = info?.machineSerialNumbers ?? []
-    const toolSerialNumbers = info?.toolSerialNumbers ?? []
+    const machines = info?.machines ?? []
     const salespersonName = info?.salespersonId
       ? users.find(user => user.id === info.salespersonId)?.name ?? info.salespersonName ?? null
       : info?.salespersonName ?? null
@@ -2340,37 +2339,43 @@ export default function ProjectPage({
                   </dl>
                 </div>
               </div>
-              <div className='grid gap-4 md:grid-cols-2'>
-                <div>
-                  <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Machine serial numbers</div>
-                  {machineSerialNumbers.length > 0 ? (
-                    <ul className='mt-2 space-y-1 text-xs text-slate-600'>
-                      {machineSerialNumbers.map((serial, index) => (
-                        <li key={`${serial}-${index}`} className='flex items-center gap-2'>
-                          <span className='h-1.5 w-1.5 rounded-full bg-slate-400' aria-hidden />
-                          <span>{serial}</span>
+              <div>
+                <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Machines &amp; tools</div>
+                {machines.length > 0 ? (
+                  <ul className='mt-2 space-y-3 text-xs text-slate-600'>
+                    {machines.map((machine, index) => {
+                      const label = machine.machineSerialNumber.trim() || 'Not specified'
+                      return (
+                        <li
+                          key={`${machine.machineSerialNumber || 'machine'}-${index}`}
+                          className='space-y-2 rounded-xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'
+                        >
+                          <div className='flex items-center justify-between gap-2 text-sm font-semibold text-slate-700'>
+                            <span>Machine: {label}</span>
+                            <span className='text-xs font-medium text-slate-500'>
+                              {machine.toolSerialNumbers.length}{' '}
+                              {machine.toolSerialNumbers.length === 1 ? 'tool' : 'tools'}
+                            </span>
+                          </div>
+                          {machine.toolSerialNumbers.length > 0 ? (
+                            <ul className='space-y-1'>
+                              {machine.toolSerialNumbers.map((serial, toolIndex) => (
+                                <li key={`${serial}-${toolIndex}`} className='flex items-center gap-2'>
+                                  <span className='h-1.5 w-1.5 rounded-full bg-slate-400' aria-hidden />
+                                  <span>{serial}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className='text-xs text-slate-400'>No tool serial numbers recorded.</p>
+                          )}
                         </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className='mt-2 text-xs text-slate-400'>No machine serial numbers recorded.</p>
-                  )}
-                </div>
-                <div>
-                  <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Tool serial numbers</div>
-                  {toolSerialNumbers.length > 0 ? (
-                    <ul className='mt-2 space-y-1 text-xs text-slate-600'>
-                      {toolSerialNumbers.map((serial, index) => (
-                        <li key={`${serial}-${index}`} className='flex items-center gap-2'>
-                          <span className='h-1.5 w-1.5 rounded-full bg-slate-400' aria-hidden />
-                          <span>{serial}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className='mt-2 text-xs text-slate-400'>No tool serial numbers recorded.</p>
-                  )}
-                </div>
+                      )
+                    })}
+                  </ul>
+                ) : (
+                  <p className='mt-2 text-xs text-slate-400'>No machines recorded.</p>
+                )}
               </div>
             </div>
           ) : (
@@ -3246,21 +3251,10 @@ export default function ProjectPage({
                             ))}
                           </select>
                         </div>
-                        <SerialNumberListInput
-                          id='info-machine-serials'
-                          label='Machine Serial Numbers'
-                          values={infoDraft.machineSerialNumbers}
-                          onChange={values => updateInfoField('machineSerialNumbers', values)}
-                          placeholder='e.g. SN-001234'
-                          disabled={!canEdit || isSavingInfo}
-                          className='md:col-span-2'
-                        />
-                        <SerialNumberListInput
-                          id='info-tool-serials'
-                          label='Tool Serial Numbers'
-                          values={infoDraft.toolSerialNumbers}
-                          onChange={values => updateInfoField('toolSerialNumbers', values)}
-                          placeholder='e.g. TOOL-045'
+                        <MachineToolListInput
+                          id='info-machines'
+                          machines={infoDraft.machines}
+                          onChange={machines => updateInfoField('machines', machines)}
                           disabled={!canEdit || isSavingInfo}
                           className='md:col-span-2'
                         />

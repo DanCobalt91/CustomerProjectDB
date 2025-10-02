@@ -12,6 +12,7 @@ import type {
   ProjectFile,
   ProjectFileCategory,
   ProjectInfo,
+  ProjectMachine,
   ProjectOnsiteReport,
   ProjectStatusLogEntry,
   ProjectStatus,
@@ -970,14 +971,101 @@ function createLocalStorageStorage(): StorageApi {
         (raw as { lineName?: unknown }).lineName ??
         (raw as { lineNumber?: unknown }).lineNumber,
     )
-    const machineSerialNumbers = normalizeStringArrayValue(
-      (raw as { machineSerialNumbers?: unknown; machineSerials?: unknown }).machineSerialNumbers ??
-        (raw as { machineSerials?: unknown }).machineSerials,
-    )
-    const toolSerialNumbers = normalizeStringArrayValue(
-      (raw as { toolSerialNumbers?: unknown; toolSerials?: unknown }).toolSerialNumbers ??
-        (raw as { toolSerials?: unknown }).toolSerials,
-    )
+
+    const machines: ProjectMachine[] = []
+    const machineMap = new Map<string, ProjectMachine>()
+
+    const addMachine = (serial: string, tools: string[]) => {
+      const machineSerial = serial.trim()
+      const key = machineSerial.toLowerCase()
+      const normalizedTools: string[] = []
+      const seenTools = new Set<string>()
+      for (const tool of tools) {
+        const trimmed = tool.trim()
+        if (!trimmed) continue
+        const normalized = trimmed.toLowerCase()
+        if (seenTools.has(normalized)) continue
+        seenTools.add(normalized)
+        normalizedTools.push(trimmed)
+      }
+
+      if (!machineSerial && normalizedTools.length === 0) {
+        return
+      }
+
+      const existing = machineMap.get(key)
+      if (existing) {
+        const existingTools = existing.toolSerialNumbers
+        const existingSet = new Set(existingTools.map(tool => tool.toLowerCase()))
+        for (const tool of normalizedTools) {
+          const normalized = tool.toLowerCase()
+          if (!existingSet.has(normalized)) {
+            existingSet.add(normalized)
+            existingTools.push(tool)
+          }
+        }
+        if (!existing.machineSerialNumber && machineSerial) {
+          existing.machineSerialNumber = machineSerial
+        }
+      } else {
+        const entry: ProjectMachine = {
+          machineSerialNumber: machineSerial,
+          toolSerialNumbers: normalizedTools,
+        }
+        machineMap.set(key, entry)
+        machines.push(entry)
+      }
+    }
+
+    const machinesValue = (raw as { machines?: unknown }).machines
+    if (Array.isArray(machinesValue)) {
+      for (const entry of machinesValue) {
+        if (!entry || typeof entry !== 'object') {
+          continue
+        }
+        const entryRaw = entry as Record<string, unknown>
+        const serial = toOptionalString(
+          (entryRaw as { machineSerialNumber?: unknown; serialNumber?: unknown }).machineSerialNumber ??
+            (entryRaw as { serialNumber?: unknown }).serialNumber,
+        )
+        const toolList =
+          normalizeStringArrayValue(
+            (entryRaw as { toolSerialNumbers?: unknown; toolSerials?: unknown }).toolSerialNumbers ??
+              (entryRaw as { toolSerials?: unknown }).toolSerials,
+          ) ?? []
+        addMachine(serial ?? '', toolList)
+      }
+    }
+
+    if (machines.length === 0) {
+      const legacyMachineSerials =
+        normalizeStringArrayValue(
+          (raw as { machineSerialNumbers?: unknown; machineSerials?: unknown }).machineSerialNumbers ??
+            (raw as { machineSerials?: unknown }).machineSerials,
+        ) ?? []
+      const legacyToolSerials =
+        normalizeStringArrayValue(
+          (raw as { toolSerialNumbers?: unknown; toolSerials?: unknown }).toolSerialNumbers ??
+            (raw as { toolSerials?: unknown }).toolSerials,
+        ) ?? []
+
+      for (const serial of legacyMachineSerials) {
+        addMachine(serial, [])
+      }
+
+      if (legacyToolSerials.length > 0) {
+        if (legacyMachineSerials.length === 1) {
+          addMachine(legacyMachineSerials[0], legacyToolSerials)
+        } else if (legacyMachineSerials.length === 0) {
+          for (const tool of legacyToolSerials) {
+            addMachine('', [tool])
+          }
+        } else {
+          addMachine('', legacyToolSerials)
+        }
+      }
+    }
+
     const cobaltOrderNumber = toOptionalString((raw as { cobaltOrderNumber?: unknown }).cobaltOrderNumber)
     const customerOrderNumber = toOptionalString(
       (raw as { customerOrderNumber?: unknown; purchaseOrder?: unknown }).customerOrderNumber ??
@@ -996,8 +1084,7 @@ function createLocalStorageStorage(): StorageApi {
 
     const info: ProjectInfo = {}
     if (lineReference) info.lineReference = lineReference
-    if (machineSerialNumbers) info.machineSerialNumbers = machineSerialNumbers
-    if (toolSerialNumbers) info.toolSerialNumbers = toolSerialNumbers
+    if (machines.length > 0) info.machines = machines
     if (cobaltOrderNumber) info.cobaltOrderNumber = cobaltOrderNumber
     if (customerOrderNumber) info.customerOrderNumber = customerOrderNumber
     if (salespersonId) info.salespersonId = salespersonId
@@ -1461,8 +1548,12 @@ function createLocalStorageStorage(): StorageApi {
     }
     return {
       lineReference: info.lineReference,
-      machineSerialNumbers: info.machineSerialNumbers ? [...info.machineSerialNumbers] : undefined,
-      toolSerialNumbers: info.toolSerialNumbers ? [...info.toolSerialNumbers] : undefined,
+      machines: info.machines
+        ? info.machines.map(machine => ({
+            machineSerialNumber: machine.machineSerialNumber,
+            toolSerialNumbers: [...machine.toolSerialNumbers],
+          }))
+        : undefined,
       cobaltOrderNumber: info.cobaltOrderNumber,
       customerOrderNumber: info.customerOrderNumber,
       salespersonId: info.salespersonId,
