@@ -37,6 +37,7 @@ import type {
   User,
   TwoFactorMethod,
   AppRole,
+  BusinessLogo,
   BusinessSettings,
   BusinessDay,
 } from '../types'
@@ -97,6 +98,11 @@ const PROJECT_FILE_MIME_BY_EXTENSION: Record<string, string> = {
   svg: 'image/svg+xml',
 }
 
+const BUSINESS_LOGO_MAX_WIDTH = 240
+const BUSINESS_LOGO_MAX_HEIGHT = 120
+const BUSINESS_LOGO_OUTPUT_MIME: BusinessLogo['mimeType'] = 'image/jpeg'
+const BUSINESS_LOGO_OUTPUT_QUALITY = 0.9
+
 function guessMimeTypeFromName(name: string): string {
   const extension = name.split('.').pop()?.toLowerCase() ?? ''
   return PROJECT_FILE_MIME_BY_EXTENSION[extension] ?? 'application/octet-stream'
@@ -129,11 +135,76 @@ function readFileAsDataUrl(file: File): Promise<string> {
   })
 }
 
+function loadImageFromDataUrl(dataUrl: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.decoding = 'async'
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('Unable to load image.'))
+    image.src = dataUrl
+  })
+}
+
+async function createBusinessLogoFromFile(file: File): Promise<BusinessLogo> {
+  const normalizedType = file.type?.toLowerCase() ?? ''
+  if (!normalizedType.startsWith('image/')) {
+    throw new Error('Select an image file for the company logo.')
+  }
+
+  const dataUrl = await readFileAsDataUrl(file)
+  const image = await loadImageFromDataUrl(dataUrl)
+  const width = image.naturalWidth || image.width
+  const height = image.naturalHeight || image.height
+  if (!width || !height) {
+    throw new Error('Unable to read the logo dimensions.')
+  }
+
+  const scale = Math.min(1, BUSINESS_LOGO_MAX_WIDTH / width, BUSINESS_LOGO_MAX_HEIGHT / height)
+  const targetWidth = Math.max(1, Math.round(width * scale))
+  const targetHeight = Math.max(1, Math.round(height * scale))
+
+  const canvas = document.createElement('canvas')
+  canvas.width = targetWidth
+  canvas.height = targetHeight
+  const context = canvas.getContext('2d')
+  if (!context) {
+    throw new Error('Unable to process the company logo.')
+  }
+  context.imageSmoothingQuality = 'high'
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, targetWidth, targetHeight)
+  context.drawImage(image, 0, 0, targetWidth, targetHeight)
+
+  const resizedDataUrl = canvas.toDataURL(BUSINESS_LOGO_OUTPUT_MIME, BUSINESS_LOGO_OUTPUT_QUALITY)
+  return {
+    dataUrl: resizedDataUrl,
+    width: targetWidth,
+    height: targetHeight,
+    mimeType: BUSINESS_LOGO_OUTPUT_MIME,
+  }
+}
+
 type CustomerSiteDraft = {
   id: string
   name: string
   address: string
   notes: string
+}
+
+type NewCustomerDraft = {
+  name: string
+  contactName: string
+  contactPosition: string
+  contactPhone: string
+  contactEmail: string
+  sites: CustomerSiteDraft[]
+  parentCustomerId: string
+}
+
+type CustomerEditorDraftState = {
+  name: string
+  sites: CustomerSiteDraft[]
+  parentCustomerId: string
 }
 
 type CustomerSiteTabKey = string
@@ -151,6 +222,37 @@ function createSiteDraft(site?: CustomerSite | null): CustomerSiteDraft {
     name: site?.name ?? '',
     address: site?.address ?? '',
     notes: site?.notes ?? '',
+  }
+}
+
+function ensureSiteDrafts(drafts: CustomerSiteDraft[]): CustomerSiteDraft[] {
+  return drafts.length > 0 ? drafts : [createSiteDraft()]
+}
+
+function createNewCustomerDraftState(): NewCustomerDraft {
+  return {
+    name: '',
+    contactName: '',
+    contactPosition: '',
+    contactPhone: '',
+    contactEmail: '',
+    sites: [createSiteDraft()],
+    parentCustomerId: '',
+  }
+}
+
+function createCustomerEditorDraftState(customer?: Customer | null): CustomerEditorDraftState {
+  if (!customer) {
+    return {
+      name: '',
+      sites: [createSiteDraft()],
+      parentCustomerId: '',
+    }
+  }
+  return {
+    name: customer.name,
+    sites: ensureSiteDrafts(customer.sites.map(createSiteDraft)),
+    parentCustomerId: customer.parentCustomerId ?? '',
   }
 }
 
@@ -188,6 +290,13 @@ const BUSINESS_DAY_ORDER: Array<{ key: BusinessDay; label: string }> = [
   { key: 'sunday', label: 'Sunday' },
 ]
 
+function cloneBusinessLogo(logo: BusinessLogo | null): BusinessLogo | null {
+  if (!logo) {
+    return null
+  }
+  return { dataUrl: logo.dataUrl, width: logo.width, height: logo.height, mimeType: logo.mimeType }
+}
+
 function cloneBusinessSettings(settings: BusinessSettings): BusinessSettings {
   return {
     businessName: settings.businessName,
@@ -196,11 +305,15 @@ function cloneBusinessSettings(settings: BusinessSettings): BusinessSettings {
       acc[day] = hours ? { ...hours } : { ...DEFAULT_BUSINESS_SETTINGS.hours[day] }
       return acc
     }, {} as BusinessSettings['hours']),
+    logo: cloneBusinessLogo(settings.logo),
   }
 }
 
 function businessSettingsEqual(a: BusinessSettings, b: BusinessSettings): boolean {
   if (a.businessName.trim() !== b.businessName.trim()) {
+    return false
+  }
+  if (!businessLogosEqual(a.logo, b.logo)) {
     return false
   }
   return BUSINESS_DAYS.every(day => {
@@ -212,6 +325,21 @@ function businessSettingsEqual(a: BusinessSettings, b: BusinessSettings): boolea
       aHours?.end === bHours?.end
     )
   })
+}
+
+function businessLogosEqual(a: BusinessLogo | null, b: BusinessLogo | null): boolean {
+  if (!a && !b) {
+    return true
+  }
+  if (!a || !b) {
+    return false
+  }
+  return (
+    a.dataUrl === b.dataUrl &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.mimeType === b.mimeType
+  )
 }
 
 function getBusinessDayKey(date: Date): BusinessDay {
@@ -508,6 +636,7 @@ function AppContent() {
     cloneBusinessSettings(DEFAULT_BUSINESS_SETTINGS),
   )
   const [isSavingBusinessSettings, setIsSavingBusinessSettings] = useState(false)
+  const [isProcessingLogo, setIsProcessingLogo] = useState(false)
   const [businessSettingsMessage, setBusinessSettingsMessage] = useState<string | null>(null)
   const [businessSettingsError, setBusinessSettingsError] = useState<string | null>(null)
   const [newCustomerError, setNewCustomerError] = useState<string | null>(null)
@@ -521,6 +650,7 @@ function AppContent() {
   const [isExportingData, setIsExportingData] = useState(false)
   const [isImportingData, setIsImportingData] = useState(false)
   const importFileInputRef = useRef<HTMLInputElement | null>(null)
+  const businessLogoInputRef = useRef<HTMLInputElement | null>(null)
   const storageLabel = 'Local browser storage'
   const storageTitle = 'Data is stored locally in this browser for testing.'
   const storageBadgeClass = 'border-slate-300 bg-white text-slate-700'
@@ -545,16 +675,7 @@ function AppContent() {
   }, [setGlobalSearchQuery])
 
   // Create customer (modal)
-  const [newCust, setNewCust] = useState({
-    name: '',
-    address: '',
-    contactName: '',
-    contactPosition: '',
-    contactPhone: '',
-    contactEmail: '',
-    sites: [] as CustomerSiteDraft[],
-    parentCustomerId: '',
-  })
+  const [newCust, setNewCust] = useState<NewCustomerDraft>(() => createNewCustomerDraftState())
   const addNewCustomerSite = () => {
     setNewCust(prev => ({ ...prev, sites: [...prev.sites, createSiteDraft()] }))
   }
@@ -565,7 +686,12 @@ function AppContent() {
     }))
   }
   const removeNewCustomerSite = (siteId: string) => {
-    setNewCust(prev => ({ ...prev, sites: prev.sites.filter(site => site.id !== siteId) }))
+    setNewCust(prev => {
+      if (prev.sites.length <= 1) {
+        return prev
+      }
+      return { ...prev, sites: prev.sites.filter(site => site.id !== siteId) }
+    })
   }
   const [showNewCustomer, setShowNewCustomer] = useState(false)
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
@@ -579,12 +705,9 @@ function AppContent() {
   })
   const [contactError, setContactError] = useState<string | null>(null)
   const [showCustomerEditor, setShowCustomerEditor] = useState(false)
-  const [customerEditorDraft, setCustomerEditorDraft] = useState({
-    name: '',
-    address: '',
-    sites: [] as CustomerSiteDraft[],
-    parentCustomerId: '',
-  })
+  const [customerEditorDraft, setCustomerEditorDraft] = useState<CustomerEditorDraftState>(() =>
+    createCustomerEditorDraftState(),
+  )
   const addEditorSite = () => {
     setCustomerEditorDraft(prev => ({ ...prev, sites: [...prev.sites, createSiteDraft()] }))
   }
@@ -595,10 +718,15 @@ function AppContent() {
     }))
   }
   const removeEditorSite = (siteId: string) => {
-    setCustomerEditorDraft(prev => ({
-      ...prev,
-      sites: prev.sites.filter(site => site.id !== siteId),
-    }))
+    setCustomerEditorDraft(prev => {
+      if (prev.sites.length <= 1) {
+        return prev
+      }
+      return {
+        ...prev,
+        sites: prev.sites.filter(site => site.id !== siteId),
+      }
+    })
   }
   const [customerEditorError, setCustomerEditorError] = useState<string | null>(null)
   const [isSavingCustomerEditor, setIsSavingCustomerEditor] = useState(false)
@@ -789,15 +917,17 @@ function AppContent() {
 
     const tabs: CustomerSiteTab[] = []
 
-    const primaryAddress = selectedCustomer.address?.trim() ?? ''
-    tabs.push({ key: HEAD_OFFICE_TAB_KEY, label: 'Head Office', type: 'headOffice', address: primaryAddress })
-
     selectedCustomer.sites.forEach(site => {
       const name = site.name?.trim()
       const address = site.address?.trim()
       const label = name || (address ? address.split('\n')[0] : 'Unnamed site')
       tabs.push({ key: site.id, label, type: 'site', site })
     })
+
+    const primaryAddress = selectedCustomer.address?.trim()
+    if (primaryAddress) {
+      tabs.push({ key: HEAD_OFFICE_TAB_KEY, label: 'Head Office', type: 'headOffice', address: primaryAddress })
+    }
 
     childCustomers.forEach(child => {
       tabs.push({ key: `child-${child.id}`, label: child.name, type: 'child', customer: child })
@@ -858,6 +988,22 @@ function AppContent() {
       selectedCustomerPrimarySite?.address?.trim() ||
       selectedCustomer?.address?.trim() ||
       null)
+  const defaultSiteTabKey = useMemo(() => {
+    if (siteTabs.length === 0) {
+      return ''
+    }
+    const firstSiteWithAddress = siteTabs.find(
+      tab => tab.type === 'site' && tab.site.address && tab.site.address.trim(),
+    )
+    if (firstSiteWithAddress) {
+      return firstSiteWithAddress.key
+    }
+    const firstSite = siteTabs.find(tab => tab.type === 'site')
+    if (firstSite) {
+      return firstSite.key
+    }
+    return siteTabs[0]?.key ?? ''
+  }, [siteTabs])
   useEffect(() => {
     if (!selectedCustomer) {
       if (customerSiteTab !== '') {
@@ -873,9 +1019,9 @@ function AppContent() {
       return
     }
     if (!siteTabs.some(tab => tab.key === customerSiteTab)) {
-      setCustomerSiteTab(siteTabs[0]?.key ?? '')
+      setCustomerSiteTab(defaultSiteTabKey)
     }
-  }, [customerSiteTab, selectedCustomer, siteTabs])
+  }, [customerSiteTab, defaultSiteTabKey, selectedCustomer, siteTabs])
   useEffect(() => {
     if (!selectedCustomer) {
       return
@@ -999,12 +1145,7 @@ function AppContent() {
     setNewContact({ name: '', position: '', phone: '', email: '', siteId: '' })
     setContactError(null)
     setShowCustomerEditor(false)
-    setCustomerEditorDraft({
-      name: selectedCustomer?.name ?? '',
-      address: selectedCustomer?.address ?? '',
-      sites: selectedCustomer ? selectedCustomer.sites.map(createSiteDraft) : [],
-      parentCustomerId: selectedCustomer?.parentCustomerId ?? '',
-    })
+    setCustomerEditorDraft(createCustomerEditorDraftState(selectedCustomer))
     setCustomerEditorError(null)
     setIsSavingCustomerEditor(false)
     closeContactEditor()
@@ -1062,12 +1203,10 @@ function AppContent() {
     const matches: GlobalSearchMatch[] = []
     db.forEach(customer => {
       const customerName = customer.name.toLowerCase()
-      const customerAddresses = [
-        customer.address,
-        ...customer.sites
-          .map(site => site.address)
-          .filter((address): address is string => typeof address === 'string'),
-      ]
+      const siteAddresses = customer.sites
+        .map(site => site.address)
+        .filter((address): address is string => typeof address === 'string')
+      const customerAddresses = [...siteAddresses, customer.address]
       const primaryAddress = customerAddresses.find(address => (address ?? '').trim())?.trim() ?? ''
       const addressMatch = customerAddresses.some(address =>
         typeof address === 'string' ? address.toLowerCase().includes(normalized) : false,
@@ -1455,12 +1594,7 @@ function AppContent() {
     if (!selectedCustomer) {
       return
     }
-    setCustomerEditorDraft({
-      name: selectedCustomer.name,
-      address: selectedCustomer.address ?? '',
-      sites: selectedCustomer.sites.map(createSiteDraft),
-      parentCustomerId: selectedCustomer.parentCustomerId ?? '',
-    })
+    setCustomerEditorDraft(createCustomerEditorDraftState(selectedCustomer))
     setCustomerEditorError(null)
     setIsSavingCustomerEditor(false)
     setShowCustomerEditor(true)
@@ -3449,6 +3583,7 @@ function AppContent() {
         : null
     const trimmedBusinessName = businessSettingsDraft.businessName.trim()
     const isDirty = !businessSettingsEqual(businessSettingsDraft, businessSettings)
+    const businessLogo = businessSettingsDraft.logo
 
     const handleToggleDay = (dayKey: BusinessDay) => {
       setBusinessSettingsDraft(prev => {
@@ -3480,10 +3615,45 @@ function AppContent() {
       setBusinessSettingsError(null)
     }
 
+    const handleLogoFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0]
+      event.target.value = ''
+      if (!file) {
+        return
+      }
+      setIsProcessingLogo(true)
+      try {
+        const logo = await createBusinessLogoFromFile(file)
+        setBusinessSettingsDraft(prev => ({ ...prev, logo }))
+        setBusinessSettingsMessage(null)
+        setBusinessSettingsError(null)
+      } catch (error) {
+        console.error('Failed to process company logo', error)
+        setBusinessSettingsError(toErrorMessage(error, 'Failed to process the company logo.'))
+      } finally {
+        setIsProcessingLogo(false)
+        if (businessLogoInputRef.current) {
+          businessLogoInputRef.current.value = ''
+        }
+      }
+    }
+
+    const handleClearLogo = () => {
+      setBusinessSettingsDraft(prev => ({ ...prev, logo: null }))
+      setBusinessSettingsMessage(null)
+      setBusinessSettingsError(null)
+      if (businessLogoInputRef.current) {
+        businessLogoInputRef.current.value = ''
+      }
+    }
+
     const handleReset = () => {
       setBusinessSettingsDraft(cloneBusinessSettings(businessSettings))
       setBusinessSettingsMessage(null)
       setBusinessSettingsError(null)
+      if (businessLogoInputRef.current) {
+        businessLogoInputRef.current.value = ''
+      }
     }
 
     const handleSave = async () => {
@@ -3508,6 +3678,9 @@ function AppContent() {
         setBusinessSettingsDraft(cloneBusinessSettings(saved))
         setBusinessSettingsMessage('Business settings updated.')
         setBusinessSettingsError(null)
+        if (businessLogoInputRef.current) {
+          businessLogoInputRef.current.value = ''
+        }
       } catch (error) {
         console.error('Failed to update business settings', error)
         setBusinessSettingsError(toErrorMessage(error, 'Failed to save business settings.'))
@@ -3517,7 +3690,7 @@ function AppContent() {
     }
 
     const disableSave =
-      isSavingBusinessSettings || !isDirty || !!validationMessage || !trimmedBusinessName
+      isSavingBusinessSettings || isProcessingLogo || !isDirty || !!validationMessage || !trimmedBusinessName
 
     return (
       <div className='space-y-6'>
@@ -3566,6 +3739,60 @@ function AppContent() {
                 }}
                 placeholder='e.g. Cobalt Systems'
                 disabled={isSavingBusinessSettings}
+              />
+            </div>
+
+            <div>
+              <Label className='text-sm font-semibold text-slate-700'>Company logo</Label>
+              <p className='mt-1 text-xs text-slate-500'>Displayed under the navigation title and on generated documents. Images are resized up to 240×120 pixels.</p>
+              <div className='mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+                <div className='flex items-center gap-4'>
+                  {businessLogo ? (
+                    <div className='flex items-center gap-3'>
+                      <div className='flex h-20 w-36 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-white/80 p-2 shadow-sm'>
+                        <img
+                          src={businessLogo.dataUrl}
+                          alt='Company logo preview'
+                          className='max-h-16 max-w-full object-contain'
+                        />
+                      </div>
+                      <span className='text-xs text-slate-500'>
+                        {Math.round(businessLogo.width)}×{Math.round(businessLogo.height)} px
+                      </span>
+                    </div>
+                  ) : (
+                    <div className='flex h-20 w-36 items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-xs text-slate-400'>
+                      No logo uploaded
+                    </div>
+                  )}
+                </div>
+                <div className='flex flex-wrap gap-2'>
+                  <Button
+                    type='button'
+                    variant='outline'
+                    onClick={() => businessLogoInputRef.current?.click()}
+                    disabled={isSavingBusinessSettings || isProcessingLogo}
+                  >
+                    {isProcessingLogo ? 'Processing…' : 'Upload logo'}
+                  </Button>
+                  {businessLogo ? (
+                    <Button
+                      type='button'
+                      variant='ghost'
+                      onClick={handleClearLogo}
+                      disabled={isSavingBusinessSettings || isProcessingLogo}
+                    >
+                      Remove
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+              <input
+                ref={businessLogoInputRef}
+                type='file'
+                accept='image/*'
+                className='hidden'
+                onChange={handleLogoFileChange}
               />
             </div>
 
@@ -4073,7 +4300,6 @@ function AppContent() {
     customerId: string,
     updates: {
       name?: string
-      address?: string | null
       contacts?: Array<{ id?: string; name?: string; position?: string; phone?: string; email?: string; siteId?: string }> | null
       sites?: Array<{ id?: string; name?: string; address?: string; notes?: string }> | null
       parentCustomerId?: string | null
@@ -4474,6 +4700,8 @@ function AppContent() {
     try {
       const info = project.info
       const pdfDataUrl = await generateCustomerSignOffPdf({
+        businessName: businessTitle,
+        businessLogo: cloneBusinessLogo(businessSettings.logo),
         projectNumber: project.number,
         customerName: customer.name,
         lineReference: info?.lineReference,
@@ -4577,6 +4805,8 @@ function AppContent() {
 
     try {
       const pdfDataUrl = await generateOnsiteReportPdf({
+        businessName: businessTitle,
+        businessLogo: cloneBusinessLogo(businessSettings.logo),
         projectNumber: project.number,
         customerName: customer.name,
         siteAddress: submission.siteAddress,
@@ -4912,7 +5142,6 @@ function AppContent() {
       return
     }
     const trimmedName = customerEditorDraft.name.trim()
-    const trimmedAddress = customerEditorDraft.address.trim()
     if (!trimmedName) {
       setCustomerEditorError('Customer name is required.')
       return
@@ -4922,30 +5151,40 @@ function AppContent() {
       return
     }
 
+    const sitePayload = customerEditorDraft.sites
+      .map(site => {
+        const name = site.name.trim()
+        const address = site.address.trim()
+        const notes = site.notes.trim()
+        if (!name && !address && !notes) {
+          return null
+        }
+        return {
+          id: site.id,
+          name: name || undefined,
+          address: address || undefined,
+          notes: notes || undefined,
+        }
+      })
+      .filter((site): site is NonNullable<typeof site> => site !== null)
+
+    if (sitePayload.length === 0) {
+      setCustomerEditorError('Add at least one site before saving.')
+      return
+    }
+    const hasAddress = sitePayload.some(site => typeof site.address === 'string' && site.address.trim())
+    if (!hasAddress) {
+      setCustomerEditorError('Enter an address for at least one site.')
+      return
+    }
+
+    const parentCustomerId = customerEditorDraft.parentCustomerId.trim()
+
     setIsSavingCustomerEditor(true)
     setCustomerEditorError(null)
     try {
-      const sitePayload = customerEditorDraft.sites
-        .map(site => {
-          const name = site.name.trim()
-          const address = site.address.trim()
-          const notes = site.notes.trim()
-          if (!name && !address && !notes) {
-            return null
-          }
-          return {
-            id: site.id,
-            name: name || undefined,
-            address: address || undefined,
-            notes: notes || undefined,
-          }
-        })
-        .filter((site): site is NonNullable<typeof site> => site !== null)
-
-      const parentCustomerId = customerEditorDraft.parentCustomerId.trim()
       await saveCustomerDetails(selectedCustomer.id, {
         name: trimmedName,
-        address: trimmedAddress ? trimmedAddress : null,
         sites: sitePayload,
         parentCustomerId: parentCustomerId && parentCustomerId !== selectedCustomer.id
           ? parentCustomerId
@@ -5497,7 +5736,6 @@ function AppContent() {
   async function createCustomer(
     data: {
       name: string
-      address?: string
       contacts?: Array<{ name?: string; position?: string; phone?: string; email?: string; siteId?: string }>
       sites?: Array<{ id: string; name?: string; address?: string; notes?: string }>
       parentCustomerId?: string
@@ -5522,7 +5760,6 @@ function AppContent() {
       .filter(contact => contact.name || contact.position || contact.phone || contact.email)
     const payload = {
       name: trimmedName,
-      address: data.address?.trim() || undefined,
       contacts: contactsPayload,
       sites: data.sites,
       parentCustomerId: data.parentCustomerId?.trim() || undefined,
@@ -5709,6 +5946,15 @@ function AppContent() {
         <CardHeader>
           <div>
             <h1 className='text-2xl font-semibold tracking-tight text-slate-900'>{businessTitle}</h1>
+            {businessSettings.logo ? (
+              <div className='mt-3 flex justify-center'>
+                <img
+                  src={businessSettings.logo.dataUrl}
+                  alt={`${businessTitle} logo`}
+                  className='mx-auto max-h-20 w-auto max-w-[200px] object-contain'
+                />
+              </div>
+            ) : null}
           </div>
         </CardHeader>
         <CardContent>
@@ -5971,6 +6217,7 @@ function AppContent() {
                       setShowNewCustomer(false)
                       setNewCustomerError(null)
                       setIsCreatingCustomer(false)
+                      setNewCust(createNewCustomerDraftState())
                     }}
                     title='Close'
                   >
@@ -6032,15 +6279,6 @@ function AppContent() {
                           disabled={!canEdit}
                         />
                       </div>
-                      <div className='md:col-span-2'>
-                        <Label>Primary Address</Label>
-                        <Input
-                          value={newCust.address}
-                          onChange={(e) => setNewCust({ ...newCust, address: (e.target as HTMLInputElement).value })}
-                          placeholder='e.g. 10 High Street, London'
-                          disabled={!canEdit}
-                        />
-                      </div>
                     </div>
 
                     <div className='space-y-3'>
@@ -6071,7 +6309,7 @@ function AppContent() {
                                   variant='ghost'
                                   className='rounded-full px-2 py-1 text-slate-500 hover:text-rose-600'
                                   onClick={() => removeNewCustomerSite(site.id)}
-                                  disabled={!canEdit}
+                                  disabled={!canEdit || newCust.sites.length <= 1}
                                 >
                                   <Trash2 size={16} />
                                 </Button>
@@ -6160,6 +6398,7 @@ function AppContent() {
                         setShowNewCustomer(false)
                         setNewCustomerError(null)
                         setIsCreatingCustomer(false)
+                        setNewCust(createNewCustomerDraftState())
                       }}
                     >
                       Cancel
@@ -6169,6 +6408,7 @@ function AppContent() {
                       disabled={isCreatingCustomer || !canEdit}
                       onClick={async () => {
                         setIsCreatingCustomer(true)
+                        setNewCustomerError(null)
                         try {
                           const sitePayload = newCust.sites
                             .map(site => {
@@ -6187,10 +6427,21 @@ function AppContent() {
                             })
                             .filter((site): site is NonNullable<typeof site> => site !== null)
 
+                          if (sitePayload.length === 0) {
+                            setNewCustomerError('Add at least one site before saving.')
+                            return
+                          }
+                          const hasAddress = sitePayload.some(
+                            site => typeof site.address === 'string' && site.address.trim(),
+                          )
+                          if (!hasAddress) {
+                            setNewCustomerError('Enter an address for at least one site.')
+                            return
+                          }
+
                           const parentCustomerId = newCust.parentCustomerId.trim()
                           const result = await createCustomer({
                             name: newCust.name,
-                            address: newCust.address,
                             contacts: [
                               {
                                 name: newCust.contactName,
@@ -6206,16 +6457,7 @@ function AppContent() {
                             setNewCustomerError(result)
                             return
                           }
-                          setNewCust({
-                            name: '',
-                            address: '',
-                            contactName: '',
-                            contactPosition: '',
-                            contactPhone: '',
-                            contactEmail: '',
-                            sites: [],
-                            parentCustomerId: '',
-                          })
+                          setNewCust(createNewCustomerDraftState())
                           setShowNewCustomer(false)
                           setNewCustomerError(null)
                         } finally {
@@ -6277,21 +6519,6 @@ function AppContent() {
                         />
                       </div>
                       <div>
-                        <Label htmlFor='edit-customer-address'>Primary Address</Label>
-                        <textarea
-                          id='edit-customer-address'
-                          value={customerEditorDraft.address}
-                          onChange={(e) =>
-                            setCustomerEditorDraft(prev => ({
-                              ...prev,
-                              address: (e.target as HTMLTextAreaElement).value,
-                            }))
-                          }
-                          placeholder='Enter address'
-                          rows={3}
-                          className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                          disabled={!canEdit || isSavingCustomerEditor}
-                        />
                       </div>
                     </div>
 
@@ -6323,7 +6550,7 @@ function AppContent() {
                                   variant='ghost'
                                   className='rounded-full px-2 py-1 text-slate-500 hover:text-rose-600'
                                   onClick={() => removeEditorSite(site.id)}
-                                  disabled={!canEdit || isSavingCustomerEditor}
+                                  disabled={!canEdit || isSavingCustomerEditor || customerEditorDraft.sites.length <= 1}
                                 >
                                   <Trash2 size={16} />
                                 </Button>

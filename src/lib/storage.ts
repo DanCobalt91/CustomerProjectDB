@@ -1,5 +1,6 @@
 import type {
   AppRole,
+  BusinessLogo,
   BusinessSettings,
   Customer,
   CustomerSite,
@@ -905,6 +906,7 @@ function createLocalStorageStorage(): StorageApi {
         acc[day] = { ...source }
         return acc
       }, {} as BusinessSettings['hours']),
+      logo: cloneBusinessLogo(base.logo),
     }
 
     if (!value || typeof value !== 'object') {
@@ -931,6 +933,27 @@ function createLocalStorageStorage(): StorageApi {
         const end = normalizeTimeOnlyValue(entryRaw.end) ?? normalized.hours[day].end
         normalized.hours[day] = { enabled, start, end }
       }
+    }
+
+    const logoValue = (raw as { logo?: unknown }).logo
+    if (!logoValue) {
+      normalized.logo = null
+    } else if (typeof logoValue === 'object') {
+      const logoRaw = logoValue as Record<string, unknown>
+      const dataUrl = toOptionalString(logoRaw.dataUrl)
+      const widthValue = typeof logoRaw.width === 'number' ? logoRaw.width : Number(logoRaw.width)
+      const heightValue = typeof logoRaw.height === 'number' ? logoRaw.height : Number(logoRaw.height)
+      const mimeTypeRaw = toOptionalString(logoRaw.mimeType)
+      const width = Number.isFinite(widthValue) ? Math.max(1, Math.round(widthValue)) : null
+      const height = Number.isFinite(heightValue) ? Math.max(1, Math.round(heightValue)) : null
+      const mimeType = mimeTypeRaw === 'image/png' ? 'image/png' : 'image/jpeg'
+      if (dataUrl && width && height) {
+        normalized.logo = { dataUrl, width, height, mimeType }
+      } else {
+        normalized.logo = null
+      }
+    } else if (logoValue === null) {
+      normalized.logo = null
     }
 
     return normalized
@@ -1505,6 +1528,18 @@ function createLocalStorageStorage(): StorageApi {
     return { ...report }
   }
 
+  function cloneBusinessLogo(logo: BusinessLogo | null): BusinessLogo | null {
+    if (!logo) {
+      return null
+    }
+    return {
+      dataUrl: logo.dataUrl,
+      width: logo.width,
+      height: logo.height,
+      mimeType: logo.mimeType,
+    }
+  }
+
   function cloneBusinessSettings(settings: BusinessSettings): BusinessSettings {
     return {
       businessName: settings.businessName,
@@ -1512,6 +1547,7 @@ function createLocalStorageStorage(): StorageApi {
         acc[day] = { ...settings.hours[day] }
         return acc
       }, {} as BusinessSettings['hours']),
+      logo: cloneBusinessLogo(settings.logo),
     }
   }
 
@@ -1811,9 +1847,13 @@ function createLocalStorageStorage(): StorageApi {
         }
       }
 
-      let nextAddress = applyNullable(customer.address, data.address)
-      if (data.address === undefined && !nextAddress && sites.length > 0) {
+      let nextAddress: string | undefined
+      if (data.address !== undefined) {
+        nextAddress = applyNullable(customer.address, data.address)
+      } else if (data.sites !== undefined) {
         nextAddress = sites[0]?.address
+      } else {
+        nextAddress = customer.address
       }
 
       const nextCustomer: Customer = {

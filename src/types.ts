@@ -82,9 +82,17 @@ export type BusinessDayHours = {
   end: string; // HH:MM (24h)
 };
 
+export type BusinessLogo = {
+  dataUrl: string;
+  width: number;
+  height: number;
+  mimeType: 'image/png' | 'image/jpeg';
+};
+
 export type BusinessSettings = {
   businessName: string;
   hours: Record<BusinessDay, BusinessDayHours>;
+  logo: BusinessLogo | null;
 };
 
 export const DEFAULT_BUSINESS_SETTINGS: BusinessSettings = {
@@ -98,6 +106,7 @@ export const DEFAULT_BUSINESS_SETTINGS: BusinessSettings = {
     saturday: { enabled: false, start: '09:00', end: '13:00' },
     sunday: { enabled: false, start: '09:00', end: '13:00' },
   },
+  logo: null,
 };
 
 export type ProjectOnsiteReport = {
