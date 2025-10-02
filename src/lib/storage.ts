@@ -72,6 +72,9 @@ type StorageApi = {
       number: string
       info?: ProjectInfo | null
       tasks?: Array<{ name: string; status?: ProjectTaskStatus; assigneeId?: string }>
+      siteId?: string | null
+      linkedSubCustomerId?: string | null
+      linkedSubCustomerSiteId?: string | null
     },
   ): Promise<Project>
   updateProject(
@@ -85,6 +88,9 @@ type StorageApi = {
       customerSignOff?: ProjectCustomerSignOff | null
       info?: ProjectInfo | null
       onsiteReports?: ProjectOnsiteReport[] | null
+      siteId?: string | null
+      linkedSubCustomerId?: string | null
+      linkedSubCustomerSiteId?: string | null
     },
   ): Promise<Project>
   deleteProject(projectId: string): Promise<void>
@@ -205,6 +211,8 @@ export function createProject(
     info?: ProjectInfo | null
     tasks?: Array<{ name: string; status?: ProjectTaskStatus; assigneeId?: string }>
     siteId?: string | null
+    linkedSubCustomerId?: string | null
+    linkedSubCustomerSiteId?: string | null
   },
 ): Promise<Project> {
   return ensureLocalStorage().createProject(customerId, data)
@@ -222,6 +230,8 @@ export function updateProject(
     info?: ProjectInfo | null
     onsiteReports?: ProjectOnsiteReport[] | null
     siteId?: string | null
+    linkedSubCustomerId?: string | null
+    linkedSubCustomerSiteId?: string | null
   },
 ): Promise<Project> {
   return ensureLocalStorage().updateProject(projectId, data)
@@ -1235,6 +1245,16 @@ function createLocalStorageStorage(): StorageApi {
       siteId = siteIdRaw
     }
 
+    const linkedSubCustomerId = toOptionalString(
+      (raw as { linkedSubCustomerId?: unknown }).linkedSubCustomerId,
+    )
+    let linkedSubCustomerSiteId = toOptionalString(
+      (raw as { linkedSubCustomerSiteId?: unknown }).linkedSubCustomerSiteId,
+    )
+    if (!linkedSubCustomerId) {
+      linkedSubCustomerSiteId = undefined
+    }
+
     return {
       id,
       number,
@@ -1242,6 +1262,8 @@ function createLocalStorageStorage(): StorageApi {
       activeSubStatus,
       note: toOptionalString(raw.note),
       siteId,
+      linkedSubCustomerId: linkedSubCustomerId ?? undefined,
+      linkedSubCustomerSiteId: linkedSubCustomerSiteId ?? undefined,
       wos: sortWOs(wos),
       documents: hasProjectDocuments(documents) ? documents : undefined,
       statusHistory:
@@ -1692,6 +1714,8 @@ function createLocalStorageStorage(): StorageApi {
       activeSubStatus: project.activeSubStatus,
       note: project.note,
       siteId: project.siteId,
+      linkedSubCustomerId: project.linkedSubCustomerId,
+      linkedSubCustomerSiteId: project.linkedSubCustomerSiteId,
       wos: project.wos.map(cloneWorkOrder),
       tasks: project.tasks ? project.tasks.map(cloneProjectTask) : [],
       documents: cloneProjectDocuments(project.documents),
@@ -2003,6 +2027,8 @@ function createLocalStorageStorage(): StorageApi {
         info?: ProjectInfo | null
         tasks?: Array<{ name: string; status?: ProjectTaskStatus; assigneeId?: string }>
         siteId?: string | null
+        linkedSubCustomerId?: string | null
+        linkedSubCustomerSiteId?: string | null
       },
     ): Promise<Project> {
       const db = loadDatabase()
@@ -2063,6 +2089,26 @@ function createLocalStorageStorage(): StorageApi {
         }
       }
 
+      let linkedSubCustomerId: string | undefined
+      let linkedSubCustomerSiteId: string | undefined
+      if (typeof data.linkedSubCustomerId === 'string') {
+        const candidateId = data.linkedSubCustomerId.trim()
+        if (candidateId) {
+          const childCustomer = db.customers.find(
+            entry => entry.id === candidateId && entry.parentCustomerId === customer.id,
+          )
+          if (childCustomer) {
+            linkedSubCustomerId = childCustomer.id
+            if (typeof data.linkedSubCustomerSiteId === 'string') {
+              const candidateSiteId = data.linkedSubCustomerSiteId.trim()
+              if (candidateSiteId && childCustomer.sites.some(site => site.id === candidateSiteId)) {
+                linkedSubCustomerSiteId = candidateSiteId
+              }
+            }
+          }
+        }
+      }
+
       const project: Project = {
         id: createId(),
         number: normalizedNumber,
@@ -2070,6 +2116,8 @@ function createLocalStorageStorage(): StorageApi {
         activeSubStatus: DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
         note: undefined,
         siteId,
+        linkedSubCustomerId,
+        linkedSubCustomerSiteId,
         wos: [],
         tasks: initialTasks,
         documents: undefined,
@@ -2253,6 +2301,79 @@ function createLocalStorageStorage(): StorageApi {
         }
       }
 
+      let nextLinkedSubCustomerId = project.linkedSubCustomerId
+      let nextLinkedSubCustomerSiteId = project.linkedSubCustomerSiteId
+      if ((data as { linkedSubCustomerId?: string | null }).linkedSubCustomerId !== undefined) {
+        const requestedLinkedId = (data as { linkedSubCustomerId?: string | null }).linkedSubCustomerId
+        if (requestedLinkedId === null) {
+          nextLinkedSubCustomerId = undefined
+          nextLinkedSubCustomerSiteId = undefined
+        } else if (typeof requestedLinkedId === 'string') {
+          const trimmedLinkedId = requestedLinkedId.trim()
+          if (trimmedLinkedId) {
+            const childCustomer = db.customers.find(
+              entry => entry.id === trimmedLinkedId && entry.parentCustomerId === customer.id,
+            )
+            if (childCustomer) {
+              nextLinkedSubCustomerId = childCustomer.id
+              if ((data as { linkedSubCustomerSiteId?: string | null }).linkedSubCustomerSiteId !== undefined) {
+                const requestedLinkedSiteId = (data as { linkedSubCustomerSiteId?: string | null })
+                  .linkedSubCustomerSiteId
+                if (requestedLinkedSiteId === null) {
+                  nextLinkedSubCustomerSiteId = undefined
+                } else if (typeof requestedLinkedSiteId === 'string') {
+                  const trimmedLinkedSiteId = requestedLinkedSiteId.trim()
+                  if (
+                    trimmedLinkedSiteId &&
+                    childCustomer.sites.some(site => site.id === trimmedLinkedSiteId)
+                  ) {
+                    nextLinkedSubCustomerSiteId = trimmedLinkedSiteId
+                  } else {
+                    nextLinkedSubCustomerSiteId = undefined
+                  }
+                }
+              } else {
+                nextLinkedSubCustomerSiteId = childCustomer.sites.some(
+                  site => site.id === (nextLinkedSubCustomerSiteId ?? ''),
+                )
+                  ? nextLinkedSubCustomerSiteId
+                  : undefined
+              }
+            } else {
+              nextLinkedSubCustomerId = undefined
+              nextLinkedSubCustomerSiteId = undefined
+            }
+          } else {
+            nextLinkedSubCustomerId = undefined
+            nextLinkedSubCustomerSiteId = undefined
+          }
+        }
+      } else if (
+        (data as { linkedSubCustomerSiteId?: string | null }).linkedSubCustomerSiteId !== undefined
+      ) {
+        const requestedLinkedSiteId = (data as { linkedSubCustomerSiteId?: string | null })
+          .linkedSubCustomerSiteId
+        if (requestedLinkedSiteId === null) {
+          nextLinkedSubCustomerSiteId = undefined
+        } else if (
+          typeof requestedLinkedSiteId === 'string' &&
+          nextLinkedSubCustomerId &&
+          requestedLinkedSiteId.trim()
+        ) {
+          const childCustomer = db.customers.find(
+            entry => entry.id === nextLinkedSubCustomerId && entry.parentCustomerId === customer.id,
+          )
+          if (
+            childCustomer &&
+            childCustomer.sites.some(site => site.id === requestedLinkedSiteId.trim())
+          ) {
+            nextLinkedSubCustomerSiteId = requestedLinkedSiteId.trim()
+          } else {
+            nextLinkedSubCustomerSiteId = undefined
+          }
+        }
+      }
+
       const nextProject: Project = {
         ...project,
         status: nextStatus,
@@ -2264,6 +2385,8 @@ function createLocalStorageStorage(): StorageApi {
         info: nextInfo,
         onsiteReports: nextOnsiteReports,
         siteId: nextSiteId,
+        linkedSubCustomerId: nextLinkedSubCustomerId,
+        linkedSubCustomerSiteId: nextLinkedSubCustomerSiteId,
       }
 
       const updatedProjects = [...customer.projects]

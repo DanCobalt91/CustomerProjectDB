@@ -212,7 +212,6 @@ type CustomerSiteTabKey = string
 
 type CustomerSiteTab =
   | { key: CustomerSiteTabKey; label: string; type: 'site'; site: CustomerSite }
-  | { key: CustomerSiteTabKey; label: string; type: 'child'; customer: Customer }
   | { key: CustomerSiteTabKey; label: string; type: 'unassigned' }
 
 const UNASSIGNED_SITE_TAB_KEY: CustomerSiteTabKey = 'unassigned'
@@ -747,7 +746,9 @@ function AppContent() {
   const [isSavingCustomerEditor, setIsSavingCustomerEditor] = useState(false)
   const [customerSiteTab, setCustomerSiteTab] = useState<CustomerSiteTabKey>('')
   const [activeContactIdsByTab, setActiveContactIdsByTab] = useState<Record<string, string | null>>({})
-  const [customerProjectSection, setCustomerProjectSection] = useState<'projects' | 'lines'>('projects')
+  const [customerProjectSection, setCustomerProjectSection] = useState<'projects' | 'lines' | 'subCustomers'>(
+    'projects',
+  )
   const [customerProjectsTab, setCustomerProjectsTab] = useState<'active' | 'complete'>('active')
   const [isCompletedProjectsCollapsed, setIsCompletedProjectsCollapsed] = useState(true)
 
@@ -756,6 +757,8 @@ function AppContent() {
   const [newProjectCustomerId, setNewProjectCustomerId] = useState<string>('')
   const [newProjectNumber, setNewProjectNumber] = useState('')
   const [newProjectSiteId, setNewProjectSiteId] = useState('')
+  const [newProjectLinkedSubCustomerId, setNewProjectLinkedSubCustomerId] = useState('')
+  const [newProjectLinkedSubCustomerSiteId, setNewProjectLinkedSubCustomerSiteId] = useState('')
   const [newProjectError, setNewProjectError] = useState<string | null>(null)
   const [isCreatingProject, setIsCreatingProject] = useState(false)
   const [newProjectInfoDraft, setNewProjectInfoDraft] = useState<ProjectInfoDraft>(() =>
@@ -941,17 +944,22 @@ function AppContent() {
     })
 
     const hasUnassignedContacts = selectedCustomer.contacts.some(contact => !contact.siteId)
-    const hasUnassignedProjects = selectedCustomer.projects.some(project => !project.siteId)
+    let hasUnassignedProjects = selectedCustomer.projects.some(project => !project.siteId)
+    if (selectedCustomer.parentCustomerId) {
+      const parent = customerLookup.get(selectedCustomer.parentCustomerId) ?? null
+      if (parent) {
+        hasUnassignedProjects ||= parent.projects.some(
+          project => project.linkedSubCustomerId === selectedCustomer.id && !project.linkedSubCustomerSiteId,
+        )
+      }
+    }
+
     if (hasUnassignedContacts || hasUnassignedProjects) {
       tabs.push({ key: UNASSIGNED_SITE_TAB_KEY, label: 'Unassigned', type: 'unassigned' })
     }
 
-    childCustomers.forEach(child => {
-      tabs.push({ key: `child-${child.id}`, label: child.name, type: 'child', customer: child })
-    })
-
     return tabs
-  }, [childCustomers, selectedCustomer])
+  }, [customerLookup, selectedCustomer])
   const contactsBySiteTab = useMemo(() => {
     if (!selectedCustomer) {
       return {} as Record<string, CustomerContact[]>
@@ -970,16 +978,56 @@ function AppContent() {
     if (!selectedCustomer) {
       return {} as Record<string, Project[]>
     }
+
     const map: Record<string, Project[]> = {}
-    selectedCustomer.sites.forEach(site => {
-      map[site.id] = selectedCustomer.projects.filter(project => project.siteId === site.id)
-    })
-    const unassignedProjects = selectedCustomer.projects.filter(project => !project.siteId)
-    if (unassignedProjects.length > 0) {
-      map[UNASSIGNED_SITE_TAB_KEY] = unassignedProjects
+    const ensureSiteBucket = (siteId: string) => {
+      if (!map[siteId]) {
+        map[siteId] = []
+      }
     }
+    const addToUnassigned = (project: Project) => {
+      ensureSiteBucket(UNASSIGNED_SITE_TAB_KEY)
+      map[UNASSIGNED_SITE_TAB_KEY].push(project)
+    }
+    const addProjectToSite = (project: Project, siteId?: string) => {
+      if (siteId && map[siteId]) {
+        map[siteId].push(project)
+      } else {
+        addToUnassigned(project)
+      }
+    }
+
+    selectedCustomer.sites.forEach(site => {
+      map[site.id] = []
+    })
+
+    selectedCustomer.projects.forEach(project => {
+      addProjectToSite(project, project.siteId)
+    })
+
+    if (selectedCustomer.parentCustomerId) {
+      const parent = customerLookup.get(selectedCustomer.parentCustomerId) ?? null
+      if (parent) {
+        parent.projects.forEach(project => {
+          if (project.linkedSubCustomerId === selectedCustomer.id) {
+            addProjectToSite(project, project.linkedSubCustomerSiteId)
+          }
+        })
+      }
+    }
+
+    if ((map[UNASSIGNED_SITE_TAB_KEY] ?? []).length === 0) {
+      delete map[UNASSIGNED_SITE_TAB_KEY]
+    }
+
+    const compareProjects = (a: Project, b: Project) =>
+      a.number.localeCompare(b.number, undefined, { sensitivity: 'base', numeric: true })
+    for (const key of Object.keys(map)) {
+      map[key] = map[key].slice().sort(compareProjects)
+    }
+
     return map
-  }, [selectedCustomer])
+  }, [customerLookup, selectedCustomer])
   const parentCustomer = useMemo(() => {
     if (!selectedCustomer?.parentCustomerId) {
       return null
@@ -988,11 +1036,9 @@ function AppContent() {
   }, [customerLookup, selectedCustomer?.parentCustomerId])
   const activeSiteTab = siteTabs.find(tab => tab.key === customerSiteTab) ?? null
   const activeCustomerSite = activeSiteTab?.type === 'site' ? activeSiteTab.site : null
-  const activeChildCustomer = activeSiteTab?.type === 'child' ? activeSiteTab.customer : null
   const selectedCustomerPrimarySite = selectedCustomerSites.find(site => site.address?.trim()) ?? null
   const selectedCustomerAddressForMap =
     (activeCustomerSite?.address?.trim() ||
-      (activeChildCustomer ? resolveCustomerPrimaryAddress(activeChildCustomer) : null) ||
       selectedCustomerPrimarySite?.address?.trim() ||
       selectedCustomer?.address?.trim() ||
       null)
@@ -1038,13 +1084,6 @@ function AppContent() {
       let changed = false
       const next: Record<string, string | null> = {}
       for (const tab of siteTabs) {
-        if (tab.type === 'child') {
-          if ((prev[tab.key] ?? null) !== null) {
-            changed = true
-          }
-          next[tab.key] = null
-          continue
-        }
         const contactsForTab = contactsBySiteTab[tab.key] ?? []
         const previous = prev[tab.key] ?? null
         const selected = previous && contactsForTab.some(contact => contact.id === previous)
@@ -1062,10 +1101,15 @@ function AppContent() {
     })
   }, [selectedCustomer, siteTabs, contactsBySiteTab])
   useEffect(() => {
-    if (showNewContactForm && (!activeSiteTab || activeSiteTab.type === 'child')) {
+    if (showNewContactForm && !activeSiteTab) {
       setShowNewContactForm(false)
     }
   }, [activeSiteTab, showNewContactForm])
+  useEffect(() => {
+    if (customerProjectSection === 'subCustomers' && childCustomers.length === 0) {
+      setCustomerProjectSection('projects')
+    }
+  }, [childCustomers.length, customerProjectSection])
   const sortedCustomers = useMemo(() => {
     const customers = [...db]
     customers.sort((a, b) => {
@@ -1123,6 +1167,8 @@ function AppContent() {
           ? options.siteId
           : ''
       setNewProjectSiteId(resolvedSiteId)
+      setNewProjectLinkedSubCustomerId('')
+      setNewProjectLinkedSubCustomerSiteId('')
       setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, defaults))
       setNewProjectTaskSelections(createDefaultTaskSelectionMap())
       setIsCreatingProject(false)
@@ -1138,6 +1184,18 @@ function AppContent() {
       sortedCustomers.find(customer => customer.id === newProjectCustomerId) ?? sortedCustomers[0] ?? null
     )
   }, [sortedCustomers, newProjectCustomerId, hasCustomers])
+  const newProjectSubCustomers = useMemo(() => {
+    if (!newProjectCustomer) {
+      return [] as Customer[]
+    }
+    return sortedCustomers.filter(customer => customer.parentCustomerId === newProjectCustomer.id)
+  }, [newProjectCustomer, sortedCustomers])
+  const selectedLinkedSubCustomer = useMemo(() => {
+    if (!newProjectLinkedSubCustomerId) {
+      return null
+    }
+    return newProjectSubCustomers.find(customer => customer.id === newProjectLinkedSubCustomerId) ?? null
+  }, [newProjectLinkedSubCustomerId, newProjectSubCustomers])
   const currentUser = useMemo<User>(() => {
     if (users.length === 0) {
       return LOCAL_WORKSPACE_USER
@@ -1173,12 +1231,30 @@ function AppContent() {
   useEffect(() => {
     if (!newProjectCustomer) {
       setNewProjectSiteId('')
+      setNewProjectLinkedSubCustomerId('')
+      setNewProjectLinkedSubCustomerSiteId('')
       return
     }
     if (!newProjectCustomer.sites.some(site => site.id === newProjectSiteId)) {
       setNewProjectSiteId('')
     }
-  }, [newProjectCustomer, newProjectSiteId])
+    if (!newProjectSubCustomers.some(child => child.id === newProjectLinkedSubCustomerId)) {
+      setNewProjectLinkedSubCustomerId('')
+      setNewProjectLinkedSubCustomerSiteId('')
+    } else if (
+      selectedLinkedSubCustomer &&
+      !selectedLinkedSubCustomer.sites.some(site => site.id === newProjectLinkedSubCustomerSiteId)
+    ) {
+      setNewProjectLinkedSubCustomerSiteId('')
+    }
+  }, [
+    newProjectCustomer,
+    newProjectSiteId,
+    newProjectSubCustomers,
+    newProjectLinkedSubCustomerId,
+    newProjectLinkedSubCustomerSiteId,
+    selectedLinkedSubCustomer,
+  ])
 
   useEffect(() => {
     if (!contactEditor) {
@@ -1567,6 +1643,16 @@ function AppContent() {
       newProjectSiteId && projectCustomer?.sites.some(site => site.id === newProjectSiteId)
         ? newProjectSiteId
         : ''
+    const linkedSubCustomerId = newProjectLinkedSubCustomerId.trim()
+    const associatedSubCustomer = linkedSubCustomerId
+      ? newProjectSubCustomers.find(child => child.id === linkedSubCustomerId) ?? null
+      : null
+    const validLinkedSubCustomerId = associatedSubCustomer ? associatedSubCustomer.id : ''
+    const validLinkedSubCustomerSiteId = associatedSubCustomer
+      ? associatedSubCustomer.sites.some(site => site.id === newProjectLinkedSubCustomerSiteId)
+        ? newProjectLinkedSubCustomerSiteId
+        : ''
+      : ''
 
     const { info, error: infoError } = parseProjectInfoDraft(newProjectInfoDraft, users)
     if (infoError) {
@@ -1588,6 +1674,8 @@ function AppContent() {
         info: info ?? null,
         tasks: initialTasks,
         siteId: validSiteId || undefined,
+        linkedSubCustomerId: validLinkedSubCustomerId || undefined,
+        linkedSubCustomerSiteId: validLinkedSubCustomerSiteId || undefined,
       })
       if (typeof result === 'string') {
         setNewProjectError(result)
@@ -1597,6 +1685,8 @@ function AppContent() {
       setShowNewProject(false)
       setNewProjectNumber('')
       setNewProjectSiteId('')
+      setNewProjectLinkedSubCustomerId('')
+      setNewProjectLinkedSubCustomerSiteId('')
       setNewProjectError(null)
       setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, computeProjectDateDefaults(businessSettings)))
       setNewProjectTaskSelections(createDefaultTaskSelectionMap())
@@ -1757,10 +1847,7 @@ function AppContent() {
       )
     }
 
-    const contactsForActiveTab =
-      activeSiteTab && activeSiteTab.type !== 'child'
-        ? contactsBySiteTab[customerSiteTab] ?? []
-        : []
+    const contactsForActiveTab = activeSiteTab ? contactsBySiteTab[customerSiteTab] ?? [] : []
     const storedActiveContactId = activeContactIdsByTab[customerSiteTab] ?? null
     const activeContactId =
       storedActiveContactId && contactsForActiveTab.some(contact => contact.id === storedActiveContactId)
@@ -1768,8 +1855,7 @@ function AppContent() {
         : contactsForActiveTab[0]?.id ?? null
     const activeContact = contactsForActiveTab.find(contact => contact.id === activeContactId) ?? null
     const hasContacts = contactsForActiveTab.length > 0
-    const projectsForCurrentSite =
-      activeSiteTab && activeSiteTab.type !== 'child' ? projectsBySiteTab[customerSiteTab] ?? [] : []
+    const projectsForCurrentSite = activeSiteTab ? projectsBySiteTab[customerSiteTab] ?? [] : []
     const activeProjects = projectsForCurrentSite.filter(project => project.status === 'Active')
     const completedProjects = projectsForCurrentSite.filter(project => project.status === 'Complete')
     const projectsForTab = customerProjectsTab === 'active' ? activeProjects : completedProjects
@@ -1785,16 +1871,13 @@ function AppContent() {
         count: completedProjects.length,
       },
     }
-    if (!activeSiteTab || activeSiteTab.type === 'child') {
-      const emptyMessage = !activeSiteTab
-        ? 'Select a site to view projects.'
-        : 'View projects on the sub customer profile.'
+    if (!activeSiteTab) {
+      const emptyMessage = 'Select a site to view projects.'
       projectTabCopy.active.empty = emptyMessage
       projectTabCopy.complete.empty = emptyMessage
     }
     const activeTabCopy = projectTabCopy[customerProjectsTab]
-    const canViewLines = !!activeSiteTab && activeSiteTab.type !== 'child'
-    const lineItems = canViewLines
+    const parentLineItems = activeSiteTab
       ? projectsForCurrentSite.flatMap(project => {
           const machines = project.info?.machines ?? []
           return machines.map((machine, index) => ({
@@ -1804,10 +1887,34 @@ function AppContent() {
             toolSerialNumbers: [...machine.toolSerialNumbers],
             project,
             machineIndex: index,
+            customerId: selectedCustomer.id,
+            customerName: selectedCustomer.name,
+            ownerType: 'selected' as const,
           }))
         })
       : []
+    const childLineItems = childCustomers.flatMap(child =>
+      child.projects.flatMap(project => {
+        const machines = project.info?.machines ?? []
+        return machines.map((machine, index) => ({
+          id: `child-${child.id}-${project.id}-${index}`,
+          machineSerialNumber: machine.machineSerialNumber,
+          lineReference: machine.lineReference ?? '',
+          toolSerialNumbers: [...machine.toolSerialNumbers],
+          project,
+          machineIndex: index,
+          customerId: child.id,
+          customerName: child.name,
+          ownerType: 'child' as const,
+        }))
+      }),
+    )
+    const lineItems = [...parentLineItems, ...childLineItems]
     lineItems.sort((a, b) => {
+      const customerCompare = a.customerName.localeCompare(b.customerName, undefined, { sensitivity: 'base' })
+      if (customerCompare !== 0) {
+        return customerCompare
+      }
       const machineCompare = a.machineSerialNumber.trim().localeCompare(b.machineSerialNumber.trim(), undefined, {
         sensitivity: 'base',
       })
@@ -1816,6 +1923,25 @@ function AppContent() {
       }
       return a.project.number.localeCompare(b.project.number, undefined, { sensitivity: 'base' })
     })
+    const childLineCountByCustomerId = new Map<string, number>()
+    for (const item of childLineItems) {
+      childLineCountByCustomerId.set(item.customerId, (childLineCountByCustomerId.get(item.customerId) ?? 0) + 1)
+    }
+    for (const parentItem of parentLineItems) {
+      const linkedId = parentItem.project.linkedSubCustomerId
+      if (!linkedId) {
+        continue
+      }
+      childLineCountByCustomerId.set(linkedId, (childLineCountByCustomerId.get(linkedId) ?? 0) + 1)
+    }
+    const canViewLines = !!activeSiteTab || childLineItems.length > 0
+    const customerSectionTabs: Array<{ value: 'subCustomers' | 'projects' | 'lines'; label: string; count: number }> = [
+      ...(childCustomers.length > 0
+        ? [{ value: 'subCustomers' as const, label: 'Sub-customers', count: childCustomers.length }]
+        : []),
+      { value: 'projects', label: 'Projects', count: projectsForCurrentSite.length },
+      { value: 'lines', label: 'Lines', count: lineItems.length },
+    ]
 
     return (
       <Card className='panel'>
@@ -1928,23 +2054,6 @@ function AppContent() {
                         </Button>
                       )
                     }
-                    if (activeSiteTab.type === 'child') {
-                      const address = resolveCustomerPrimaryAddress(activeSiteTab.customer)
-                      if (!address) {
-                        return null
-                      }
-                      return (
-                        <Button
-                          variant='outline'
-                          onClick={() => navigator.clipboard.writeText(address)}
-                          className='rounded-full px-2 py-2'
-                          title='Copy sub customer address'
-                        >
-                          <Copy size={16} />
-                          <span className='sr-only'>Copy sub customer address</span>
-                        </Button>
-                      )
-                    }
                     return null
                   })()}
                 </div>
@@ -2002,60 +2111,6 @@ function AppContent() {
                       </div>
                     </div>
                   </div>
-                ) : activeSiteTab.type === 'child' ? (
-                  (() => {
-                    if (!activeChildCustomer) {
-                      return (
-                        <div className='rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
-                          Sub customer details unavailable.
-                          </div>
-                        )
-                      }
-                      const childAddress = resolveCustomerPrimaryAddress(activeChildCustomer)
-                      return (
-                        <div className='space-y-3'>
-                          <div className='space-y-3 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'>
-                            <div className='flex items-start justify-between gap-2'>
-                              <div>
-                                <div className='text-sm font-semibold text-slate-800'>{activeChildCustomer.name}</div>
-                                {childAddress ? (
-                                  <div className='text-xs text-slate-500'>{childAddress.split('\n')[0]}</div>
-                                ) : null}
-                              </div>
-                              <Button
-                                type='button'
-                                variant='outline'
-                                className='rounded-full px-3 py-1 text-xs font-medium'
-                                onClick={() => {
-                                  setSelectedCustomerId(activeChildCustomer.id)
-                                  setActivePage('customerDetail')
-                                }}
-                              >
-                                View customer
-                              </Button>
-                            </div>
-                            <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
-                              {childAddress ? (
-                                <span className='block whitespace-pre-wrap break-words text-slate-800'>{childAddress}</span>
-                              ) : (
-                                <span className='text-slate-400'>No address provided.</span>
-                              )}
-                            </div>
-                            {childAddress ? (
-                              <div className='overflow-hidden rounded-xl border border-slate-200/80 shadow-sm'>
-                                <iframe
-                                  title={`Map preview for ${activeChildCustomer.name}`}
-                                  src={`https://maps.google.com/maps?q=${encodeURIComponent(childAddress)}&z=15&output=embed`}
-                                  loading='lazy'
-                                  className='h-40 w-full border-0'
-                                  referrerPolicy='no-referrer-when-downgrade'
-                                />
-                              </div>
-                            ) : null}
-                          </div>
-                        </div>
-                      )
-                    })()
                 ) : (
                   <div className='space-y-3'>
                     <div className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'>
@@ -2069,7 +2124,7 @@ function AppContent() {
                   </div>
                 )}
               </div>
-                {activeSiteTab?.type !== 'child' && selectedCustomerAddressForMap ? (
+                {selectedCustomerAddressForMap ? (
                   <div className='mt-4 overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
                     <iframe
                       title={`Map preview for ${selectedCustomer.name}`}
@@ -2090,14 +2145,13 @@ function AppContent() {
                   <Button
                     variant='outline'
                     onClick={() => {
-                      if (!activeSiteTab || activeSiteTab.type === 'child') {
+                      if (!activeSiteTab) {
                         return
                       }
                       setShowNewContactForm(prev => {
                         const next = !prev
                         if (next) {
-                          const defaultSiteId =
-                            activeSiteTab?.type === 'site' ? activeSiteTab.site.id : ''
+                          const defaultSiteId = activeSiteTab.type === 'site' ? activeSiteTab.site.id : ''
                           setNewContact({ name: '', position: '', phone: '', email: '', siteId: defaultSiteId })
                         } else {
                           setNewContact({ name: '', position: '', phone: '', email: '', siteId: '' })
@@ -2111,13 +2165,11 @@ function AppContent() {
                         ? 'Read-only access'
                         : !activeSiteTab
                         ? 'Select a site to manage contacts'
-                        : activeSiteTab.type === 'child'
-                        ? 'Manage contacts on the sub customer page'
                         : showNewContactForm
                         ? 'Cancel adding contact'
                         : 'Add contact'
                     }
-                    disabled={!canEdit || !activeSiteTab || activeSiteTab.type === 'child'}
+                    disabled={!canEdit || !activeSiteTab}
                   >
                     {showNewContactForm ? (
                       <>
@@ -2231,11 +2283,7 @@ function AppContent() {
                 ) : (
                   !showNewContactForm && (
                     <p className='mt-4 text-sm text-slate-500'>
-                      {activeSiteTab?.type === 'child'
-                        ? 'Manage contacts on the sub customer profile.'
-                        : !activeSiteTab
-                        ? 'Select a site to view contacts.'
-                        : 'No contacts yet.'}
+                      {!activeSiteTab ? 'Select a site to view contacts.' : 'No contacts yet.'}
                     </p>
                   )
                 )}
@@ -2342,10 +2390,7 @@ function AppContent() {
           <div className='mt-8 space-y-4'>
             <div className='flex flex-wrap items-center justify-between gap-2'>
               <div className='flex flex-wrap items-center gap-2'>
-                {[
-                  { value: 'projects' as const, label: 'Projects', count: projectsForCurrentSite.length },
-                  { value: 'lines' as const, label: 'Lines', count: lineItems.length },
-                ].map(tab => {
+                {customerSectionTabs.map(tab => {
                   const isActive = customerProjectSection === tab.value
                   return (
                     <button
@@ -2370,7 +2415,7 @@ function AppContent() {
                 <Button
                   variant='outline'
                   onClick={() => {
-                    if (!activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer) {
+                    if (!activeSiteTab || !selectedCustomer) {
                       return
                     }
                     const preferredSiteId =
@@ -2382,11 +2427,9 @@ function AppContent() {
                       ? 'Read-only access'
                       : !activeSiteTab
                       ? 'Select a site to manage projects'
-                      : activeSiteTab.type === 'child'
-                      ? 'Manage projects on the sub customer page'
                       : 'Add project'
                   }
-                  disabled={!canEdit || !activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer}
+                  disabled={!canEdit || !activeSiteTab || !selectedCustomer}
                 >
                   <Plus size={16} /> Add Project
                 </Button>
@@ -2394,7 +2437,7 @@ function AppContent() {
                 <Button
                   variant='outline'
                   onClick={() => {
-                    if (!activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer) {
+                    if (!activeSiteTab || !selectedCustomer) {
                       return
                     }
                     if (projectsForCurrentSite.length === 0) {
@@ -2417,8 +2460,6 @@ function AppContent() {
                       ? 'Read-only access'
                       : !activeSiteTab
                       ? 'Select a site to record machines'
-                      : activeSiteTab.type === 'child'
-                      ? 'Manage machines on the sub customer page'
                       : projectsForCurrentSite.length === 0
                       ? 'Create a project before adding machines'
                       : 'Add machine'
@@ -2426,7 +2467,6 @@ function AppContent() {
                   disabled={
                     !canEdit ||
                     !activeSiteTab ||
-                    activeSiteTab.type === 'child' ||
                     !selectedCustomer ||
                     projectsForCurrentSite.length === 0
                   }
@@ -2436,7 +2476,58 @@ function AppContent() {
               )}
             </div>
 
-            {customerProjectSection === 'projects' ? (
+            {customerProjectSection === 'subCustomers' ? (
+              <div className='space-y-3'>
+                {childCustomers.length === 0 ? (
+                  <div className='text-sm text-slate-500'>No sub-customers recorded.</div>
+                ) : (
+                  childCustomers.map(child => {
+                    const address = resolveCustomerPrimaryAddress(child)
+                    const machineCount = childLineCountByCustomerId.get(child.id) ?? 0
+                    return (
+                      <Card key={child.id} className='panel'>
+                        <CardHeader className='flex flex-col gap-3 border-b-0 sm:flex-row sm:items-center sm:justify-between'>
+                          <div>
+                            <div className='text-lg font-semibold text-slate-800'>{child.name}</div>
+                            {address ? (
+                              <p className='text-sm text-slate-500'>{address.split('\n')[0]}</p>
+                            ) : (
+                              <p className='text-sm text-slate-500'>No primary address recorded.</p>
+                            )}
+                          </div>
+                          <div className='flex flex-wrap items-center gap-2'>
+                            <div className='flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700'>
+                              <span>Projects:</span>
+                              <span className='font-semibold text-slate-900'>{child.projects.length}</span>
+                            </div>
+                            <div className='flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700'>
+                              <span>Lines:</span>
+                              <span className='font-semibold text-slate-900'>{machineCount}</span>
+                            </div>
+                            <Button
+                              variant='outline'
+                              onClick={() => {
+                                setSelectedCustomerId(child.id)
+                                setActivePage('customerDetail')
+                              }}
+                            >
+                              <ChevronRight size={16} /> View customer
+                            </Button>
+                          </div>
+                        </CardHeader>
+                        {address ? (
+                          <CardContent>
+                            <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                              <span className='block whitespace-pre-wrap break-words text-slate-800'>{address}</span>
+                            </div>
+                          </CardContent>
+                        ) : null}
+                      </Card>
+                    )
+                  })
+                )}
+              </div>
+            ) : customerProjectSection === 'projects' ? (
               <>
                 <div className='flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2'>
                   {([
@@ -2473,6 +2564,12 @@ function AppContent() {
                       const statusBucket = resolveProjectStatusBucket(project)
                       const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
                       const statusLabel = formatProjectStatus(project.status, project.activeSubStatus)
+                      const linkedSubCustomer = project.linkedSubCustomerId
+                        ? customerLookup.get(project.linkedSubCustomerId) ?? null
+                        : null
+                      const linkedSubCustomerSite = linkedSubCustomer
+                        ? linkedSubCustomer.sites.find(site => site.id === project.linkedSubCustomerSiteId)
+                        : null
                       return (
                         <Card key={project.id} className='panel'>
                           <CardHeader className='flex-col items-start gap-4 border-b-0 sm:flex-row sm:items-center sm:gap-3'>
@@ -2491,6 +2588,18 @@ function AppContent() {
                                 </span>
                               </div>
                               {projectNote ? <p className='text-sm text-slate-500'>{projectNote}</p> : null}
+                              {linkedSubCustomer ? (
+                                <p className='text-xs text-slate-500'>
+                                  Associated with {linkedSubCustomer.name}
+                                  {linkedSubCustomerSite
+                                    ? ` — ${
+                                        linkedSubCustomerSite.name?.trim() ||
+                                        linkedSubCustomerSite.address?.trim() ||
+                                        'Site'
+                                      }`
+                                    : ''}
+                                </p>
+                              ) : null}
                             </div>
                             <div className='flex flex-wrap items-center gap-2 sm:ml-auto'>
                               <Button
@@ -2529,16 +2638,17 @@ function AppContent() {
                   <div className='text-sm text-slate-500'>
                     {!activeSiteTab
                       ? 'Select a site to view machines.'
-                      : 'View machines on the sub customer page.'}
+                      : 'No machines available for this site yet.'}
                   </div>
                 ) : lineItems.length === 0 ? (
-                  <div className='text-sm text-slate-500'>No machines recorded for this site yet.</div>
+                  <div className='text-sm text-slate-500'>No machines recorded yet.</div>
                 ) : (
                     <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
                       <div className='overflow-x-auto'>
                         <table className='min-w-full divide-y divide-slate-200 bg-white text-sm text-slate-700'>
                           <thead className='bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500'>
                             <tr>
+                              <th scope='col' className='px-4 py-3 text-left font-semibold'>Customer</th>
                               <th scope='col' className='px-4 py-3 text-left font-semibold'>Machine Serial</th>
                               <th scope='col' className='px-4 py-3 text-left font-semibold'>Line No/Name</th>
                               <th scope='col' className='px-4 py-3 text-left font-semibold'>Tool Serials</th>
@@ -2553,8 +2663,16 @@ function AppContent() {
                               const statusLabel = formatProjectStatus(item.project.status, item.project.activeSubStatus)
                               const machineLabel = item.machineSerialNumber.trim() || 'Not specified'
                               const lineLabel = item.lineReference?.trim() || '—'
+                              const isChildOwner = item.ownerType === 'child'
+                              const linkedOwner = item.project.linkedSubCustomerId
+                                ? customerLookup.get(item.project.linkedSubCustomerId) ?? null
+                                : null
+                              const linkedOwnerSite = linkedOwner
+                                ? linkedOwner.sites.find(site => site.id === item.project.linkedSubCustomerSiteId)
+                                : null
                               return (
                                 <tr key={item.id} className='hover:bg-slate-50/70'>
+                                  <td className='whitespace-nowrap px-4 py-3 text-slate-800'>{item.customerName}</td>
                                   <td className='whitespace-nowrap px-4 py-3 font-medium text-slate-800'>
                                     {machineLabel}
                                   </td>
@@ -2563,18 +2681,18 @@ function AppContent() {
                                     {item.toolSerialNumbers.length > 0 ? (
                                       <div className='flex flex-wrap gap-1'>
                                         {item.toolSerialNumbers.map((tool, index) => (
-                                        <span
-                                          key={`${item.id}-tool-${index}`}
-                                          className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700'
-                                        >
-                                          {tool}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <span className='text-xs text-slate-400'>No tools recorded</span>
-                                  )}
-                                </td>
+                                          <span
+                                            key={`${item.id}-tool-${index}`}
+                                            className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700'
+                                          >
+                                            {tool}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <span className='text-xs text-slate-400'>No tools recorded</span>
+                                    )}
+                                  </td>
                                   <td className='px-4 py-3'>
                                     <div className='flex flex-col gap-1'>
                                       <span className='font-semibold text-slate-800'>Project: {item.project.number}</span>
@@ -2593,7 +2711,7 @@ function AppContent() {
                                         size='sm'
                                         variant='outline'
                                         onClick={() => {
-                                          setSelectedCustomerId(selectedCustomer.id)
+                                          setSelectedCustomerId(item.customerId)
                                           setSelectedProjectId(item.project.id)
                                           setActivePage('projectDetail')
                                         }}
@@ -2601,34 +2719,59 @@ function AppContent() {
                                         <ChevronRight size={16} /> View project
                                       </Button>
                                     </div>
-                                    </div>
+                                    {linkedOwner ? (
+                                      <span className='text-xs text-slate-500'>
+                                        Associated with {linkedOwner.name}
+                                        {linkedOwnerSite
+                                          ? ` — ${
+                                              linkedOwnerSite.name?.trim() ||
+                                              linkedOwnerSite.address?.trim() ||
+                                              'Site'
+                                            }`
+                                          : ''}
+                                      </span>
+                                    ) : null}
+                                  </div>
                                   </td>
                                   <td className='px-4 py-3'>
-                                    <Button
-                                      size='sm'
-                                      variant='ghost'
-                                      onClick={() => {
-                                        if (!selectedCustomer) {
-                                          return
-                                        }
-                                        setMachineEditor({
-                                          mode: 'edit',
-                                          customerId: selectedCustomer.id,
-                                          siteTabKey: customerSiteTab,
-                                          projectId: item.project.id,
-                                          machineIndex: item.machineIndex,
-                                          machineSerialNumber: item.machineSerialNumber,
-                                          lineReference: item.lineReference ?? '',
-                                          toolSerialNumbers: [...item.toolSerialNumbers],
-                                        })
-                                        setMachineEditorError(null)
-                                      }}
-                                      disabled={!canEdit}
-                                      title={canEdit ? 'Edit machine' : 'Read-only access'}
-                                    >
-                                      <Pencil size={16} />
-                                      <span className='sr-only'>Edit machine</span>
-                                    </Button>
+                                    {isChildOwner ? (
+                                      <Button
+                                        size='sm'
+                                        variant='outline'
+                                        onClick={() => {
+                                          setSelectedCustomerId(item.customerId)
+                                          setActivePage('customerDetail')
+                                        }}
+                                      >
+                                        <ChevronRight size={16} /> View customer
+                                      </Button>
+                                    ) : (
+                                      <Button
+                                        size='sm'
+                                        variant='ghost'
+                                        onClick={() => {
+                                          if (!selectedCustomer) {
+                                            return
+                                          }
+                                          setMachineEditor({
+                                            mode: 'edit',
+                                            customerId: selectedCustomer.id,
+                                            siteTabKey: customerSiteTab,
+                                            projectId: item.project.id,
+                                            machineIndex: item.machineIndex,
+                                            machineSerialNumber: item.machineSerialNumber,
+                                            lineReference: item.lineReference ?? '',
+                                            toolSerialNumbers: [...item.toolSerialNumbers],
+                                          })
+                                          setMachineEditorError(null)
+                                        }}
+                                        disabled={!canEdit}
+                                        title={canEdit ? 'Edit machine' : 'Read-only access'}
+                                      >
+                                        <Pencil size={16} />
+                                        <span className='sr-only'>Edit machine</span>
+                                      </Button>
+                                    )}
                                   </td>
                                 </tr>
                               )
@@ -5993,6 +6136,8 @@ function AppContent() {
       info?: ProjectInfo | null
       tasks?: Array<{ name: string; status?: ProjectTaskStatus; assigneeId?: string }>
       siteId?: string | undefined
+      linkedSubCustomerId?: string | undefined
+      linkedSubCustomerSiteId?: string | undefined
     },
   ): Promise<{ projectId: string; customerId: string } | string> {
     if (!canEdit) {
@@ -6010,12 +6155,31 @@ function AppContent() {
       data.siteId && projectCustomer?.sites.some(site => site.id === data.siteId)
         ? data.siteId
         : undefined
+    let validLinkedSubCustomerId: string | undefined
+    let validLinkedSubCustomerSiteId: string | undefined
+    if (data.linkedSubCustomerId) {
+      const candidate = data.linkedSubCustomerId.trim()
+      if (candidate) {
+        const subCustomer = db.find(customer => customer.id === candidate && customer.parentCustomerId === customerId)
+        if (subCustomer) {
+          validLinkedSubCustomerId = subCustomer.id
+          if (data.linkedSubCustomerSiteId) {
+            const siteCandidate = data.linkedSubCustomerSiteId.trim()
+            if (siteCandidate && subCustomer.sites.some(site => site.id === siteCandidate)) {
+              validLinkedSubCustomerSiteId = siteCandidate
+            }
+          }
+        }
+      }
+    }
     try {
       const project = await createProjectRecord(customerId, {
         number: finalNumber,
         info: data.info ?? null,
         tasks: data.tasks,
         siteId: validSiteId ?? null,
+        linkedSubCustomerId: validLinkedSubCustomerId ?? null,
+        linkedSubCustomerSiteId: validLinkedSubCustomerSiteId ?? null,
       })
       setDb(prev =>
         prev.map(c =>
@@ -6243,10 +6407,9 @@ function AppContent() {
     <>
       <Card className='panel'>
         <CardHeader>
-          <div>
-            <h1 className='text-2xl font-semibold tracking-tight text-slate-900'>{businessTitle}</h1>
+          <div className='flex flex-col items-center text-center'>
             {businessSettings.logo ? (
-              <div className='mt-3 flex justify-center'>
+              <div className='mb-3 flex justify-center'>
                 <img
                   src={businessSettings.logo.dataUrl}
                   alt={`${businessTitle} logo`}
@@ -6254,6 +6417,7 @@ function AppContent() {
                 />
               </div>
             ) : null}
+            <h1 className='text-2xl font-semibold tracking-tight text-slate-900'>{businessTitle}</h1>
           </div>
         </CardHeader>
         <CardContent>
@@ -6981,6 +7145,8 @@ function AppContent() {
                       setNewProjectError(null)
                       setNewProjectNumber('')
                       setNewProjectSiteId('')
+                      setNewProjectLinkedSubCustomerId('')
+                      setNewProjectLinkedSubCustomerSiteId('')
                       setIsCreatingProject(false)
                       setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, computeProjectDateDefaults(businessSettings)))
                       setNewProjectTaskSelections(createDefaultTaskSelectionMap())
@@ -7046,6 +7212,49 @@ function AppContent() {
                           ))}
                         </select>
                       </div>
+                      {newProjectSubCustomers.length > 0 && (
+                        <div className='grid gap-3 md:grid-cols-2'>
+                          <div>
+                            <Label htmlFor='new-project-linked-sub-customer'>Associated Sub-customer</Label>
+                            <select
+                              id='new-project-linked-sub-customer'
+                              className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                              value={newProjectLinkedSubCustomerId}
+                              onChange={event => {
+                                setNewProjectLinkedSubCustomerId((event.target as HTMLSelectElement).value)
+                                setNewProjectLinkedSubCustomerSiteId('')
+                              }}
+                              disabled={isCreatingProject || !canEdit}
+                            >
+                              <option value=''>None</option>
+                              {newProjectSubCustomers.map(child => (
+                                <option key={child.id} value={child.id}>
+                                  {child.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <Label htmlFor='new-project-linked-sub-site'>Sub-customer Site</Label>
+                            <select
+                              id='new-project-linked-sub-site'
+                              className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                              value={newProjectLinkedSubCustomerSiteId}
+                              onChange={event =>
+                                setNewProjectLinkedSubCustomerSiteId((event.target as HTMLSelectElement).value)
+                              }
+                              disabled={isCreatingProject || !canEdit || !selectedLinkedSubCustomer}
+                            >
+                              <option value=''>Unspecified</option>
+                              {selectedLinkedSubCustomer?.sites.map(site => (
+                                <option key={site.id} value={site.id}>
+                                  {site.name?.trim() || site.address?.trim() || 'Unnamed site'}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      )}
                       <div className='grid gap-3 md:grid-cols-2'>
                         <div>
                           <Label htmlFor='new-project-salesperson'>Salesperson</Label>
@@ -7163,6 +7372,8 @@ function AppContent() {
                             setIsCreatingProject(false)
                             setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, computeProjectDateDefaults(businessSettings)))
                             setNewProjectTaskSelections(createDefaultTaskSelectionMap())
+                            setNewProjectLinkedSubCustomerId('')
+                            setNewProjectLinkedSubCustomerSiteId('')
                           }}
                           disabled={isCreatingProject}
                         >
