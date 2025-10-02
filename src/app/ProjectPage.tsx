@@ -519,20 +519,25 @@ export default function ProjectPage({
   const buildDefaultOnsiteReportDraft = useCallback((): OnsiteReportDraft => {
     const now = new Date()
     const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+    const projectSite = project.siteId ? customer.sites.find(site => site.id === project.siteId) ?? null : null
+    const fallbackSite = customer.sites.find(site => site.address?.trim()) ?? null
+    const preferredAddress =
+      projectSite?.address?.trim() || fallbackSite?.address?.trim() || customer.address || ''
+
     return {
       reportDate: local.toISOString().slice(0, 10),
       arrivalTime: '',
       departureTime: '',
       engineerName: currentUserDisplayName,
       customerContact: customer.contacts[0]?.name ?? '',
-      siteAddress: customer.address ?? '',
+      siteAddress: preferredAddress,
       workSummary: '',
       materialsUsed: '',
       additionalNotes: '',
       signedByName: '',
       signedByPosition: '',
     }
-  }, [currentUserDisplayName, customer.address, customer.contacts])
+  }, [currentUserDisplayName, customer.address, customer.contacts, customer.sites, project.siteId])
 
   const [onsiteReportDraft, setOnsiteReportDraft] = useState<OnsiteReportDraft>(() =>
     buildDefaultOnsiteReportDraft(),

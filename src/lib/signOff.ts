@@ -1,5 +1,6 @@
 import {
   CUSTOMER_SIGN_OFF_DECISIONS,
+  type BusinessLogo,
   type CustomerSignOffDecision,
   type CustomerSignOffSignatureDimensions,
   type CustomerSignOffSignatureStroke,
@@ -34,6 +35,8 @@ export const CUSTOMER_SIGN_OFF_OPTIONS = CUSTOMER_SIGN_OFF_DECISIONS.map(value =
 type Rgb = [number, number, number]
 
 export type CustomerSignOffPdfInput = {
+  businessName: string
+  businessLogo?: BusinessLogo | null
   projectNumber: string
   customerName: string
   lineReference?: string
@@ -54,6 +57,8 @@ export type CustomerSignOffPdfInput = {
 }
 
 export type OnsiteReportPdfInput = {
+  businessName: string
+  businessLogo?: BusinessLogo | null
   projectNumber: string
   customerName: string
   siteAddress?: string
@@ -71,6 +76,9 @@ export type OnsiteReportPdfInput = {
   signatureDimensions: CustomerSignOffSignatureDimensions
   createdAt: string
 }
+
+const BUSINESS_LOGO_MAX_WIDTH_PT = (240 / 96) * 72
+const BUSINESS_LOGO_MAX_HEIGHT_PT = (120 / 96) * 72
 
 function escapePdfText(text: string): string {
   return text.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)')
@@ -204,7 +212,7 @@ function drawSignaturePaths(
 
 type PdfObject =
   | { type: 'value'; content: string }
-  | { type: 'stream'; content: Uint8Array }
+  | { type: 'stream'; content: Uint8Array; dict?: string }
 
 function buildPdf(objects: PdfObject[]): Uint8Array {
   const encoder = new TextEncoder()
@@ -224,7 +232,10 @@ function buildPdf(objects: PdfObject[]): Uint8Array {
       chunks.push(body)
       offset += body.length
     } else {
-      const start = encoder.encode(`${id} 0 obj\n<< /Length ${object.content.length} >>\nstream\n`)
+      const dict = object.dict
+        ? `<< ${object.dict} /Length ${object.content.length} >>`
+        : `<< /Length ${object.content.length} >>`
+      const start = encoder.encode(`${id} 0 obj\n${dict}\nstream\n`)
       const end = encoder.encode('\nendstream\nendobj\n')
       chunks.push(start, object.content, end)
       offset += start.length + object.content.length + end.length
@@ -280,6 +291,50 @@ function encodeBase64(bytes: Uint8Array): string {
   throw new Error('No base64 encoder available')
 }
 
+function decodeBase64DataUrl(dataUrl: string): { mimeType: string; data: Uint8Array } {
+  const match = dataUrl.match(/^data:(.+?);base64,(.+)$/)
+  if (!match) {
+    throw new Error('Invalid data URL provided.')
+  }
+  const [, mimeType, base64] = match
+  if (typeof atob === 'function') {
+    const binary = atob(base64)
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index)
+    }
+    return { mimeType, data: bytes }
+  }
+  const potentialBuffer = (globalThis as {
+    Buffer?: { from(input: string, encoding: string): Uint8Array }
+  }).Buffer
+  if (potentialBuffer) {
+    return { mimeType, data: potentialBuffer.from(base64, 'base64') }
+  }
+  throw new Error('No base64 decoder available')
+}
+
+function createPdfImageResource(logo: BusinessLogo, resourceName: string): {
+  object: PdfObject
+  name: string
+  widthPx: number
+  heightPx: number
+} {
+  const { mimeType, data } = decodeBase64DataUrl(logo.dataUrl)
+  const width = Math.max(1, Math.round(logo.width))
+  const height = Math.max(1, Math.round(logo.height))
+  if (mimeType !== 'image/jpeg') {
+    throw new Error('Unsupported logo format; expected JPEG data.')
+  }
+  const dict = `/Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode`
+  return {
+    object: { type: 'stream', content: data, dict },
+    name: resourceName,
+    widthPx: width,
+    heightPx: height,
+  }
+}
+
 export async function generateCustomerSignOffPdf(data: CustomerSignOffPdfInput): Promise<string> {
   const pageWidth = 595.28
   const pageHeight = 841.89
@@ -291,6 +346,39 @@ export async function generateCustomerSignOffPdf(data: CustomerSignOffPdfInput):
   const bodyColor: Rgb = [0.1, 0.13, 0.2]
   const accentColor: Rgb = [0.15, 0.18, 0.26]
   const bulletColor: Rgb = [0.3, 0.2, 0.2]
+
+  const businessName = data.businessName.trim() || 'CustomerProjectDB'
+  let logoObject: PdfObject | null = null
+  let logoPlacement:
+    | { name: string; drawWidth: number; drawHeight: number; drawX: number; drawY: number; bottomY: number }
+    | null = null
+  if (data.businessLogo) {
+    try {
+      const resource = createPdfImageResource(data.businessLogo, 'Im1')
+      const widthPt = (resource.widthPx / 96) * 72
+      const heightPt = (resource.heightPx / 96) * 72
+      const scale = Math.min(
+        BUSINESS_LOGO_MAX_WIDTH_PT / widthPt,
+        BUSINESS_LOGO_MAX_HEIGHT_PT / heightPt,
+        1,
+      )
+      const drawWidth = widthPt * scale
+      const drawHeight = heightPt * scale
+      const drawX = margin + contentWidth - drawWidth
+      const drawY = pageHeight - margin - drawHeight
+      logoObject = resource.object
+      logoPlacement = {
+        name: resource.name,
+        drawWidth,
+        drawHeight,
+        drawX,
+        drawY,
+        bottomY: drawY,
+      }
+    } catch (error) {
+      console.error('Failed to prepare logo for customer sign off PDF', error)
+    }
+  }
 
   const measure = createTextMeasurer()
   const builder = { content: '' }
@@ -337,6 +425,15 @@ export async function generateCustomerSignOffPdf(data: CustomerSignOffPdfInput):
     }
     cursor -= 8
   }
+
+  if (logoPlacement) {
+    builder.content += `q ${formatNumber(logoPlacement.drawWidth)} 0 0 ${formatNumber(logoPlacement.drawHeight)} ${formatNumber(logoPlacement.drawX)} ${formatNumber(logoPlacement.drawY)} cm /${logoPlacement.name} Do Q\n`
+  }
+
+  cursor -= 18
+  appendTextLine(builder, businessName, margin, cursor, 'F2', 18, headingColor)
+  const headerBaseline = logoPlacement ? Math.min(cursor, logoPlacement.bottomY) : cursor
+  cursor = headerBaseline - 12
 
   drawHeading('Customer Sign Off', 24, 24)
   drawLabelValue('Customer', data.customerName)
@@ -416,18 +513,36 @@ export async function generateCustomerSignOffPdf(data: CustomerSignOffPdfInput):
   const contentBytes = new TextEncoder().encode(contentStream)
 
   const objects: PdfObject[] = []
+  const fontRegularRef = objects.length + 1
   objects.push({ type: 'value', content: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>' })
+  const fontBoldRef = objects.length + 1
   objects.push({ type: 'value', content: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>' })
+
+  let logoResourceRef: { name: string; objectNumber: number } | null = null
+  if (logoObject && logoPlacement) {
+    const objectNumber = objects.length + 1
+    objects.push(logoObject)
+    logoResourceRef = { name: logoPlacement.name, objectNumber }
+  }
+
+  const contentRef = objects.length + 1
   objects.push({ type: 'stream', content: contentBytes })
 
-  const predictedPagesId = objects.length + 2
+  const pageRef = objects.length + 1
+  const pagesRef = pageRef + 1
+
+  const resourceEntries: string[] = [`/Font << /F1 ${fontRegularRef} 0 R /F2 ${fontBoldRef} 0 R >>`]
+  if (logoResourceRef) {
+    resourceEntries.push(`/XObject << /${logoResourceRef.name} ${logoResourceRef.objectNumber} 0 R >>`)
+  }
+
   const pageObject =
-    `<< /Type /Page /Parent ${predictedPagesId} 0 R /MediaBox [0 0 ${formatNumber(pageWidth)} ${formatNumber(
+    `<< /Type /Page /Parent ${pagesRef} 0 R /MediaBox [0 0 ${formatNumber(pageWidth)} ${formatNumber(
       pageHeight,
-    )}] /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> /Contents 3 0 R >>`
+    )}] /Resources << ${resourceEntries.join(' ')} >> /Contents ${contentRef} 0 R >>`
   objects.push({ type: 'value', content: pageObject })
-  objects.push({ type: 'value', content: `<< /Type /Pages /Kids [4 0 R] /Count 1 >>` })
-  objects.push({ type: 'value', content: '<< /Type /Catalog /Pages 5 0 R >>' })
+  objects.push({ type: 'value', content: `<< /Type /Pages /Kids [${pageRef} 0 R] /Count 1 >>` })
+  objects.push({ type: 'value', content: `<< /Type /Catalog /Pages ${pagesRef} 0 R >>` })
 
   const pdfBytes = buildPdf(objects)
   const base64 = encodeBase64(pdfBytes)
@@ -444,6 +559,39 @@ export async function generateOnsiteReportPdf(data: OnsiteReportPdfInput): Promi
   const labelColor: Rgb = [0.4, 0.45, 0.55]
   const bodyColor: Rgb = [0.1, 0.13, 0.2]
   const accentColor: Rgb = [0.15, 0.18, 0.26]
+
+  const businessName = data.businessName.trim() || 'CustomerProjectDB'
+  let logoObject: PdfObject | null = null
+  let logoPlacement:
+    | { name: string; drawWidth: number; drawHeight: number; drawX: number; drawY: number; bottomY: number }
+    | null = null
+  if (data.businessLogo) {
+    try {
+      const resource = createPdfImageResource(data.businessLogo, 'Im1')
+      const widthPt = (resource.widthPx / 96) * 72
+      const heightPt = (resource.heightPx / 96) * 72
+      const scale = Math.min(
+        BUSINESS_LOGO_MAX_WIDTH_PT / widthPt,
+        BUSINESS_LOGO_MAX_HEIGHT_PT / heightPt,
+        1,
+      )
+      const drawWidth = widthPt * scale
+      const drawHeight = heightPt * scale
+      const drawX = margin + contentWidth - drawWidth
+      const drawY = pageHeight - margin - drawHeight
+      logoObject = resource.object
+      logoPlacement = {
+        name: resource.name,
+        drawWidth,
+        drawHeight,
+        drawX,
+        drawY,
+        bottomY: drawY,
+      }
+    } catch (error) {
+      console.error('Failed to prepare logo for onsite report PDF', error)
+    }
+  }
 
   const measure = createTextMeasurer()
   const builder = { content: '' }
@@ -504,6 +652,15 @@ export async function generateOnsiteReportPdf(data: OnsiteReportPdfInput): Promi
     return value
   }
 
+  if (logoPlacement) {
+    builder.content += `q ${formatNumber(logoPlacement.drawWidth)} 0 0 ${formatNumber(logoPlacement.drawHeight)} ${formatNumber(logoPlacement.drawX)} ${formatNumber(logoPlacement.drawY)} cm /${logoPlacement.name} Do Q\n`
+  }
+
+  cursor -= 18
+  appendTextLine(builder, businessName, margin, cursor, 'F2', 18, headingColor)
+  const headerBaseline = logoPlacement ? Math.min(cursor, logoPlacement.bottomY) : cursor
+  cursor = headerBaseline - 12
+
   drawHeading('Onsite Report', 24, 24)
   drawLabelValue('Customer', data.customerName)
   drawLabelValue('Project', data.projectNumber)
@@ -556,18 +713,36 @@ export async function generateOnsiteReportPdf(data: OnsiteReportPdfInput): Promi
   const contentBytes = new TextEncoder().encode(contentStream)
 
   const objects: PdfObject[] = []
+  const fontRegularRef = objects.length + 1
   objects.push({ type: 'value', content: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>' })
+  const fontBoldRef = objects.length + 1
   objects.push({ type: 'value', content: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>' })
+
+  let logoResourceRef: { name: string; objectNumber: number } | null = null
+  if (logoObject && logoPlacement) {
+    const objectNumber = objects.length + 1
+    objects.push(logoObject)
+    logoResourceRef = { name: logoPlacement.name, objectNumber }
+  }
+
+  const contentRef = objects.length + 1
   objects.push({ type: 'stream', content: contentBytes })
 
-  const predictedPagesId = objects.length + 2
+  const pageRef = objects.length + 1
+  const pagesRef = pageRef + 1
+
+  const resourceEntries: string[] = [`/Font << /F1 ${fontRegularRef} 0 R /F2 ${fontBoldRef} 0 R >>`]
+  if (logoResourceRef) {
+    resourceEntries.push(`/XObject << /${logoResourceRef.name} ${logoResourceRef.objectNumber} 0 R >>`)
+  }
+
   const pageObject =
-    `<< /Type /Page /Parent ${predictedPagesId} 0 R /MediaBox [0 0 ${formatNumber(pageWidth)} ${formatNumber(
+    `<< /Type /Page /Parent ${pagesRef} 0 R /MediaBox [0 0 ${formatNumber(pageWidth)} ${formatNumber(
       pageHeight,
-    )}] /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> /Contents 3 0 R >>`
+    )}] /Resources << ${resourceEntries.join(' ')} >> /Contents ${contentRef} 0 R >>`
   objects.push({ type: 'value', content: pageObject })
-  objects.push({ type: 'value', content: `<< /Type /Pages /Kids [4 0 R] /Count 1 >>` })
-  objects.push({ type: 'value', content: '<< /Type /Catalog /Pages 5 0 R >>' })
+  objects.push({ type: 'value', content: `<< /Type /Pages /Kids [${pageRef} 0 R] /Count 1 >>` })
+  objects.push({ type: 'value', content: `<< /Type /Catalog /Pages ${pagesRef} 0 R >>` })
 
   const pdfBytes = buildPdf(objects)
   const base64 = encodeBase64(pdfBytes)
