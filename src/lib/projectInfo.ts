@@ -7,8 +7,8 @@ export type ProjectInfoDraftDefaults = {
 
 export type ProjectInfoDraft = {
   lineReference: string
-  machineSerialNumbers: string
-  toolSerialNumbers: string
+  machineSerialNumbers: string[]
+  toolSerialNumbers: string[]
   cobaltOrderNumber: string
   customerOrderNumber: string
   salespersonId: string
@@ -37,8 +37,8 @@ export function createProjectInfoDraft(
 
   return {
     lineReference: info?.lineReference ?? '',
-    machineSerialNumbers: info?.machineSerialNumbers?.join('\n') ?? '',
-    toolSerialNumbers: info?.toolSerialNumbers?.join('\n') ?? '',
+    machineSerialNumbers: info?.machineSerialNumbers ? [...info.machineSerialNumbers] : [],
+    toolSerialNumbers: info?.toolSerialNumbers ? [...info.toolSerialNumbers] : [],
     cobaltOrderNumber: info?.cobaltOrderNumber ?? '',
     customerOrderNumber: info?.customerOrderNumber ?? '',
     salespersonId,
@@ -53,11 +53,9 @@ export function parseProjectInfoDraft(
 ): { info: ProjectInfo | null; error?: string } {
   const lineReference = draft.lineReference.trim()
   const machineSerialNumbers = draft.machineSerialNumbers
-    .split(/\r?\n/)
     .map(entry => entry.trim())
     .filter(entry => entry.length > 0)
   const toolSerialNumbers = draft.toolSerialNumbers
-    .split(/\r?\n/)
     .map(entry => entry.trim())
     .filter(entry => entry.length > 0)
   const cobaltOrderNumber = draft.cobaltOrderNumber.trim()

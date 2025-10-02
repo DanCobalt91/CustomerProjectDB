@@ -43,6 +43,7 @@ import {
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
+import SerialNumberListInput from '../components/ui/SerialNumberListInput'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import { CUSTOMER_SIGN_OFF_OPTIONS, CUSTOMER_SIGN_OFF_OPTION_COPY } from '../lib/signOff'
 import TaskGanttChart from '../components/ui/TaskGanttChart'
@@ -844,7 +845,7 @@ export default function ProjectPage({
     })
   }
 
-  const updateInfoField = (field: keyof ProjectInfoDraft, value: string) => {
+  const updateInfoField = <K extends keyof ProjectInfoDraft>(field: K, value: ProjectInfoDraft[K]) => {
     setInfoDraft(prev => ({ ...prev, [field]: value }))
     if (infoError) {
       setInfoError(null)
@@ -3176,13 +3177,13 @@ export default function ProjectPage({
             onClick={closeNoteDialog}
           >
             <motion.div
-              className='w-full max-w-lg'
+              className='w-full max-w-3xl'
               initial={{ scale: 0.96, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.96, opacity: 0 }}
               onClick={(event) => event.stopPropagation()}
             >
-              <Card className='panel'>
+              <Card className='panel flex max-h-[90vh] flex-col overflow-hidden'>
                 <CardHeader className='flex items-center justify-between'>
                   <div className='flex items-center gap-2'>
                     <Pencil size={18} />
@@ -3192,7 +3193,7 @@ export default function ProjectPage({
                     <X size={16} />
                   </Button>
                 </CardHeader>
-                <CardContent>
+                <CardContent className='max-h-full overflow-y-auto pr-1'>
                   <div className='space-y-6'>
                     <div>
                       <Label>Project note</Label>
@@ -3240,34 +3241,24 @@ export default function ProjectPage({
                             ))}
                           </select>
                         </div>
-                        <div className='md:col-span-2'>
-                          <Label htmlFor='info-machine-serials'>Machine Serial Numbers</Label>
-                          <textarea
-                            id='info-machine-serials'
-                            className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                            rows={3}
-                            value={infoDraft.machineSerialNumbers}
-                            onChange={event =>
-                              updateInfoField('machineSerialNumbers', (event.target as HTMLTextAreaElement).value)
-                            }
-                            placeholder='Enter each serial number on a new line'
-                            disabled={!canEdit || isSavingInfo}
-                          />
-                        </div>
-                        <div className='md:col-span-2'>
-                          <Label htmlFor='info-tool-serials'>Tool Serial Numbers</Label>
-                          <textarea
-                            id='info-tool-serials'
-                            className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                            rows={3}
-                            value={infoDraft.toolSerialNumbers}
-                            onChange={event =>
-                              updateInfoField('toolSerialNumbers', (event.target as HTMLTextAreaElement).value)
-                            }
-                            placeholder='Enter each serial number on a new line'
-                            disabled={!canEdit || isSavingInfo}
-                          />
-                        </div>
+                        <SerialNumberListInput
+                          id='info-machine-serials'
+                          label='Machine Serial Numbers'
+                          values={infoDraft.machineSerialNumbers}
+                          onChange={values => updateInfoField('machineSerialNumbers', values)}
+                          placeholder='e.g. SN-001234'
+                          disabled={!canEdit || isSavingInfo}
+                          className='md:col-span-2'
+                        />
+                        <SerialNumberListInput
+                          id='info-tool-serials'
+                          label='Tool Serial Numbers'
+                          values={infoDraft.toolSerialNumbers}
+                          onChange={values => updateInfoField('toolSerialNumbers', values)}
+                          placeholder='e.g. TOOL-045'
+                          disabled={!canEdit || isSavingInfo}
+                          className='md:col-span-2'
+                        />
                         <div>
                           <Label htmlFor='info-cobalt-order'>Cobalt Order Number</Label>
                           <Input

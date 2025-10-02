@@ -75,6 +75,7 @@ import { generateCustomerSignOffPdf, generateOnsiteReportPdf } from '../lib/sign
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
+import SerialNumberListInput from '../components/ui/SerialNumberListInput'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import ProjectPage from './ProjectPage'
 import PieChart from '../components/ui/PieChart'
@@ -603,7 +604,6 @@ function AppContent() {
   const [isSavingCustomerEditor, setIsSavingCustomerEditor] = useState(false)
   const [customerSiteTab, setCustomerSiteTab] = useState<CustomerSiteTabKey>('')
   const [activeContactIdsByTab, setActiveContactIdsByTab] = useState<Record<string, string | null>>({})
-  const [showInlineProjectForm, setShowInlineProjectForm] = useState(false)
   const [customerProjectsTab, setCustomerProjectsTab] = useState<'active' | 'complete'>('active')
   const [isCompletedProjectsCollapsed, setIsCompletedProjectsCollapsed] = useState(true)
 
@@ -620,7 +620,7 @@ function AppContent() {
   const [newProjectTaskSelections, setNewProjectTaskSelections] =
     useState<DefaultTaskSelectionMap>(createDefaultTaskSelectionMap)
   const updateNewProjectInfoField = useCallback(
-    (field: keyof ProjectInfoDraft, value: string) => {
+    <K extends keyof ProjectInfoDraft>(field: K, value: ProjectInfoDraft[K]) => {
       setNewProjectInfoDraft(prev => ({ ...prev, [field]: value }))
       if (newProjectError) {
         setNewProjectError(null)
@@ -911,10 +911,7 @@ function AppContent() {
     if (showNewContactForm && (!activeSiteTab || activeSiteTab.type === 'child')) {
       setShowNewContactForm(false)
     }
-    if (showInlineProjectForm && (!activeSiteTab || activeSiteTab.type === 'child')) {
-      setShowInlineProjectForm(false)
-    }
-  }, [activeSiteTab, showInlineProjectForm, showNewContactForm])
+  }, [activeSiteTab, showNewContactForm])
   const sortedCustomers = useMemo(() => {
     const customers = [...db]
     customers.sort((a, b) => {
@@ -940,6 +937,45 @@ function AppContent() {
     return customers
   }, [customerLookup, db])
   const hasCustomers = sortedCustomers.length > 0
+  const canEdit = true
+  const openNewProjectModal = useCallback(
+    (options: { customerId?: string; siteId?: string } = {}) => {
+      if (!canEdit) {
+        return
+      }
+      if (!hasCustomers) {
+        setNewProjectError('Add a customer before creating a project.')
+        return
+      }
+
+      const preferredCustomerId =
+        options.customerId && sortedCustomers.some(customer => customer.id === options.customerId)
+          ? options.customerId
+          : sortedCustomers[0]?.id ?? ''
+
+      if (!preferredCustomerId) {
+        setNewProjectError('Select a customer for this project.')
+        return
+      }
+
+      const defaults = computeProjectDateDefaults(businessSettings)
+
+      setNewProjectNumber('')
+      setNewProjectError(null)
+      setNewProjectCustomerId(preferredCustomerId)
+      const resolvedCustomer = db.find(customer => customer.id === preferredCustomerId) ?? null
+      const resolvedSiteId =
+        options.siteId && resolvedCustomer?.sites.some(site => site.id === options.siteId)
+          ? options.siteId
+          : ''
+      setNewProjectSiteId(resolvedSiteId)
+      setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, defaults))
+      setNewProjectTaskSelections(createDefaultTaskSelectionMap())
+      setIsCreatingProject(false)
+      setShowNewProject(true)
+    },
+    [canEdit, hasCustomers, sortedCustomers, businessSettings, db, users],
+  )
   const newProjectCustomer = useMemo(() => {
     if (!hasCustomers) {
       return null
@@ -956,14 +992,12 @@ function AppContent() {
   }, [users])
   const currentUserName = currentUser.name || FALLBACK_CURRENT_USER_NAME
   const currentUserEmail = currentUser.email?.trim() ? currentUser.email : null
-  const canEdit = true
 
 
   useEffect(() => {
     setShowNewContactForm(false)
     setNewContact({ name: '', position: '', phone: '', email: '', siteId: '' })
     setContactError(null)
-    setShowInlineProjectForm(false)
     setShowCustomerEditor(false)
     setCustomerEditorDraft({
       name: selectedCustomer?.name ?? '',
@@ -974,7 +1008,7 @@ function AppContent() {
     setCustomerEditorError(null)
     setIsSavingCustomerEditor(false)
     closeContactEditor()
-      setCustomerSiteTab('')
+    setCustomerSiteTab('')
     setCustomerProjectsTab('active')
   }, [selectedCustomer?.id, closeContactEditor])
   useEffect(() => {
@@ -2163,10 +2197,12 @@ function AppContent() {
               <Button
                 variant='outline'
                 onClick={() => {
-                  if (!activeSiteTab || activeSiteTab.type === 'child') {
+                  if (!activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer) {
                     return
                   }
-                  setShowInlineProjectForm(prev => !prev)
+                  const preferredSiteId =
+                    activeSiteTab.type === 'site' ? activeSiteTab.site.id : undefined
+                  openNewProjectModal({ customerId: selectedCustomer.id, siteId: preferredSiteId })
                 }}
                 title={
                   !canEdit
@@ -2175,39 +2211,13 @@ function AppContent() {
                     ? 'Select a site to manage projects'
                     : activeSiteTab.type === 'child'
                     ? 'Manage projects on the sub customer page'
-                    : showInlineProjectForm
-                    ? 'Cancel adding project'
                     : 'Add project'
                 }
-                disabled={!canEdit || !activeSiteTab || activeSiteTab.type === 'child'}
+                disabled={!canEdit || !activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer}
               >
-                {showInlineProjectForm ? (
-                  <>
-                    <X size={16} /> Cancel
-                  </>
-                ) : (
-                  <>
-                    <Plus size={16} /> Add Project
-                  </>
-                )}
+                <Plus size={16} /> Add Project
               </Button>
             </div>
-            {showInlineProjectForm && (
-              <div>
-                <AddProjectForm
-                  onAdd={(num, siteId) =>
-                    addProject(selectedCustomer.id, {
-                      number: num,
-                      siteId: siteId || undefined,
-                    })
-                  }
-                  disabled={!canEdit}
-                  onAdded={() => setShowInlineProjectForm(false)}
-                  sites={selectedCustomer.sites}
-                  defaultSiteId={activeSiteTab?.type === 'site' ? activeSiteTab.site.id : ''}
-                />
-              </div>
-            )}
             <div className='flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2'>
               {([
                 { value: 'active' as const, label: 'Active' },
@@ -5859,17 +5869,11 @@ function AppContent() {
               {resolvedPage === 'projects' && (
                 <Button
                   onClick={() => {
-                    setShowNewProject(true)
-                    setNewProjectError(null)
-                    setNewProjectNumber('')
-                    setNewProjectInfoDraft(createProjectInfoDraft(undefined, users, computeProjectDateDefaults(businessSettings)))
-                    setNewProjectTaskSelections(createDefaultTaskSelectionMap())
-                    const fallbackCustomerId = sortedCustomers[0]?.id ?? ''
-                    const validSelectedCustomerId =
+                    const preferredCustomerId =
                       selectedCustomerId && db.some(customer => customer.id === selectedCustomerId)
                         ? selectedCustomerId
-                        : null
-                    setNewProjectCustomerId(validSelectedCustomerId ?? fallbackCustomerId)
+                        : undefined
+                    openNewProjectModal({ customerId: preferredCustomerId })
                   }}
                   title={hasCustomers ? 'Create new project' : 'Add a customer before creating projects'}
                   disabled={!canEdit || !hasCustomers}
@@ -6551,40 +6555,24 @@ function AppContent() {
                               ))}
                           </select>
                         </div>
-                        <div className='md:col-span-2'>
-                          <Label htmlFor='new-project-machine-serials'>Machine Serial Numbers</Label>
-                          <textarea
-                            id='new-project-machine-serials'
-                            className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                            rows={3}
-                            value={newProjectInfoDraft.machineSerialNumbers}
-                            onChange={event =>
-                              updateNewProjectInfoField(
-                                'machineSerialNumbers',
-                                (event.target as HTMLTextAreaElement).value,
-                              )
-                            }
-                            placeholder='Enter each serial number on a new line'
-                            disabled={isCreatingProject || !canEdit}
-                          />
-                        </div>
-                        <div className='md:col-span-2'>
-                          <Label htmlFor='new-project-tool-serials'>Tool Serial Numbers</Label>
-                          <textarea
-                            id='new-project-tool-serials'
-                            className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                            rows={3}
-                            value={newProjectInfoDraft.toolSerialNumbers}
-                            onChange={event =>
-                              updateNewProjectInfoField(
-                                'toolSerialNumbers',
-                                (event.target as HTMLTextAreaElement).value,
-                              )
-                            }
-                            placeholder='Enter each serial number on a new line'
-                            disabled={isCreatingProject || !canEdit}
-                          />
-                        </div>
+                        <SerialNumberListInput
+                          id='new-project-machine-serials'
+                          label='Machine Serial Numbers'
+                          values={newProjectInfoDraft.machineSerialNumbers}
+                          onChange={values => updateNewProjectInfoField('machineSerialNumbers', values)}
+                          placeholder='e.g. SN-001234'
+                          disabled={isCreatingProject || !canEdit}
+                          className='md:col-span-2'
+                        />
+                        <SerialNumberListInput
+                          id='new-project-tool-serials'
+                          label='Tool Serial Numbers'
+                          values={newProjectInfoDraft.toolSerialNumbers}
+                          onChange={values => updateNewProjectInfoField('toolSerialNumbers', values)}
+                          placeholder='e.g. TOOL-045'
+                          disabled={isCreatingProject || !canEdit}
+                          className='md:col-span-2'
+                        />
                         <div>
                           <Label htmlFor='new-project-cobalt-order'>Cobalt Order Number</Label>
                           <Input
@@ -6816,104 +6804,6 @@ function AppContent() {
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
-  )
-}
-
-function AddProjectForm({
-  onAdd,
-  disabled = false,
-  onAdded,
-  sites,
-  defaultSiteId = '',
-}: {
-  onAdd: (num: string, siteId: string) => Promise<{ projectId: string; customerId: string } | string>
-  disabled?: boolean
-  onAdded?: () => void
-  sites: CustomerSite[]
-  defaultSiteId?: string
-}) {
-  const [val, setVal] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [isSaving, setIsSaving] = useState(false)
-  const [siteId, setSiteId] = useState(defaultSiteId)
-  useEffect(() => {
-    setSiteId(defaultSiteId)
-  }, [defaultSiteId])
-  const isDisabled = disabled
-
-  const handleAdd = async () => {
-    if (isDisabled) {
-      setError('You have read-only access.')
-      return
-    }
-    const trimmed = val.trim()
-    if (!trimmed) {
-      setError('Enter a project number.')
-      return
-    }
-    setIsSaving(true)
-    try {
-      const result = await onAdd(trimmed, siteId)
-      if (typeof result === 'string') {
-        setError(result)
-        return
-      }
-      setVal('')
-      setSiteId(defaultSiteId)
-      setError(null)
-      onAdded?.()
-    } finally {
-      setIsSaving(false)
-    }
-  }
-
-  return (
-    <div className='flex flex-col gap-2'>
-      <div className='flex items-end gap-2'>
-        <div className='flex-1'>
-          <Label>Project Number</Label>
-          <div className='flex'>
-            <span className='flex items-center rounded-l-2xl border border-r-0 border-slate-200/80 bg-slate-100/70 px-3 py-2 text-sm font-semibold text-slate-500'>P</span>
-            <Input
-              className='rounded-l-none border-l-0'
-              value={val}
-              onChange={(e) => {
-                setVal((e.target as HTMLInputElement).value)
-                if (error) setError(null)
-              }}
-              placeholder='e.g. 1403'
-              disabled={isDisabled}
-            />
-          </div>
-        </div>
-        <Button onClick={handleAdd} disabled={isSaving || isDisabled} title={isDisabled ? 'Read-only access' : 'Add project'}>
-          <Plus size={16} /> Add
-        </Button>
-      </div>
-      <div>
-        <Label>Site</Label>
-        <select
-          className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-          value={siteId}
-          onChange={(e) => {
-            setSiteId((e.target as HTMLSelectElement).value)
-          }}
-          disabled={isDisabled}
-        >
-          <option value=''>Unassigned</option>
-          {sites.map(site => (
-            <option key={site.id} value={site.id}>
-              {site.name?.trim() || site.address?.trim() || 'Unnamed site'}
-            </option>
-          ))}
-        </select>
-      </div>
-      {error && (
-        <p className='flex items-center gap-1 text-sm text-rose-600'>
-          <AlertCircle size={14} /> {error}
-        </p>
-      )}
     </div>
   )
 }
