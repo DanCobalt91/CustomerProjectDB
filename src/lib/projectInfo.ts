@@ -9,11 +9,11 @@ export type ProjectInfoDraftDefaults = {
 export type ProjectMachineDraft = {
   id: string
   machineSerialNumber: string
+  lineReference: string
   toolSerialNumbers: string[]
 }
 
 export type ProjectInfoDraft = {
-  lineReference: string
   machines: ProjectMachineDraft[]
   cobaltOrderNumber: string
   customerOrderNumber: string
@@ -47,6 +47,7 @@ export function createProjectInfoDraft(
       ...info.machines.map(machine => ({
         id: createId(),
         machineSerialNumber: machine.machineSerialNumber,
+        lineReference: machine.lineReference ?? '',
         toolSerialNumbers: machine.toolSerialNumbers ? [...machine.toolSerialNumbers] : [],
       })),
     )
@@ -64,6 +65,7 @@ export function createProjectInfoDraft(
         ...legacyMachineSerials.map(serial => ({
           id: createId(),
           machineSerialNumber: serial,
+          lineReference: '',
           toolSerialNumbers: [],
         })),
       )
@@ -80,6 +82,7 @@ export function createProjectInfoDraft(
           ...legacyToolSerials.map(serial => ({
             id: createId(),
             machineSerialNumber: '',
+            lineReference: '',
             toolSerialNumbers: [serial],
           })),
         )
@@ -87,6 +90,7 @@ export function createProjectInfoDraft(
         machines.push({
           id: createId(),
           machineSerialNumber: '',
+          lineReference: '',
           toolSerialNumbers: [...legacyToolSerials],
         })
       }
@@ -94,7 +98,6 @@ export function createProjectInfoDraft(
   }
 
   return {
-    lineReference: info?.lineReference ?? '',
     machines,
     cobaltOrderNumber: info?.cobaltOrderNumber ?? '',
     customerOrderNumber: info?.customerOrderNumber ?? '',
@@ -108,11 +111,11 @@ export function parseProjectInfoDraft(
   draft: ProjectInfoDraft,
   users: User[],
 ): { info: ProjectInfo | null; error?: string } {
-  const lineReference = draft.lineReference.trim()
   const machines: ProjectMachine[] = []
   const seenMachineSerials = new Set<string>()
   for (const machine of draft.machines) {
     const machineSerialNumber = machine.machineSerialNumber.trim()
+    const lineReference = machine.lineReference.trim()
     const normalizedTools: string[] = []
     const seenTools = new Set<string>()
     for (const tool of machine.toolSerialNumbers) {
@@ -143,7 +146,11 @@ export function parseProjectInfoDraft(
       return { info: null, error: 'Machine serial numbers must be unique.' }
     }
     seenMachineSerials.add(normalizedMachine)
-    machines.push({ machineSerialNumber, toolSerialNumbers: normalizedTools })
+    const machineEntry: ProjectMachine = { machineSerialNumber, toolSerialNumbers: normalizedTools }
+    if (lineReference) {
+      machineEntry.lineReference = lineReference
+    }
+    machines.push(machineEntry)
   }
   const cobaltOrderNumber = draft.cobaltOrderNumber.trim()
   const customerOrderNumber = draft.customerOrderNumber.trim()
@@ -168,7 +175,6 @@ export function parseProjectInfoDraft(
   }
 
   const info: ProjectInfo = {}
-  if (lineReference) info.lineReference = lineReference
   if (machines.length > 0) info.machines = machines
   if (cobaltOrderNumber) info.cobaltOrderNumber = cobaltOrderNumber
   if (customerOrderNumber) info.customerOrderNumber = customerOrderNumber

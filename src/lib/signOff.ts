@@ -40,7 +40,6 @@ export type CustomerSignOffPdfInput = {
   businessLogo?: BusinessLogo | null
   projectNumber: string
   customerName: string
-  lineReference?: string
   machines?: ProjectMachine[]
   machineSerialNumbers?: string[]
   toolSerialNumbers?: string[]
@@ -434,10 +433,20 @@ export async function generateCustomerSignOffPdf(data: CustomerSignOffPdfInput):
         .map(machine => {
           const machineLabel = machine.machineSerialNumber.trim() || 'Not specified'
           const tools = machine.toolSerialNumbers.map(entry => entry.trim()).filter(entry => entry.length > 0)
-          if (tools.length === 0) {
-            return `${machineLabel} — No tools recorded`
+          const details: string[] = []
+          const line = machine.lineReference?.trim()
+          if (line) {
+            details.push(`Line: ${line}`)
           }
-          return `${machineLabel} — Tools: ${tools.join(', ')}`
+          if (tools.length === 0) {
+            details.push('No tools recorded')
+          } else {
+            details.push(`Tools: ${tools.join(', ')}`)
+          }
+          if (details.length === 0) {
+            return machineLabel
+          }
+          return `${machineLabel} — ${details.join(' — ')}`
         })
         .join('\n')
     }
@@ -473,7 +482,6 @@ export async function generateCustomerSignOffPdf(data: CustomerSignOffPdfInput):
   drawLabelValue('Completed', completedDisplay)
 
   drawHeading('Project Information', 16, 16)
-  drawLabelValue('Line No/Name', data.lineReference ?? 'Not provided')
   drawLabelValue('Machines & Tools', formatMachinesAndTools())
   drawLabelValue('Cobalt Order Number', data.cobaltOrderNumber ?? 'Not provided')
   drawLabelValue('Customer Order Number', data.customerOrderNumber ?? 'Not provided')
