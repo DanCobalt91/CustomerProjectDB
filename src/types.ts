@@ -54,11 +54,11 @@ export type ProjectStatusLogEntry = {
 
 export type ProjectMachine = {
   machineSerialNumber: string;
+  lineReference?: string;
   toolSerialNumbers: string[];
 };
 
 export type ProjectInfo = {
-  lineReference?: string;
   machines?: ProjectMachine[];
   cobaltOrderNumber?: string;
   customerOrderNumber?: string;

@@ -29,7 +29,7 @@ export default function MachineToolListInput({
     }
     onChange([
       ...machines,
-      { id: createId(), machineSerialNumber: '', toolSerialNumbers: [] },
+      { id: createId(), machineSerialNumber: '', lineReference: '', toolSerialNumbers: [] },
     ])
   }, [disabled, machines, onChange])
 
@@ -77,6 +77,7 @@ export default function MachineToolListInput({
             const machineId = machine.id
             const machineInputId = `${id}-machine-${machineId}`
             const toolsInputId = `${id}-tools-${machineId}`
+            const lineInputId = `${id}-line-${machineId}`
             const machineLabel = `Machine ${index + 1}`
             const hasMachineSerial = machine.machineSerialNumber.trim().length > 0
             return (
@@ -98,6 +99,20 @@ export default function MachineToolListInput({
                       placeholder='e.g. SN-001234'
                       disabled={disabled}
                     />
+                    <div className='mt-3'>
+                      <Label htmlFor={lineInputId}>Line No/Name (optional)</Label>
+                      <Input
+                        id={lineInputId}
+                        value={machine.lineReference}
+                        onChange={event =>
+                          updateMachine(machineId, {
+                            lineReference: (event.target as HTMLInputElement).value,
+                          })
+                        }
+                        placeholder='e.g. Line 2 — Packing'
+                        disabled={disabled}
+                      />
+                    </div>
                   </div>
                   <Button
                     type='button'

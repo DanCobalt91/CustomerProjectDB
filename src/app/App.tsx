@@ -77,6 +77,7 @@ import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
 import MachineToolListInput from '../components/ui/MachineToolListInput'
+import SerialNumberListInput from '../components/ui/SerialNumberListInput'
 import { Card, CardContent, CardHeader } from '../components/ui/Card'
 import ProjectPage from './ProjectPage'
 import PieChart from '../components/ui/PieChart'
@@ -212,9 +213,20 @@ type CustomerSiteTabKey = string
 type CustomerSiteTab =
   | { key: CustomerSiteTabKey; label: string; type: 'site'; site: CustomerSite }
   | { key: CustomerSiteTabKey; label: string; type: 'child'; customer: Customer }
-  | { key: CustomerSiteTabKey; label: string; type: 'headOffice'; address: string }
+  | { key: CustomerSiteTabKey; label: string; type: 'unassigned' }
 
-const HEAD_OFFICE_TAB_KEY: CustomerSiteTabKey = 'head-office'
+const UNASSIGNED_SITE_TAB_KEY: CustomerSiteTabKey = 'unassigned'
+
+type MachineEditorState = {
+  mode: 'create' | 'edit'
+  customerId: string
+  siteTabKey: CustomerSiteTabKey
+  projectId: string
+  machineIndex?: number
+  machineSerialNumber: string
+  lineReference: string
+  toolSerialNumbers: string[]
+}
 
 function createSiteDraft(site?: CustomerSite | null): CustomerSiteDraft {
   return {
@@ -704,6 +716,9 @@ function AppContent() {
     siteId: '',
   })
   const [contactError, setContactError] = useState<string | null>(null)
+  const [machineEditor, setMachineEditor] = useState<MachineEditorState | null>(null)
+  const [machineEditorError, setMachineEditorError] = useState<string | null>(null)
+  const [isSavingMachineEditor, setIsSavingMachineEditor] = useState(false)
   const [showCustomerEditor, setShowCustomerEditor] = useState(false)
   const [customerEditorDraft, setCustomerEditorDraft] = useState<CustomerEditorDraftState>(() =>
     createCustomerEditorDraftState(),
@@ -925,9 +940,10 @@ function AppContent() {
       tabs.push({ key: site.id, label, type: 'site', site })
     })
 
-    const primaryAddress = selectedCustomer.address?.trim()
-    if (primaryAddress) {
-      tabs.push({ key: HEAD_OFFICE_TAB_KEY, label: 'Head Office', type: 'headOffice', address: primaryAddress })
+    const hasUnassignedContacts = selectedCustomer.contacts.some(contact => !contact.siteId)
+    const hasUnassignedProjects = selectedCustomer.projects.some(project => !project.siteId)
+    if (hasUnassignedContacts || hasUnassignedProjects) {
+      tabs.push({ key: UNASSIGNED_SITE_TAB_KEY, label: 'Unassigned', type: 'unassigned' })
     }
 
     childCustomers.forEach(child => {
@@ -936,7 +952,6 @@ function AppContent() {
 
     return tabs
   }, [childCustomers, selectedCustomer])
-  const headOfficeTab = siteTabs.find(tab => tab.type === 'headOffice') ?? null
   const contactsBySiteTab = useMemo(() => {
     if (!selectedCustomer) {
       return {} as Record<string, CustomerContact[]>
@@ -945,15 +960,12 @@ function AppContent() {
     selectedCustomer.sites.forEach(site => {
       map[site.id] = selectedCustomer.contacts.filter(contact => contact.siteId === site.id)
     })
-    const headOfficeContacts = headOfficeTab
-      ? selectedCustomer.contacts.filter(contact => contact.siteId === headOfficeTab.key)
-      : []
     const unassignedContacts = selectedCustomer.contacts.filter(contact => !contact.siteId)
-    if (headOfficeTab) {
-      map[headOfficeTab.key] = [...headOfficeContacts, ...unassignedContacts]
+    if (unassignedContacts.length > 0) {
+      map[UNASSIGNED_SITE_TAB_KEY] = unassignedContacts
     }
     return map
-  }, [headOfficeTab, selectedCustomer])
+  }, [selectedCustomer])
   const projectsBySiteTab = useMemo(() => {
     if (!selectedCustomer) {
       return {} as Record<string, Project[]>
@@ -962,15 +974,12 @@ function AppContent() {
     selectedCustomer.sites.forEach(site => {
       map[site.id] = selectedCustomer.projects.filter(project => project.siteId === site.id)
     })
-    const headOfficeProjects = headOfficeTab
-      ? selectedCustomer.projects.filter(project => project.siteId === headOfficeTab.key)
-      : []
     const unassignedProjects = selectedCustomer.projects.filter(project => !project.siteId)
-    if (headOfficeTab) {
-      map[headOfficeTab.key] = [...headOfficeProjects, ...unassignedProjects]
+    if (unassignedProjects.length > 0) {
+      map[UNASSIGNED_SITE_TAB_KEY] = unassignedProjects
     }
     return map
-  }, [headOfficeTab, selectedCustomer])
+  }, [selectedCustomer])
   const parentCustomer = useMemo(() => {
     if (!selectedCustomer?.parentCustomerId) {
       return null
@@ -980,12 +989,10 @@ function AppContent() {
   const activeSiteTab = siteTabs.find(tab => tab.key === customerSiteTab) ?? null
   const activeCustomerSite = activeSiteTab?.type === 'site' ? activeSiteTab.site : null
   const activeChildCustomer = activeSiteTab?.type === 'child' ? activeSiteTab.customer : null
-  const activeHeadOfficeAddress = activeSiteTab?.type === 'headOffice' ? activeSiteTab.address : null
   const selectedCustomerPrimarySite = selectedCustomerSites.find(site => site.address?.trim()) ?? null
   const selectedCustomerAddressForMap =
     (activeCustomerSite?.address?.trim() ||
       (activeChildCustomer ? resolveCustomerPrimaryAddress(activeChildCustomer) : null) ||
-      activeHeadOfficeAddress ||
       selectedCustomerPrimarySite?.address?.trim() ||
       selectedCustomer?.address?.trim() ||
       null)
@@ -1150,9 +1157,19 @@ function AppContent() {
     setCustomerEditorError(null)
     setIsSavingCustomerEditor(false)
     closeContactEditor()
+    setMachineEditor(null)
+    setMachineEditorError(null)
+    setIsSavingMachineEditor(false)
     setCustomerSiteTab('')
     setCustomerProjectsTab('active')
   }, [selectedCustomer?.id, closeContactEditor])
+  useEffect(() => {
+    if (activePage !== 'customerDetail') {
+      setMachineEditor(null)
+      setMachineEditorError(null)
+      setIsSavingMachineEditor(false)
+    }
+  }, [activePage])
   useEffect(() => {
     if (!newProjectCustomer) {
       setNewProjectSiteId('')
@@ -1782,14 +1799,16 @@ function AppContent() {
           const machines = project.info?.machines ?? []
           return machines.map((machine, index) => ({
             id: `${project.id}-${index}`,
-            machineSerialNumber: machine.machineSerialNumber.trim(),
-            toolSerialNumbers: machine.toolSerialNumbers,
+            machineSerialNumber: machine.machineSerialNumber,
+            lineReference: machine.lineReference ?? '',
+            toolSerialNumbers: [...machine.toolSerialNumbers],
             project,
+            machineIndex: index,
           }))
         })
       : []
     lineItems.sort((a, b) => {
-      const machineCompare = a.machineSerialNumber.localeCompare(b.machineSerialNumber, undefined, {
+      const machineCompare = a.machineSerialNumber.trim().localeCompare(b.machineSerialNumber.trim(), undefined, {
         sensitivity: 'base',
       })
       if (machineCompare !== 0) {
@@ -1926,21 +1945,7 @@ function AppContent() {
                         </Button>
                       )
                     }
-                    const address = activeSiteTab.address?.trim()
-                    if (!address) {
-                      return null
-                    }
-                    return (
-                      <Button
-                        variant='outline'
-                        onClick={() => navigator.clipboard.writeText(address)}
-                        className='rounded-full px-2 py-2'
-                        title='Copy head office address'
-                      >
-                        <Copy size={16} />
-                        <span className='sr-only'>Copy head office address</span>
-                      </Button>
-                    )
+                    return null
                   })()}
                 </div>
                 {siteTabs.length > 1 && (
@@ -1973,51 +1978,36 @@ function AppContent() {
                     <div className='rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
                       Select a site to view details.
                     </div>
-                  ) : activeSiteTab.type === 'site' ? (
-                    <div className='space-y-3'>
-                      <div className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'>
-                        <div className='flex items-start justify-between gap-2'>
-                          <div>
-                            <div className='text-sm font-semibold text-slate-800'>
-                              {activeCustomerSite?.name?.trim() || 'Selected site'}
-                            </div>
-                            {activeCustomerSite?.notes ? (
-                              <div className='text-xs text-slate-500'>{activeCustomerSite.notes}</div>
-                            ) : null}
+                ) : activeSiteTab.type === 'site' ? (
+                  <div className='space-y-3'>
+                    <div className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'>
+                      <div className='flex items-start justify-between gap-2'>
+                        <div>
+                          <div className='text-sm font-semibold text-slate-800'>
+                            {activeCustomerSite?.name?.trim() || 'Selected site'}
                           </div>
-                        </div>
-                        <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
-                          {activeCustomerSite?.address ? (
-                            <span className='block whitespace-pre-wrap break-words text-slate-800'>
-                              {activeCustomerSite.address}
-                            </span>
-                          ) : (
-                            <span className='text-slate-400'>No address provided.</span>
-                          )}
+                          {activeCustomerSite?.notes ? (
+                            <div className='text-xs text-slate-500'>{activeCustomerSite.notes}</div>
+                          ) : null}
                         </div>
                       </div>
-                    </div>
-                  ) : activeSiteTab.type === 'headOffice' ? (
-                    <div className='space-y-3'>
-                      <div className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'>
-                        <div className='text-sm font-semibold text-slate-800'>Head Office</div>
-                        <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
-                          {activeHeadOfficeAddress ? (
-                            <span className='block whitespace-pre-wrap break-words text-slate-800'>
-                              {activeHeadOfficeAddress}
-                            </span>
-                          ) : (
-                            <span className='text-slate-400'>No address provided.</span>
-                          )}
-                        </div>
+                      <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                        {activeCustomerSite?.address ? (
+                          <span className='block whitespace-pre-wrap break-words text-slate-800'>
+                            {activeCustomerSite.address}
+                          </span>
+                        ) : (
+                          <span className='text-slate-400'>No address provided.</span>
+                        )}
                       </div>
                     </div>
-                  ) : (
-                    (() => {
-                      if (!activeChildCustomer) {
-                        return (
-                          <div className='rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
-                            Sub customer details unavailable.
+                  </div>
+                ) : activeSiteTab.type === 'child' ? (
+                  (() => {
+                    if (!activeChildCustomer) {
+                      return (
+                        <div className='rounded-2xl border border-dashed border-slate-200 bg-white/70 px-3 py-4 text-sm text-slate-500 shadow-sm'>
+                          Sub customer details unavailable.
                           </div>
                         )
                       }
@@ -2066,8 +2056,19 @@ function AppContent() {
                         </div>
                       )
                     })()
-                  )}
-                </div>
+                ) : (
+                  <div className='space-y-3'>
+                    <div className='space-y-2 rounded-2xl border border-slate-200/80 bg-white/90 p-3 shadow-sm'>
+                      <div className='text-sm font-semibold text-slate-800'>Unassigned items</div>
+                      <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                        <span className='text-slate-500'>
+                          Contacts and projects without a specific site are shown here.
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
                 {activeSiteTab?.type !== 'child' && selectedCustomerAddressForMap ? (
                   <div className='mt-4 overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
                     <iframe
@@ -2096,11 +2097,7 @@ function AppContent() {
                         const next = !prev
                         if (next) {
                           const defaultSiteId =
-                            activeSiteTab?.type === 'site'
-                              ? activeSiteTab.site.id
-                              : activeSiteTab?.type === 'headOffice'
-                              ? headOfficeTab?.key ?? ''
-                              : ''
+                            activeSiteTab?.type === 'site' ? activeSiteTab.site.id : ''
                           setNewContact({ name: '', position: '', phone: '', email: '', siteId: defaultSiteId })
                         } else {
                           setNewContact({ name: '', position: '', phone: '', email: '', siteId: '' })
@@ -2174,11 +2171,9 @@ function AppContent() {
                             <div className='text-xs text-slate-400'>
                               Site:{' '}
                               {activeContact.siteId
-                                ? activeContact.siteId === headOfficeTab?.key
-                                  ? 'Head Office'
-                                  : selectedCustomerSites.find(site => site.id === activeContact.siteId)?.name?.trim() ||
-                                    selectedCustomerSites.find(site => site.id === activeContact.siteId)?.address?.trim() ||
-                                    'Unnamed site'
+                                ? selectedCustomerSites.find(site => site.id === activeContact.siteId)?.name?.trim() ||
+                                  selectedCustomerSites.find(site => site.id === activeContact.siteId)?.address?.trim() ||
+                                  'Unnamed site'
                                 : 'Unassigned'}
                             </div>
                           </div>
@@ -2299,9 +2294,6 @@ function AppContent() {
                         disabled={!canEdit}
                       >
                         <option value=''>Unassigned</option>
-                        {headOfficeTab ? (
-                          <option value={headOfficeTab.key}>Head Office</option>
-                        ) : null}
                         {selectedCustomerSites.map(site => (
                           <option key={site.id} value={site.id}>
                             {site.name?.trim() || site.address?.trim() || 'Unnamed site'}
@@ -2405,10 +2397,20 @@ function AppContent() {
                     if (!activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer) {
                       return
                     }
-                    const preferredSiteId =
-                      activeSiteTab.type === 'site' ? activeSiteTab.site.id : undefined
-                    setCustomerProjectSection('projects')
-                    openNewProjectModal({ customerId: selectedCustomer.id, siteId: preferredSiteId })
+                    if (projectsForCurrentSite.length === 0) {
+                      return
+                    }
+                    const defaultProject = projectsForCurrentSite[0]
+                    setMachineEditor({
+                      mode: 'create',
+                      customerId: selectedCustomer.id,
+                      siteTabKey: activeSiteTab.key,
+                      projectId: defaultProject.id,
+                      machineSerialNumber: '',
+                      lineReference: '',
+                      toolSerialNumbers: [],
+                    })
+                    setMachineEditorError(null)
                   }}
                   title={
                     !canEdit
@@ -2417,9 +2419,17 @@ function AppContent() {
                       ? 'Select a site to record machines'
                       : activeSiteTab.type === 'child'
                       ? 'Manage machines on the sub customer page'
+                      : projectsForCurrentSite.length === 0
+                      ? 'Create a project before adding machines'
                       : 'Add machine'
                   }
-                  disabled={!canEdit || !activeSiteTab || activeSiteTab.type === 'child' || !selectedCustomer}
+                  disabled={
+                    !canEdit ||
+                    !activeSiteTab ||
+                    activeSiteTab.type === 'child' ||
+                    !selectedCustomer ||
+                    projectsForCurrentSite.length === 0
+                  }
                 >
                   <Plus size={16} /> Add Machine
                 </Button>
@@ -2524,31 +2534,35 @@ function AppContent() {
                 ) : lineItems.length === 0 ? (
                   <div className='text-sm text-slate-500'>No machines recorded for this site yet.</div>
                 ) : (
-                  <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
-                    <div className='overflow-x-auto'>
-                      <table className='min-w-full divide-y divide-slate-200 bg-white text-sm text-slate-700'>
-                        <thead className='bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500'>
-                          <tr>
-                            <th scope='col' className='px-4 py-3 text-left font-semibold'>Machine Serial</th>
-                            <th scope='col' className='px-4 py-3 text-left font-semibold'>Tool Serials</th>
-                            <th scope='col' className='px-4 py-3 text-left font-semibold'>Project</th>
-                          </tr>
-                        </thead>
-                        <tbody className='divide-y divide-slate-100'>
-                          {lineItems.map(item => {
-                            const statusBucket = resolveProjectStatusBucket(item.project)
-                            const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
-                            const statusLabel = formatProjectStatus(item.project.status, item.project.activeSubStatus)
-                            const machineLabel = item.machineSerialNumber || 'Not specified'
-                            return (
-                              <tr key={item.id} className='hover:bg-slate-50/70'>
-                                <td className='whitespace-nowrap px-4 py-3 font-medium text-slate-800'>
-                                  {machineLabel}
-                                </td>
-                                <td className='px-4 py-3'>
-                                  {item.toolSerialNumbers.length > 0 ? (
-                                    <div className='flex flex-wrap gap-1'>
-                                      {item.toolSerialNumbers.map((tool, index) => (
+                    <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
+                      <div className='overflow-x-auto'>
+                        <table className='min-w-full divide-y divide-slate-200 bg-white text-sm text-slate-700'>
+                          <thead className='bg-slate-50/80 text-xs uppercase tracking-wide text-slate-500'>
+                            <tr>
+                              <th scope='col' className='px-4 py-3 text-left font-semibold'>Machine Serial</th>
+                              <th scope='col' className='px-4 py-3 text-left font-semibold'>Line No/Name</th>
+                              <th scope='col' className='px-4 py-3 text-left font-semibold'>Tool Serials</th>
+                              <th scope='col' className='px-4 py-3 text-left font-semibold'>Project</th>
+                              <th scope='col' className='px-4 py-3 text-left font-semibold'>Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className='divide-y divide-slate-100'>
+                            {lineItems.map(item => {
+                              const statusBucket = resolveProjectStatusBucket(item.project)
+                              const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
+                              const statusLabel = formatProjectStatus(item.project.status, item.project.activeSubStatus)
+                              const machineLabel = item.machineSerialNumber.trim() || 'Not specified'
+                              const lineLabel = item.lineReference?.trim() || '—'
+                              return (
+                                <tr key={item.id} className='hover:bg-slate-50/70'>
+                                  <td className='whitespace-nowrap px-4 py-3 font-medium text-slate-800'>
+                                    {machineLabel}
+                                  </td>
+                                  <td className='px-4 py-3'>{lineLabel}</td>
+                                  <td className='px-4 py-3'>
+                                    {item.toolSerialNumbers.length > 0 ? (
+                                      <div className='flex flex-wrap gap-1'>
+                                        {item.toolSerialNumbers.map((tool, index) => (
                                         <span
                                           key={`${item.id}-tool-${index}`}
                                           className='inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700'
@@ -2561,11 +2575,11 @@ function AppContent() {
                                     <span className='text-xs text-slate-400'>No tools recorded</span>
                                   )}
                                 </td>
-                                <td className='px-4 py-3'>
-                                  <div className='flex flex-col gap-1'>
-                                    <span className='font-semibold text-slate-800'>Project: {item.project.number}</span>
-                                    <span
-                                      className='inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold'
+                                  <td className='px-4 py-3'>
+                                    <div className='flex flex-col gap-1'>
+                                      <span className='font-semibold text-slate-800'>Project: {item.project.number}</span>
+                                      <span
+                                        className='inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold'
                                       style={{
                                         color: statusMeta.color,
                                         backgroundColor: `${statusMeta.color}1a`,
@@ -2587,12 +2601,39 @@ function AppContent() {
                                         <ChevronRight size={16} /> View project
                                       </Button>
                                     </div>
-                                  </div>
-                                </td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
+                                    </div>
+                                  </td>
+                                  <td className='px-4 py-3'>
+                                    <Button
+                                      size='sm'
+                                      variant='ghost'
+                                      onClick={() => {
+                                        if (!selectedCustomer) {
+                                          return
+                                        }
+                                        setMachineEditor({
+                                          mode: 'edit',
+                                          customerId: selectedCustomer.id,
+                                          siteTabKey: customerSiteTab,
+                                          projectId: item.project.id,
+                                          machineIndex: item.machineIndex,
+                                          machineSerialNumber: item.machineSerialNumber,
+                                          lineReference: item.lineReference ?? '',
+                                          toolSerialNumbers: [...item.toolSerialNumbers],
+                                        })
+                                        setMachineEditorError(null)
+                                      }}
+                                      disabled={!canEdit}
+                                      title={canEdit ? 'Edit machine' : 'Read-only access'}
+                                    >
+                                      <Pencil size={16} />
+                                      <span className='sr-only'>Edit machine</span>
+                                    </Button>
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
                       </table>
                     </div>
                   </div>
@@ -4719,6 +4760,7 @@ function AppContent() {
           machines: existingProject.info.machines
             ? existingProject.info.machines.map(machine => ({
                 machineSerialNumber: machine.machineSerialNumber,
+                ...(machine.lineReference ? { lineReference: machine.lineReference } : {}),
                 toolSerialNumbers: [...machine.toolSerialNumbers],
               }))
             : undefined,
@@ -4867,7 +4909,6 @@ function AppContent() {
         businessLogo: cloneBusinessLogo(businessSettings.logo),
         projectNumber: project.number,
         customerName: customer.name,
-        lineReference: info?.lineReference,
         machines: info?.machines,
         cobaltOrderNumber: info?.cobaltOrderNumber,
         customerOrderNumber: info?.customerOrderNumber,
@@ -5162,9 +5203,8 @@ function AppContent() {
     const phone = data.phone.trim()
     const email = data.email.trim()
     const siteId = data.siteId.trim()
-    const isHeadOfficeSelection = siteId === HEAD_OFFICE_TAB_KEY
     const validSiteId =
-      siteId && (customer.sites.some(site => site.id === siteId) || isHeadOfficeSelection)
+      siteId && customer.sites.some(site => site.id === siteId)
         ? siteId
         : ''
     if (!name && !position && !phone && !email) {
@@ -5194,11 +5234,11 @@ function AppContent() {
       const createdContact = saved.contacts.find(contact => !customer.contacts.some(existing => existing.id === contact.id))
       const nextActive = createdContact ?? saved.contacts[0]
       if (nextActive) {
-        const targetKeys: CustomerSiteTabKey[] = ['all']
+        const targetKeys: CustomerSiteTabKey[] = []
         if (nextActive.siteId) {
           targetKeys.push(nextActive.siteId)
         } else {
-          targetKeys.push('unassigned')
+          targetKeys.push(UNASSIGNED_SITE_TAB_KEY)
         }
         setActiveContactIdsByTab(prev => {
           const next = { ...prev }
@@ -5230,9 +5270,8 @@ function AppContent() {
     const phone = details.phone.trim()
     const email = details.email.trim()
     const siteId = details.siteId.trim()
-    const isHeadOfficeSelection = siteId === HEAD_OFFICE_TAB_KEY
     const validSiteId =
-      siteId && (customer.sites.some(site => site.id === siteId) || isHeadOfficeSelection)
+      siteId && customer.sites.some(site => site.id === siteId)
         ? siteId
         : ''
 
@@ -5292,6 +5331,104 @@ function AppContent() {
       }
     } catch {
       // error handled in saveCustomerDetails
+    }
+  }
+
+  function closeMachineEditor() {
+    setMachineEditor(null)
+    setMachineEditorError(null)
+    setIsSavingMachineEditor(false)
+  }
+
+  async function handleSaveMachineEditor() {
+    if (!machineEditor) {
+      return
+    }
+    const customer = db.find(entry => entry.id === machineEditor.customerId)
+    if (!customer) {
+      setMachineEditorError('Selected customer no longer exists.')
+      return
+    }
+    const project = customer.projects.find(entry => entry.id === machineEditor.projectId)
+    if (!project) {
+      setMachineEditorError('Selected project no longer exists.')
+      return
+    }
+
+    const serial = machineEditor.machineSerialNumber.trim()
+    if (!serial) {
+      setMachineEditorError('Enter a machine serial number.')
+      return
+    }
+
+    const normalizedSerial = serial.toLowerCase()
+    const existingMachines = project.info?.machines ?? []
+    const hasConflict = existingMachines.some((machine, index) => {
+      if (machineEditor.mode === 'edit' && index === machineEditor.machineIndex) {
+        return false
+      }
+      return machine.machineSerialNumber.trim().toLowerCase() === normalizedSerial
+    })
+    if (hasConflict) {
+      setMachineEditorError('Machine serial numbers must be unique within the project.')
+      return
+    }
+
+    const normalizedTools: string[] = []
+    const seenTools = new Set<string>()
+    for (const tool of machineEditor.toolSerialNumbers) {
+      const trimmed = tool.trim()
+      if (!trimmed) {
+        continue
+      }
+      const normalizedTool = trimmed.toLowerCase()
+      if (seenTools.has(normalizedTool)) {
+        continue
+      }
+      seenTools.add(normalizedTool)
+      normalizedTools.push(trimmed)
+    }
+
+    const clonedMachines = existingMachines.map(machine => ({
+      machineSerialNumber: machine.machineSerialNumber,
+      ...(machine.lineReference ? { lineReference: machine.lineReference } : {}),
+      toolSerialNumbers: [...machine.toolSerialNumbers],
+    }))
+
+    if (machineEditor.mode === 'edit') {
+      const index = machineEditor.machineIndex ?? -1
+      if (index < 0 || index >= clonedMachines.length) {
+        setMachineEditorError('Selected machine no longer exists.')
+        return
+      }
+      clonedMachines[index] = {
+        machineSerialNumber: serial,
+        ...(machineEditor.lineReference.trim()
+          ? { lineReference: machineEditor.lineReference.trim() }
+          : {}),
+        toolSerialNumbers: normalizedTools,
+      }
+    } else {
+      clonedMachines.push({
+        machineSerialNumber: serial,
+        ...(machineEditor.lineReference.trim()
+          ? { lineReference: machineEditor.lineReference.trim() }
+          : {}),
+        toolSerialNumbers: normalizedTools,
+      })
+    }
+
+    const existingInfo = project.info ?? undefined
+    const info: ProjectInfo = existingInfo ? { ...existingInfo } : {}
+    info.machines = clonedMachines
+
+    setIsSavingMachineEditor(true)
+    try {
+      updateProjectInfo(customer.id, project.id, info)
+      setMachineEditor(null)
+      setMachineEditorError(null)
+    } finally {
+      setIsSavingMachineEditor(false)
     }
   }
 
@@ -6486,7 +6623,7 @@ function AppContent() {
                                         name: (event.target as HTMLInputElement).value,
                                       })
                                     }
-                                    placeholder='e.g. Head Office'
+                                    placeholder='e.g. Site A'
                                     disabled={!canEdit}
                                   />
                                 </div>
@@ -6727,7 +6864,7 @@ function AppContent() {
                                         name: (event.target as HTMLInputElement).value,
                                       })
                                     }
-                                    placeholder='e.g. Head Office'
+                                    placeholder='e.g. Site A'
                                     disabled={!canEdit || isSavingCustomerEditor}
                                   />
                                 </div>
@@ -6911,18 +7048,6 @@ function AppContent() {
                       </div>
                       <div className='grid gap-3 md:grid-cols-2'>
                         <div>
-                          <Label htmlFor='new-project-line'>Line No/Name</Label>
-                          <Input
-                            id='new-project-line'
-                            value={newProjectInfoDraft.lineReference}
-                            onChange={event =>
-                              updateNewProjectInfoField('lineReference', (event.target as HTMLInputElement).value)
-                            }
-                            placeholder='e.g. Line 2 — Packing'
-                            disabled={isCreatingProject || !canEdit}
-                          />
-                        </div>
-                        <div>
                           <Label htmlFor='new-project-salesperson'>Salesperson</Label>
                           <select
                             id='new-project-salesperson'
@@ -7064,6 +7189,174 @@ function AppContent() {
         )}
       </AnimatePresence>
 
+      {/* Machine Editor Modal */}
+      <AnimatePresence>
+        {machineEditor && (
+          <motion.div
+            className='fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4'
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={closeMachineEditor}
+          >
+            <motion.div
+              className='w-full max-w-xl'
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              onClick={event => event.stopPropagation()}
+            >
+              <Card className='panel'>
+                <CardHeader className='flex items-center justify-between'>
+                  <div className='flex items-center gap-2'>
+                    {machineEditor.mode === 'create' ? (
+                      <>
+                        <Plus size={18} /> <span className='font-medium'>Add Machine</span>
+                      </>
+                    ) : (
+                      <>
+                        <Pencil size={18} /> <span className='font-medium'>Edit Machine</span>
+                      </>
+                    )}
+                  </div>
+                  <Button variant='ghost' onClick={closeMachineEditor} title='Close'>
+                    <X size={16} />
+                  </Button>
+                </CardHeader>
+                <CardContent>
+                  {(() => {
+                    const availableProjects =
+                      projectsBySiteTab[machineEditor.siteTabKey] ?? []
+                    const selectedProject =
+                      availableProjects.find(project => project.id === machineEditor.projectId) ?? null
+                    const siteTabMeta = siteTabs.find(tab => tab.key === machineEditor.siteTabKey)
+                    const siteLabel = siteTabMeta
+                      ? siteTabMeta.label
+                      : machineEditor.siteTabKey === UNASSIGNED_SITE_TAB_KEY
+                      ? 'Unassigned'
+                      : 'Selected site'
+                    const canSelectProject =
+                      machineEditor.mode === 'edit' ? Boolean(selectedProject) : availableProjects.length > 0
+                    return (
+                      <div className='space-y-4'>
+                        <div className='text-xs font-medium uppercase tracking-wide text-slate-500'>
+                          {`Context: ${siteLabel}`}
+                        </div>
+                        {machineEditor.mode === 'create' ? (
+                          <div>
+                            <Label htmlFor='machine-editor-project'>Project</Label>
+                            {availableProjects.length > 0 ? (
+                              <select
+                                id='machine-editor-project'
+                                className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                                value={machineEditor.projectId}
+                                onChange={event => {
+                                  const value = (event.target as HTMLSelectElement).value
+                                  setMachineEditor(prev => (prev ? { ...prev, projectId: value } : prev))
+                                  setMachineEditorError(null)
+                                }}
+                                disabled={isSavingMachineEditor}
+                              >
+                                {availableProjects.map(project => (
+                                  <option key={project.id} value={project.id}>
+                                    {`Project ${project.number}`}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <p className='mt-1 text-sm text-slate-500'>
+                                No projects available for this site.
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <div>
+                            <Label>Project</Label>
+                            <p className='mt-1 text-sm font-medium text-slate-800'>
+                              {selectedProject ? `Project ${selectedProject.number}` : 'Project removed'}
+                            </p>
+                          </div>
+                        )}
+                        <div>
+                          <Label htmlFor='machine-editor-serial'>Machine Serial</Label>
+                          <Input
+                            id='machine-editor-serial'
+                            value={machineEditor.machineSerialNumber}
+                            onChange={event => {
+                              const value = (event.target as HTMLInputElement).value
+                              setMachineEditor(prev => (prev ? { ...prev, machineSerialNumber: value } : prev))
+                              setMachineEditorError(null)
+                            }}
+                            placeholder='e.g. SN-001234'
+                            disabled={isSavingMachineEditor}
+                          />
+                        </div>
+                        <div>
+                          <Label htmlFor='machine-editor-line'>Line No/Name (optional)</Label>
+                          <Input
+                            id='machine-editor-line'
+                            value={machineEditor.lineReference}
+                            onChange={event => {
+                              const value = (event.target as HTMLInputElement).value
+                              setMachineEditor(prev => (prev ? { ...prev, lineReference: value } : prev))
+                              setMachineEditorError(null)
+                            }}
+                            placeholder='e.g. Line 2 — Packing'
+                            disabled={isSavingMachineEditor}
+                          />
+                        </div>
+                        <SerialNumberListInput
+                          id='machine-editor-tools'
+                          label='Tool Serial Numbers'
+                          values={machineEditor.toolSerialNumbers}
+                          onChange={values => {
+                            setMachineEditor(prev => (prev ? { ...prev, toolSerialNumbers: values } : prev))
+                            setMachineEditorError(null)
+                          }}
+                          placeholder='e.g. TOOL-045'
+                          disabled={isSavingMachineEditor}
+                          validateAdd={() =>
+                            machineEditor.machineSerialNumber.trim()
+                              ? null
+                              : 'Enter the machine serial number before adding tools.'
+                          }
+                        />
+                        {machineEditorError && (
+                          <p className='flex items-center gap-1 text-sm text-rose-600'>
+                            <AlertCircle size={14} /> {machineEditorError}
+                          </p>
+                        )}
+                        <div className='flex justify-end gap-2'>
+                          <Button
+                            variant='outline'
+                            onClick={closeMachineEditor}
+                            disabled={isSavingMachineEditor}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            onClick={() => {
+                              void handleSaveMachineEditor()
+                            }}
+                            disabled={
+                              isSavingMachineEditor ||
+                              !canSelectProject
+                            }
+                            title='Save machine details'
+                          >
+                            {isSavingMachineEditor ? 'Saving…' : 'Save Machine'}
+                          </Button>
+                        </div>
+                      </div>
+                    )
+                  })()}
+                </CardContent>
+              </Card>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Edit Contact Modal */}
       <AnimatePresence>
         {contactEditor && (
@@ -7147,9 +7440,6 @@ function AppContent() {
                       disabled={!canEdit || isSavingContactEdit}
                     >
                       <option value=''>Unassigned</option>
-                      {headOfficeTab ? (
-                        <option value={headOfficeTab.key}>Head Office</option>
-                      ) : null}
                       {selectedCustomerSites.map(site => (
                         <option key={site.id} value={site.id}>
                           {site.name?.trim() || site.address?.trim() || 'Unnamed site'}

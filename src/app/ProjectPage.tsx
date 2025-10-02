@@ -2296,12 +2296,6 @@ export default function ProjectPage({
                   <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>General</div>
                   <dl className='mt-2 space-y-1 text-sm text-slate-700'>
                     <div className='flex justify-between gap-3'>
-                      <dt className='text-slate-500'>Line No/Name</dt>
-                      <dd className='text-right font-medium text-slate-800'>
-                        {info?.lineReference ?? '—'}
-                      </dd>
-                    </div>
-                    <div className='flex justify-between gap-3'>
                       <dt className='text-slate-500'>Cobalt Order #</dt>
                       <dd className='text-right font-medium text-slate-800'>
                         {info?.cobaltOrderNumber ?? '—'}
@@ -2357,6 +2351,9 @@ export default function ProjectPage({
                               {machine.toolSerialNumbers.length === 1 ? 'tool' : 'tools'}
                             </span>
                           </div>
+                          {machine.lineReference?.trim() ? (
+                            <div className='text-xs text-slate-500'>Line: {machine.lineReference}</div>
+                          ) : null}
                           {machine.toolSerialNumbers.length > 0 ? (
                             <ul className='space-y-1'>
                               {machine.toolSerialNumbers.map((serial, toolIndex) => (
@@ -3222,16 +3219,6 @@ export default function ProjectPage({
                         <p className='text-xs text-slate-500'>Provide project metadata, serial numbers, and sales context.</p>
                       </div>
                       <div className='grid gap-3 md:grid-cols-2'>
-                        <div>
-                          <Label htmlFor='info-line'>Line No/Name</Label>
-                          <Input
-                            id='info-line'
-                            value={infoDraft.lineReference}
-                            onChange={event => updateInfoField('lineReference', (event.target as HTMLInputElement).value)}
-                            placeholder='e.g. Line 3 — Bottling'
-                            disabled={!canEdit || isSavingInfo}
-                          />
-                        </div>
                         <div>
                           <Label htmlFor='info-salesperson'>Salesperson</Label>
                           <select

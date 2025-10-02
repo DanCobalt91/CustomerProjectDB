@@ -966,7 +966,7 @@ function createLocalStorageStorage(): StorageApi {
     }
 
     const raw = value as Record<string, unknown>
-    const lineReference = toOptionalString(
+    const projectLineReference = toOptionalString(
       (raw as { lineReference?: unknown; lineName?: unknown; lineNumber?: unknown }).lineReference ??
         (raw as { lineName?: unknown }).lineName ??
         (raw as { lineNumber?: unknown }).lineNumber,
@@ -975,7 +975,7 @@ function createLocalStorageStorage(): StorageApi {
     const machines: ProjectMachine[] = []
     const machineMap = new Map<string, ProjectMachine>()
 
-    const addMachine = (serial: string, tools: string[]) => {
+    const addMachine = (serial: string, line: string | null, tools: string[]) => {
       const machineSerial = serial.trim()
       const key = machineSerial.toLowerCase()
       const normalizedTools: string[] = []
@@ -1007,10 +1007,16 @@ function createLocalStorageStorage(): StorageApi {
         if (!existing.machineSerialNumber && machineSerial) {
           existing.machineSerialNumber = machineSerial
         }
+        if (!existing.lineReference && line?.trim()) {
+          existing.lineReference = line.trim()
+        }
       } else {
         const entry: ProjectMachine = {
           machineSerialNumber: machineSerial,
           toolSerialNumbers: normalizedTools,
+        }
+        if (line?.trim()) {
+          entry.lineReference = line.trim()
         }
         machineMap.set(key, entry)
         machines.push(entry)
@@ -1028,12 +1034,17 @@ function createLocalStorageStorage(): StorageApi {
           (entryRaw as { machineSerialNumber?: unknown; serialNumber?: unknown }).machineSerialNumber ??
             (entryRaw as { serialNumber?: unknown }).serialNumber,
         )
+        const line = toOptionalString(
+          (entryRaw as { lineReference?: unknown; lineName?: unknown; lineNumber?: unknown }).lineReference ??
+            (entryRaw as { lineName?: unknown }).lineName ??
+            (entryRaw as { lineNumber?: unknown }).lineNumber,
+        )
         const toolList =
           normalizeStringArrayValue(
             (entryRaw as { toolSerialNumbers?: unknown; toolSerials?: unknown }).toolSerialNumbers ??
               (entryRaw as { toolSerials?: unknown }).toolSerials,
           ) ?? []
-        addMachine(serial ?? '', toolList)
+        addMachine(serial ?? '', line ?? projectLineReference ?? null, toolList)
       }
     }
 
@@ -1050,18 +1061,18 @@ function createLocalStorageStorage(): StorageApi {
         ) ?? []
 
       for (const serial of legacyMachineSerials) {
-        addMachine(serial, [])
+        addMachine(serial, projectLineReference ?? null, [])
       }
 
       if (legacyToolSerials.length > 0) {
         if (legacyMachineSerials.length === 1) {
-          addMachine(legacyMachineSerials[0], legacyToolSerials)
+          addMachine(legacyMachineSerials[0], projectLineReference ?? null, legacyToolSerials)
         } else if (legacyMachineSerials.length === 0) {
           for (const tool of legacyToolSerials) {
-            addMachine('', [tool])
+            addMachine('', projectLineReference ?? null, [tool])
           }
         } else {
-          addMachine('', legacyToolSerials)
+          addMachine('', projectLineReference ?? null, legacyToolSerials)
         }
       }
     }
@@ -1083,7 +1094,6 @@ function createLocalStorageStorage(): StorageApi {
     )
 
     const info: ProjectInfo = {}
-    if (lineReference) info.lineReference = lineReference
     if (machines.length > 0) info.machines = machines
     if (cobaltOrderNumber) info.cobaltOrderNumber = cobaltOrderNumber
     if (customerOrderNumber) info.customerOrderNumber = customerOrderNumber
@@ -1547,10 +1557,10 @@ function createLocalStorageStorage(): StorageApi {
       return undefined
     }
     return {
-      lineReference: info.lineReference,
       machines: info.machines
         ? info.machines.map(machine => ({
             machineSerialNumber: machine.machineSerialNumber,
+            ...(machine.lineReference ? { lineReference: machine.lineReference } : {}),
             toolSerialNumbers: [...machine.toolSerialNumbers],
           }))
         : undefined,
