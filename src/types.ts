@@ -185,6 +185,8 @@ export type Project = {
   activeSubStatus?: ProjectActiveSubStatus;
   note?: string; // ⬅️ new
   siteId?: string;
+  linkedSubCustomerId?: string;
+  linkedSubCustomerSiteId?: string;
   wos: WO[];
   documents?: ProjectDocuments;
   statusHistory?: ProjectStatusLogEntry[];
