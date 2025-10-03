@@ -425,13 +425,14 @@ function computeProjectDateDefaults(settings: BusinessSettings): ProjectInfoDraf
 
 function computeTaskScheduleDefaults(settings: BusinessSettings): { start: string; end: string } {
   const today = new Date()
-  const startHours =
-    settings.hours[getBusinessDayKey(today)] ?? DEFAULT_BUSINESS_SETTINGS.hours.monday
+  const startDay = getBusinessDayKey(today)
+  const startHours = settings.hours[startDay] ?? DEFAULT_BUSINESS_SETTINGS.hours[startDay]
   const startDateTime = applyTimeToDate(today, startHours.start)
   const endDate = new Date(today.getTime())
   endDate.setDate(endDate.getDate() + 7)
-  const endHours = settings.hours[getBusinessDayKey(endDate)] ?? DEFAULT_BUSINESS_SETTINGS.hours.monday
-  const endDateTime = applyTimeToDate(endDate, endHours.end)
+  const endDay = getBusinessDayKey(endDate)
+  const endHours = settings.hours[endDay] ?? DEFAULT_BUSINESS_SETTINGS.hours[endDay]
+  const endDateTime = applyTimeToDate(endDate, endHours.start)
   return {
     start: formatDateTimeForInput(startDateTime),
     end: formatDateTimeForInput(endDateTime),
@@ -3390,6 +3391,7 @@ function AppContent() {
         onDeleteTask={(taskId) =>
           deleteTask(selectedProjectData.customer.id, selectedProjectData.project.id, taskId)
         }
+        businessSettings={businessSettings}
         taskScheduleDefaults={computeTaskScheduleDefaults(businessSettings)}
       />
     )
@@ -4363,6 +4365,7 @@ function AppContent() {
                                 type='time'
                                 className='w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-700 shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
                                 value={hours.start}
+                                step={1800}
                                 onChange={event =>
                                   handleTimeChange(day.key, 'start', (event.target as HTMLInputElement).value)
                                 }
@@ -4374,6 +4377,7 @@ function AppContent() {
                                 type='time'
                                 className='w-full rounded-lg border border-slate-200 px-2 py-1 text-sm text-slate-700 shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
                                 value={hours.end}
+                                step={1800}
                                 onChange={event =>
                                   handleTimeChange(day.key, 'end', (event.target as HTMLInputElement).value)
                                 }
@@ -5692,65 +5696,122 @@ function AppContent() {
       normalizedTools.push(trimmed)
     }
 
+    if (normalizedTools.length > 1) {
+      setMachineEditorError('Machines can only have one tool.')
+      return
+    }
+
+    const normalizedTool = normalizedTools[0]?.toLowerCase() ?? null
+    let projectInfoUpdate: { projectId: string; info: ProjectInfo } | null = null
+
+    if (machineEditor.context === 'project') {
+      if (!machineEditor.projectId) {
+        setMachineEditorError('Select a project to continue.')
+        return
+      }
+      const project = owner.projects.find(entry => entry.id === machineEditor.projectId)
+      if (!project) {
+        setMachineEditorError('Selected project no longer exists.')
+        return
+      }
+
+      const existingMachines = project.info?.machines ?? []
+      const hasMachineConflict = existingMachines.some((machine, index) => {
+        if (machineEditor.mode === 'edit' && index === machineEditor.machineIndex) {
+          return false
+        }
+        return machine.machineSerialNumber.trim().toLowerCase() === normalizedSerial
+      })
+      if (hasMachineConflict) {
+        setMachineEditorError('Machine serial numbers must be unique within the project.')
+        return
+      }
+
+      if (normalizedTool) {
+        const hasToolConflict = existingMachines.some((machine, index) => {
+          if (machineEditor.mode === 'edit' && index === machineEditor.machineIndex) {
+            return false
+          }
+          return machine.toolSerialNumbers.some(
+            tool => tool.trim().toLowerCase() === normalizedTool,
+          )
+        })
+        if (hasToolConflict) {
+          setMachineEditorError('Tool serial numbers must be unique within the project.')
+          return
+        }
+      }
+
+      const clonedMachines = existingMachines.map(machine => ({
+        machineSerialNumber: machine.machineSerialNumber,
+        ...(machine.lineReference ? { lineReference: machine.lineReference } : {}),
+        toolSerialNumbers: [...machine.toolSerialNumbers],
+      }))
+
+      if (machineEditor.mode === 'edit') {
+        const index = machineEditor.machineIndex ?? -1
+        if (index < 0 || index >= clonedMachines.length) {
+          setMachineEditorError('Selected machine no longer exists.')
+          return
+        }
+        clonedMachines[index] = {
+          machineSerialNumber: serial,
+          ...(machineEditor.lineReference.trim()
+            ? { lineReference: machineEditor.lineReference.trim() }
+            : {}),
+          toolSerialNumbers: normalizedTools,
+        }
+      } else {
+        clonedMachines.push({
+          machineSerialNumber: serial,
+          ...(machineEditor.lineReference.trim()
+            ? { lineReference: machineEditor.lineReference.trim() }
+            : {}),
+          toolSerialNumbers: normalizedTools,
+        })
+      }
+
+      const existingInfo = project.info ?? undefined
+      const info: ProjectInfo = existingInfo ? { ...existingInfo } : {}
+      info.machines = clonedMachines
+      projectInfoUpdate = { projectId: project.id, info }
+    } else {
+      const hasMachineConflict = owner.machines.some(machine => {
+        if (machineEditor.mode === 'edit' && machineEditor.machineId === machine.id) {
+          return false
+        }
+        return machine.machineSerialNumber.trim().toLowerCase() === normalizedSerial
+      })
+      if (hasMachineConflict) {
+        setMachineEditorError('Machine serial numbers must be unique for this customer.')
+        return
+      }
+
+      if (normalizedTool) {
+        const hasToolConflict = owner.machines.some(machine => {
+          if (machineEditor.mode === 'edit' && machineEditor.machineId === machine.id) {
+            return false
+          }
+          return machine.toolSerialNumbers.some(
+            tool => tool.trim().toLowerCase() === normalizedTool,
+          )
+        })
+        if (hasToolConflict) {
+          setMachineEditorError('Tool serial numbers must be unique for this customer.')
+          return
+        }
+      }
+    }
+
     setIsSavingMachineEditor(true)
     try {
       if (machineEditor.context === 'project') {
-        if (!machineEditor.projectId) {
-          setMachineEditorError('Select a project to continue.')
-          return
-        }
-        const project = owner.projects.find(entry => entry.id === machineEditor.projectId)
-        if (!project) {
+        if (!projectInfoUpdate) {
           setMachineEditorError('Selected project no longer exists.')
           return
         }
 
-        const existingMachines = project.info?.machines ?? []
-        const hasConflict = existingMachines.some((machine, index) => {
-          if (machineEditor.mode === 'edit' && index === machineEditor.machineIndex) {
-            return false
-          }
-          return machine.machineSerialNumber.trim().toLowerCase() === normalizedSerial
-        })
-        if (hasConflict) {
-          setMachineEditorError('Machine serial numbers must be unique within the project.')
-          return
-        }
-
-        const clonedMachines = existingMachines.map(machine => ({
-          machineSerialNumber: machine.machineSerialNumber,
-          ...(machine.lineReference ? { lineReference: machine.lineReference } : {}),
-          toolSerialNumbers: [...machine.toolSerialNumbers],
-        }))
-
-        if (machineEditor.mode === 'edit') {
-          const index = machineEditor.machineIndex ?? -1
-          if (index < 0 || index >= clonedMachines.length) {
-            setMachineEditorError('Selected machine no longer exists.')
-            return
-          }
-          clonedMachines[index] = {
-            machineSerialNumber: serial,
-            ...(machineEditor.lineReference.trim()
-              ? { lineReference: machineEditor.lineReference.trim() }
-              : {}),
-            toolSerialNumbers: normalizedTools,
-          }
-        } else {
-          clonedMachines.push({
-            machineSerialNumber: serial,
-            ...(machineEditor.lineReference.trim()
-              ? { lineReference: machineEditor.lineReference.trim() }
-              : {}),
-            toolSerialNumbers: normalizedTools,
-          })
-        }
-
-        const existingInfo = project.info ?? undefined
-        const info: ProjectInfo = existingInfo ? { ...existingInfo } : {}
-        info.machines = clonedMachines
-
-        updateProjectInfo(owner.id, project.id, info)
+        updateProjectInfo(owner.id, projectInfoUpdate.projectId, projectInfoUpdate.info)
         setMachineEditor(null)
         setMachineEditorError(null)
       } else {

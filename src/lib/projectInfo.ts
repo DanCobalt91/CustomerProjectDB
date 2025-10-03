@@ -113,6 +113,7 @@ export function parseProjectInfoDraft(
 ): { info: ProjectInfo | null; error?: string } {
   const machines: ProjectMachine[] = []
   const seenMachineSerials = new Set<string>()
+  const seenToolSerials = new Set<string>()
   for (const machine of draft.machines) {
     const machineSerialNumber = machine.machineSerialNumber.trim()
     const lineReference = machine.lineReference.trim()
@@ -131,6 +132,10 @@ export function parseProjectInfoDraft(
       normalizedTools.push(trimmed)
     }
 
+    if (normalizedTools.length > 1) {
+      return { info: null, error: 'Machines can only have one tool.' }
+    }
+
     if (!machineSerialNumber) {
       if (normalizedTools.length > 0) {
         return {
@@ -147,6 +152,13 @@ export function parseProjectInfoDraft(
     }
     seenMachineSerials.add(normalizedMachine)
     const machineEntry: ProjectMachine = { machineSerialNumber, toolSerialNumbers: normalizedTools }
+    if (normalizedTools.length === 1) {
+      const normalizedTool = normalizedTools[0].toLowerCase()
+      if (seenToolSerials.has(normalizedTool)) {
+        return { info: null, error: 'Tool serial numbers must be unique.' }
+      }
+      seenToolSerials.add(normalizedTool)
+    }
     if (lineReference) {
       machineEntry.lineReference = lineReference
     }

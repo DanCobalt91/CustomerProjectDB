@@ -17,6 +17,8 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import type {
+  BusinessDay,
+  BusinessSettings,
   Customer,
   Project,
   ProjectActiveSubStatus,
@@ -34,6 +36,7 @@ import type {
   User,
 } from '../types'
 import {
+  DEFAULT_BUSINESS_SETTINGS,
   DEFAULT_PROJECT_ACTIVE_SUB_STATUS,
   PROJECT_ACTIVE_SUB_STATUS_OPTIONS,
   PROJECT_FILE_CATEGORIES,
@@ -101,6 +104,7 @@ export type ProjectPageProps = {
     },
   ) => Promise<string | null>
   onDeleteTask: (taskId: string) => void
+  businessSettings: BusinessSettings
   taskScheduleDefaults: { start: string; end: string }
 }
 
@@ -198,6 +202,36 @@ const PROJECT_FILE_TAB_OPTIONS: Array<{ value: ProjectFileTab; label: string }> 
   { value: 'onsiteReports', label: 'Onsite reports' },
   { value: 'finalAcceptance', label: 'Final acceptance' },
 ]
+
+const JS_DAY_TO_BUSINESS_DAY: BusinessDay[] = [
+  'sunday',
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+]
+
+function getBusinessDayKey(date: Date): BusinessDay {
+  return JS_DAY_TO_BUSINESS_DAY[date.getDay()] ?? 'monday'
+}
+
+function getBusinessStartTimeForDate(
+  settings: BusinessSettings,
+  dateString: string,
+): string {
+  if (!dateString) {
+    return settings.hours.monday?.start ?? DEFAULT_BUSINESS_SETTINGS.hours.monday.start
+  }
+  const parsed = new Date(`${dateString}T00:00:00`)
+  if (Number.isNaN(parsed.getTime())) {
+    return settings.hours.monday?.start ?? DEFAULT_BUSINESS_SETTINGS.hours.monday.start
+  }
+  const dayKey = getBusinessDayKey(parsed)
+  const hours = settings.hours[dayKey] ?? DEFAULT_BUSINESS_SETTINGS.hours[dayKey]
+  return hours.start
+}
 
 function isProjectFileCategoryTab(value: ProjectFileTab): value is ProjectFileCategory {
   return PROJECT_FILE_CATEGORIES.includes(value as ProjectFileCategory)
@@ -387,6 +421,7 @@ export default function ProjectPage({
   onCreateTask,
   onUpdateTask,
   onDeleteTask,
+  businessSettings,
   taskScheduleDefaults,
 }: ProjectPageProps) {
   const [statusDraft, setStatusDraft] = useState<ProjectStatus>(project.status)
@@ -519,15 +554,17 @@ export default function ProjectPage({
   const buildDefaultOnsiteReportDraft = useCallback((): OnsiteReportDraft => {
     const now = new Date()
     const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
+    const reportDate = local.toISOString().slice(0, 10)
+    const defaultTime = getBusinessStartTimeForDate(businessSettings, reportDate)
     const projectSite = project.siteId ? customer.sites.find(site => site.id === project.siteId) ?? null : null
     const fallbackSite = customer.sites.find(site => site.address?.trim()) ?? null
     const preferredAddress =
       projectSite?.address?.trim() || fallbackSite?.address?.trim() || customer.address || ''
 
     return {
-      reportDate: local.toISOString().slice(0, 10),
-      arrivalTime: '',
-      departureTime: '',
+      reportDate,
+      arrivalTime: defaultTime,
+      departureTime: defaultTime,
       engineerName: currentUserDisplayName,
       customerContact: customer.contacts[0]?.name ?? '',
       siteAddress: preferredAddress,
@@ -537,7 +574,14 @@ export default function ProjectPage({
       signedByName: '',
       signedByPosition: '',
     }
-  }, [currentUserDisplayName, customer.address, customer.contacts, customer.sites, project.siteId])
+  }, [
+    businessSettings,
+    currentUserDisplayName,
+    customer.address,
+    customer.contacts,
+    customer.sites,
+    project.siteId,
+  ])
 
   const [onsiteReportDraft, setOnsiteReportDraft] = useState<OnsiteReportDraft>(() =>
     buildDefaultOnsiteReportDraft(),
@@ -861,7 +905,22 @@ export default function ProjectPage({
   }
 
   const updateOnsiteReportField = <K extends keyof OnsiteReportDraft>(field: K, value: string) => {
-    setOnsiteReportDraft(prev => ({ ...prev, [field]: value }))
+    setOnsiteReportDraft(prev => {
+      if (field === 'reportDate') {
+        const nextDate = value
+        const previousStart = getBusinessStartTimeForDate(businessSettings, prev.reportDate)
+        const nextStart = getBusinessStartTimeForDate(businessSettings, nextDate)
+        const shouldUpdateArrival = !prev.arrivalTime || prev.arrivalTime === previousStart
+        const shouldUpdateDeparture = !prev.departureTime || prev.departureTime === previousStart
+        return {
+          ...prev,
+          reportDate: nextDate,
+          arrivalTime: shouldUpdateArrival ? nextStart : prev.arrivalTime,
+          departureTime: shouldUpdateDeparture ? nextStart : prev.departureTime,
+        }
+      }
+      return { ...prev, [field]: value } as OnsiteReportDraft
+    })
     if (onsiteReportError) {
       setOnsiteReportError(null)
     }
@@ -1825,6 +1884,7 @@ export default function ProjectPage({
                   type='time'
                   className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
                   value={onsiteReportDraft.arrivalTime}
+                  step={1800}
                   onChange={event => updateOnsiteReportField('arrivalTime', (event.target as HTMLInputElement).value)}
                   disabled={!canEdit || isSavingOnsiteReport}
                 />
@@ -1836,6 +1896,7 @@ export default function ProjectPage({
                   type='time'
                   className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
                   value={onsiteReportDraft.departureTime}
+                  step={1800}
                   onChange={event => updateOnsiteReportField('departureTime', (event.target as HTMLInputElement).value)}
                   disabled={!canEdit || isSavingOnsiteReport}
                 />
@@ -2649,34 +2710,35 @@ export default function ProjectPage({
                               disabled={!canEdit}
                             />
                           </div>
-                        <div>
-                          <Label>Assignee</Label>
-                          <select
-                            className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                            value={taskEditDraft.assigneeId}
-                            onChange={event => {
-                              setTaskEditDraft(prev => ({
-                                ...prev,
-                                assigneeId: (event.target as HTMLSelectElement).value,
-                              }))
-                              if (taskEditError) setTaskEditError(null)
-                            }}
-                            disabled={!canEdit}
-                          >
-                            <option value=''>Unassigned</option>
-                            {sortedUsers.map(user => (
-                              <option key={user.id} value={user.id}>
-                                {user.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                          <div>
+                            <Label>Assignee</Label>
+                            <select
+                              className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                              value={taskEditDraft.assigneeId}
+                              onChange={event => {
+                                setTaskEditDraft(prev => ({
+                                  ...prev,
+                                  assigneeId: (event.target as HTMLSelectElement).value,
+                                }))
+                                if (taskEditError) setTaskEditError(null)
+                              }}
+                              disabled={!canEdit}
+                            >
+                              <option value=''>Unassigned</option>
+                              {sortedUsers.map(user => (
+                                <option key={user.id} value={user.id}>
+                                  {user.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
                           <div>
                             <Label>Start</Label>
                             <input
                               type='datetime-local'
                               className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
                               value={taskEditDraft.start}
+                              step={1800}
                               onChange={event => {
                                 setTaskEditDraft(prev => ({ ...prev, start: (event.target as HTMLInputElement).value }))
                                 if (taskEditError) setTaskEditError(null)
@@ -2690,6 +2752,7 @@ export default function ProjectPage({
                               type='datetime-local'
                               className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
                               value={taskEditDraft.end}
+                              step={1800}
                               onChange={event => {
                                 setTaskEditDraft(prev => ({ ...prev, end: (event.target as HTMLInputElement).value }))
                                 if (taskEditError) setTaskEditError(null)
@@ -3018,6 +3081,7 @@ export default function ProjectPage({
                         type='datetime-local'
                         className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
                         value={taskForm.start}
+                        step={1800}
                         onChange={event => {
                           setTaskForm(prev => ({ ...prev, start: (event.target as HTMLInputElement).value }))
                           if (taskError) setTaskError(null)
@@ -3032,6 +3096,7 @@ export default function ProjectPage({
                         type='datetime-local'
                         className='w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
                         value={taskForm.end}
+                        step={1800}
                         onChange={event => {
                           setTaskForm(prev => ({ ...prev, end: (event.target as HTMLInputElement).value }))
                           if (taskError) setTaskError(null)
