@@ -135,11 +135,27 @@ export default function MachineToolListInput({
                     }
                     placeholder='e.g. TOOL-045'
                     disabled={disabled}
-                    validateAdd={(_serial, _existing) =>
-                      hasMachineSerial
-                        ? null
-                        : 'Enter the machine serial number before adding tools.'
-                    }
+                    validateAdd={(serial, existing) => {
+                      if (!hasMachineSerial) {
+                        return 'Enter the machine serial number before adding tools.'
+                      }
+                      if (existing.length >= 1) {
+                        return 'Machines can only have one tool.'
+                      }
+                      const normalized = serial.trim().toLowerCase()
+                      const hasDuplicateTool = machines.some(other => {
+                        if (other.id === machineId) {
+                          return false
+                        }
+                        return other.toolSerialNumbers.some(tool =>
+                          tool.trim().toLowerCase() === normalized,
+                        )
+                      })
+                      if (hasDuplicateTool) {
+                        return 'Tool serial numbers must be unique.'
+                      }
+                      return null
+                    }}
                   />
                   {!hasMachineSerial && machine.toolSerialNumbers.length === 0 ? (
                     <p className='mt-2 text-xs text-slate-500'>
