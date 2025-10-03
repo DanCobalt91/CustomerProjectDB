@@ -58,6 +58,15 @@ export type ProjectMachine = {
   toolSerialNumbers: string[];
 };
 
+export type CustomerMachine = {
+  id: string;
+  machineSerialNumber: string;
+  lineReference?: string;
+  toolSerialNumbers: string[];
+  siteId?: string;
+  projectId?: string;
+};
+
 export type ProjectInfo = {
   machines?: ProjectMachine[];
   cobaltOrderNumber?: string;
@@ -220,6 +229,7 @@ export type Customer = {
   sites: CustomerSite[];
   contacts: CustomerContact[];
   projects: Project[];
+  machines: CustomerMachine[];
 };
 
 export type AppRole = 'viewer' | 'editor' | 'admin';
