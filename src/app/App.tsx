@@ -18,6 +18,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion'
 import type {
   Customer,
+  CustomerMachine,
   CustomerContact,
   CustomerSite,
   Project,
@@ -60,6 +61,8 @@ import {
   createWO as createWORecord,
   deleteWO as deleteWORecord,
   updateProject as updateProjectRecord,
+  createCustomerMachine as createCustomerMachineRecord,
+  updateCustomerMachine as updateCustomerMachineRecord,
   createTask as createTaskRecord,
   updateTask as updateTaskRecord,
   deleteTask as deleteTaskRecord,
@@ -218,10 +221,13 @@ const UNASSIGNED_SITE_TAB_KEY: CustomerSiteTabKey = 'unassigned'
 
 type MachineEditorState = {
   mode: 'create' | 'edit'
-  customerId: string
+  context: 'project' | 'customer'
+  ownerCustomerId: string
   siteTabKey: CustomerSiteTabKey
-  projectId: string
+  projectId: string | null
+  siteId: string | null
   machineIndex?: number
+  machineId?: string
   machineSerialNumber: string
   lineReference: string
   toolSerialNumbers: string[]
@@ -929,6 +935,18 @@ function AppContent() {
       .filter(customer => customer.parentCustomerId === selectedCustomer.id)
       .sort((a, b) => a.name.localeCompare(b.name))
   }, [db, selectedCustomer])
+  const sortCustomerMachines = useCallback(
+    (machines: CustomerMachine[]) =>
+      machines
+        .slice()
+        .sort((a, b) =>
+          a.machineSerialNumber.localeCompare(b.machineSerialNumber, undefined, {
+            numeric: true,
+            sensitivity: 'base',
+          }),
+        ),
+    [],
+  )
   const siteTabs = useMemo(() => {
     if (!selectedCustomer) {
       return [] as CustomerSiteTab[]
@@ -1220,6 +1238,7 @@ function AppContent() {
     setIsSavingMachineEditor(false)
     setCustomerSiteTab('')
     setCustomerProjectsTab('active')
+    setCustomerProjectSection('projects')
   }, [selectedCustomer?.id, closeContactEditor])
   useEffect(() => {
     if (activePage !== 'customerDetail') {
@@ -1877,39 +1896,115 @@ function AppContent() {
       projectTabCopy.complete.empty = emptyMessage
     }
     const activeTabCopy = projectTabCopy[customerProjectsTab]
-    const parentLineItems = activeSiteTab
+    type CustomerLineItem = {
+      id: string
+      source: 'project' | 'customer'
+      ownerType: 'selected' | 'child'
+      ownerCustomerId: string
+      customerName: string
+      machineSerialNumber: string
+      lineReference: string
+      toolSerialNumbers: string[]
+      project: Project | null
+      machineIndex?: number
+      machineId?: string
+      siteId: string | null
+    }
+
+    const parentProjectLineItems: CustomerLineItem[] = activeSiteTab
       ? projectsForCurrentSite.flatMap(project => {
           const machines = project.info?.machines ?? []
           return machines.map((machine, index) => ({
             id: `${project.id}-${index}`,
+            source: 'project' as const,
+            ownerType: 'selected' as const,
+            ownerCustomerId: selectedCustomer.id,
+            customerName: selectedCustomer.name,
             machineSerialNumber: machine.machineSerialNumber,
             lineReference: machine.lineReference ?? '',
             toolSerialNumbers: [...machine.toolSerialNumbers],
             project,
             machineIndex: index,
-            customerId: selectedCustomer.id,
-            customerName: selectedCustomer.name,
-            ownerType: 'selected' as const,
+            siteId: project.siteId ?? null,
           }))
         })
       : []
-    const childLineItems = childCustomers.flatMap(child =>
+
+    const parentStandaloneItems: CustomerLineItem[] = activeSiteTab
+      ? selectedCustomer.machines
+          .filter(machine => {
+            if (activeSiteTab.type === 'site') {
+              return machine.siteId === activeSiteTab.site.id
+            }
+            return !machine.siteId
+          })
+          .map(machine => {
+            const linkedProject = machine.projectId
+              ? selectedCustomer.projects.find(project => project.id === machine.projectId) ?? null
+              : null
+            return {
+              id: machine.id,
+              source: 'customer' as const,
+              ownerType: 'selected' as const,
+              ownerCustomerId: selectedCustomer.id,
+              customerName: selectedCustomer.name,
+              machineSerialNumber: machine.machineSerialNumber,
+              lineReference: machine.lineReference ?? '',
+              toolSerialNumbers: [...machine.toolSerialNumbers],
+              project: linkedProject,
+              machineId: machine.id,
+              siteId: machine.siteId ?? null,
+            }
+          })
+      : []
+
+    const childProjectItems: CustomerLineItem[] = childCustomers.flatMap(child =>
       child.projects.flatMap(project => {
         const machines = project.info?.machines ?? []
         return machines.map((machine, index) => ({
           id: `child-${child.id}-${project.id}-${index}`,
+          source: 'project' as const,
+          ownerType: 'child' as const,
+          ownerCustomerId: child.id,
+          customerName: child.name,
           machineSerialNumber: machine.machineSerialNumber,
           lineReference: machine.lineReference ?? '',
           toolSerialNumbers: [...machine.toolSerialNumbers],
           project,
           machineIndex: index,
-          customerId: child.id,
-          customerName: child.name,
-          ownerType: 'child' as const,
+          siteId: project.siteId ?? null,
         }))
       }),
     )
-    const lineItems = [...parentLineItems, ...childLineItems]
+
+    const childStandaloneItems: CustomerLineItem[] = childCustomers.flatMap(child =>
+      child.machines.map(machine => {
+        const linkedProject = machine.projectId
+          ? child.projects.find(project => project.id === machine.projectId) ?? null
+          : null
+        return {
+          id: `child-standalone-${child.id}-${machine.id}`,
+          source: 'customer' as const,
+          ownerType: 'child' as const,
+          ownerCustomerId: child.id,
+          customerName: child.name,
+          machineSerialNumber: machine.machineSerialNumber,
+          lineReference: machine.lineReference ?? '',
+          toolSerialNumbers: [...machine.toolSerialNumbers],
+          project: linkedProject,
+          machineId: machine.id,
+          siteId: machine.siteId ?? null,
+        }
+      }),
+    )
+
+    const lineItems: CustomerLineItem[] = [
+      ...parentProjectLineItems,
+      ...parentStandaloneItems,
+      ...childProjectItems,
+      ...childStandaloneItems,
+    ]
+
     lineItems.sort((a, b) => {
       const customerCompare = a.customerName.localeCompare(b.customerName, undefined, { sensitivity: 'base' })
       if (customerCompare !== 0) {
@@ -1921,25 +2016,34 @@ function AppContent() {
       if (machineCompare !== 0) {
         return machineCompare
       }
-      return a.project.number.localeCompare(b.project.number, undefined, { sensitivity: 'base' })
+      const projectNumberA = a.project?.number ?? ''
+      const projectNumberB = b.project?.number ?? ''
+      return projectNumberA.localeCompare(projectNumberB, undefined, { sensitivity: 'base' })
     })
+
     const childLineCountByCustomerId = new Map<string, number>()
-    for (const item of childLineItems) {
-      childLineCountByCustomerId.set(item.customerId, (childLineCountByCustomerId.get(item.customerId) ?? 0) + 1)
+    for (const item of [...childProjectItems, ...childStandaloneItems]) {
+      childLineCountByCustomerId.set(
+        item.ownerCustomerId,
+        (childLineCountByCustomerId.get(item.ownerCustomerId) ?? 0) + 1,
+      )
     }
-    for (const parentItem of parentLineItems) {
-      const linkedId = parentItem.project.linkedSubCustomerId
+    for (const parentItem of parentProjectLineItems) {
+      const linkedId = parentItem.project?.linkedSubCustomerId
       if (!linkedId) {
         continue
       }
       childLineCountByCustomerId.set(linkedId, (childLineCountByCustomerId.get(linkedId) ?? 0) + 1)
     }
-    const canViewLines = !!activeSiteTab || childLineItems.length > 0
+
+    const canViewLines =
+      !!activeSiteTab || childProjectItems.length > 0 || childStandaloneItems.length > 0
+
     const customerSectionTabs: Array<{ value: 'subCustomers' | 'projects' | 'lines'; label: string; count: number }> = [
+      { value: 'projects', label: 'Projects', count: projectsForCurrentSite.length },
       ...(childCustomers.length > 0
         ? [{ value: 'subCustomers' as const, label: 'Sub-customers', count: childCustomers.length }]
         : []),
-      { value: 'projects', label: 'Projects', count: projectsForCurrentSite.length },
       { value: 'lines', label: 'Lines', count: lineItems.length },
     ]
 
@@ -2440,15 +2544,16 @@ function AppContent() {
                     if (!activeSiteTab || !selectedCustomer) {
                       return
                     }
-                    if (projectsForCurrentSite.length === 0) {
-                      return
-                    }
-                    const defaultProject = projectsForCurrentSite[0]
                     setMachineEditor({
                       mode: 'create',
-                      customerId: selectedCustomer.id,
+                      context: 'customer',
+                      ownerCustomerId: selectedCustomer.id,
                       siteTabKey: activeSiteTab.key,
-                      projectId: defaultProject.id,
+                      projectId: projectsForCurrentSite[0]?.id ?? null,
+                      siteId:
+                        activeSiteTab.type === 'site'
+                          ? activeSiteTab.site.id
+                          : null,
                       machineSerialNumber: '',
                       lineReference: '',
                       toolSerialNumbers: [],
@@ -2460,15 +2565,10 @@ function AppContent() {
                       ? 'Read-only access'
                       : !activeSiteTab
                       ? 'Select a site to record machines'
-                      : projectsForCurrentSite.length === 0
-                      ? 'Create a project before adding machines'
                       : 'Add machine'
                   }
                   disabled={
-                    !canEdit ||
-                    !activeSiteTab ||
-                    !selectedCustomer ||
-                    projectsForCurrentSite.length === 0
+                    !canEdit || !activeSiteTab || !selectedCustomer
                   }
                 >
                   <Plus size={16} /> Add Machine
@@ -2484,6 +2584,16 @@ function AppContent() {
                   childCustomers.map(child => {
                     const address = resolveCustomerPrimaryAddress(child)
                     const machineCount = childLineCountByCustomerId.get(child.id) ?? 0
+                    const sortedContacts = child.contacts
+                      .slice()
+                      .sort((a, b) => (a.name ?? '').localeCompare(b.name ?? '', undefined, { sensitivity: 'base' }))
+                    const mainContact = sortedContacts.find(contact => {
+                      const hasName = contact.name?.trim()
+                      const hasPhone = contact.phone?.trim()
+                      const hasEmail = contact.email?.trim()
+                      return hasName || hasPhone || hasEmail
+                    })
+                    const mapAddress = address?.trim() ?? null
                     return (
                       <Card key={child.id} className='panel'>
                         <CardHeader className='flex flex-col gap-3 border-b-0 sm:flex-row sm:items-center sm:justify-between'>
@@ -2515,13 +2625,55 @@ function AppContent() {
                             </Button>
                           </div>
                         </CardHeader>
-                        {address ? (
-                          <CardContent>
-                            <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
-                              <span className='block whitespace-pre-wrap break-words text-slate-800'>{address}</span>
+                        <CardContent>
+                          <div className='grid gap-4 md:grid-cols-2'>
+                            <div className='space-y-3'>
+                              <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                                {address ? (
+                                  <span className='block whitespace-pre-wrap break-words text-slate-800'>{address}</span>
+                                ) : (
+                                  <span className='text-slate-500'>No primary address recorded.</span>
+                                )}
+                              </div>
+                              <div className='rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm'>
+                                <div className='text-sm font-semibold text-slate-800'>Main contact</div>
+                                {mainContact ? (
+                                  <div className='mt-2 space-y-1 text-sm text-slate-600'>
+                                    <div>{mainContact.name?.trim() || 'Unnamed contact'}</div>
+                                    {mainContact.position?.trim() ? (
+                                      <div className='text-xs text-slate-500'>{mainContact.position}</div>
+                                    ) : null}
+                                    <div className='text-xs text-slate-500'>
+                                      {mainContact.phone?.trim() ? (
+                                        <span className='block'>Phone: {mainContact.phone}</span>
+                                      ) : (
+                                        <span className='block text-slate-400'>Phone not provided</span>
+                                      )}
+                                      {mainContact.email?.trim() ? (
+                                        <span className='block'>Email: {mainContact.email}</span>
+                                      ) : (
+                                        <span className='block text-slate-400'>Email not provided</span>
+                                      )}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className='mt-2 text-xs text-slate-500'>No contacts recorded.</div>
+                                )}
+                              </div>
                             </div>
-                          </CardContent>
-                        ) : null}
+                            {mapAddress ? (
+                              <div className='overflow-hidden rounded-2xl border border-slate-200/80 shadow-sm'>
+                                <iframe
+                                  title={`Map preview for ${child.name}`}
+                                  src={`https://maps.google.com/maps?q=${encodeURIComponent(mapAddress)}&z=15&output=embed`}
+                                  loading='lazy'
+                                  className='h-40 w-full border-0'
+                                  referrerPolicy='no-referrer-when-downgrade'
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        </CardContent>
                       </Card>
                     )
                   })
@@ -2658,17 +2810,20 @@ function AppContent() {
                           </thead>
                           <tbody className='divide-y divide-slate-100'>
                             {lineItems.map(item => {
-                              const statusBucket = resolveProjectStatusBucket(item.project)
-                              const statusMeta = PROJECT_STATUS_BUCKET_META[statusBucket]
-                              const statusLabel = formatProjectStatus(item.project.status, item.project.activeSubStatus)
+                              const project = item.project
+                              const statusBucket = project ? resolveProjectStatusBucket(project) : null
+                              const statusMeta = statusBucket ? PROJECT_STATUS_BUCKET_META[statusBucket] : null
+                              const statusLabel = project
+                                ? formatProjectStatus(project.status, project.activeSubStatus)
+                                : null
                               const machineLabel = item.machineSerialNumber.trim() || 'Not specified'
                               const lineLabel = item.lineReference?.trim() || '—'
                               const isChildOwner = item.ownerType === 'child'
-                              const linkedOwner = item.project.linkedSubCustomerId
+                              const linkedOwner = project?.linkedSubCustomerId
                                 ? customerLookup.get(item.project.linkedSubCustomerId) ?? null
                                 : null
                               const linkedOwnerSite = linkedOwner
-                                ? linkedOwner.sites.find(site => site.id === item.project.linkedSubCustomerSiteId)
+                                ? linkedOwner.sites.find(site => site.id === project?.linkedSubCustomerSiteId)
                                 : null
                               return (
                                 <tr key={item.id} className='hover:bg-slate-50/70'>
@@ -2694,44 +2849,50 @@ function AppContent() {
                                     )}
                                   </td>
                                   <td className='px-4 py-3'>
-                                    <div className='flex flex-col gap-1'>
-                                      <span className='font-semibold text-slate-800'>Project: {item.project.number}</span>
-                                      <span
-                                        className='inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold'
-                                      style={{
-                                        color: statusMeta.color,
-                                        backgroundColor: `${statusMeta.color}1a`,
-                                        borderColor: `${statusMeta.color}33`,
-                                      }}
-                                    >
-                                      {statusLabel}
-                                    </span>
-                                    <div>
-                                      <Button
-                                        size='sm'
-                                        variant='outline'
-                                        onClick={() => {
-                                          setSelectedCustomerId(item.customerId)
-                                          setSelectedProjectId(item.project.id)
-                                          setActivePage('projectDetail')
-                                        }}
-                                      >
-                                        <ChevronRight size={16} /> View project
-                                      </Button>
-                                    </div>
-                                    {linkedOwner ? (
-                                      <span className='text-xs text-slate-500'>
-                                        Associated with {linkedOwner.name}
-                                        {linkedOwnerSite
-                                          ? ` — ${
-                                              linkedOwnerSite.name?.trim() ||
-                                              linkedOwnerSite.address?.trim() ||
-                                              'Site'
-                                            }`
-                                          : ''}
-                                      </span>
-                                    ) : null}
-                                  </div>
+                                    {project ? (
+                                      <div className='flex flex-col gap-1'>
+                                        <span className='font-semibold text-slate-800'>Project: {project.number}</span>
+                                        {statusMeta && statusLabel ? (
+                                          <span
+                                            className='inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold'
+                                            style={{
+                                              color: statusMeta.color,
+                                              backgroundColor: `${statusMeta.color}1a`,
+                                              borderColor: `${statusMeta.color}33`,
+                                            }}
+                                          >
+                                            {statusLabel}
+                                          </span>
+                                        ) : null}
+                                        <div>
+                                          <Button
+                                            size='sm'
+                                            variant='outline'
+                                            onClick={() => {
+                                              setSelectedCustomerId(item.ownerCustomerId)
+                                              setSelectedProjectId(project.id)
+                                              setActivePage('projectDetail')
+                                            }}
+                                          >
+                                            <ChevronRight size={16} /> View project
+                                          </Button>
+                                        </div>
+                                        {linkedOwner ? (
+                                          <span className='text-xs text-slate-500'>
+                                            Associated with {linkedOwner.name}
+                                            {linkedOwnerSite
+                                              ? ` — ${
+                                                  linkedOwnerSite.name?.trim() ||
+                                                  linkedOwnerSite.address?.trim() ||
+                                                  'Site'
+                                                }`
+                                              : ''}
+                                          </span>
+                                        ) : null}
+                                      </div>
+                                    ) : (
+                                      <span className='text-sm text-slate-500'>No project association</span>
+                                    )}
                                   </td>
                                   <td className='px-4 py-3'>
                                     {isChildOwner ? (
@@ -2739,7 +2900,7 @@ function AppContent() {
                                         size='sm'
                                         variant='outline'
                                         onClick={() => {
-                                          setSelectedCustomerId(item.customerId)
+                                          setSelectedCustomerId(item.ownerCustomerId)
                                           setActivePage('customerDetail')
                                         }}
                                       >
@@ -2753,16 +2914,33 @@ function AppContent() {
                                           if (!selectedCustomer) {
                                             return
                                           }
-                                          setMachineEditor({
-                                            mode: 'edit',
-                                            customerId: selectedCustomer.id,
-                                            siteTabKey: customerSiteTab,
-                                            projectId: item.project.id,
-                                            machineIndex: item.machineIndex,
-                                            machineSerialNumber: item.machineSerialNumber,
-                                            lineReference: item.lineReference ?? '',
-                                            toolSerialNumbers: [...item.toolSerialNumbers],
-                                          })
+                                          if (item.source === 'project' && item.project) {
+                                            setMachineEditor({
+                                              mode: 'edit',
+                                              context: 'project',
+                                              ownerCustomerId: item.ownerCustomerId,
+                                              siteTabKey: customerSiteTab,
+                                              projectId: item.project.id,
+                                              siteId: item.siteId,
+                                              machineIndex: item.machineIndex,
+                                              machineSerialNumber: item.machineSerialNumber,
+                                              lineReference: item.lineReference ?? '',
+                                              toolSerialNumbers: [...item.toolSerialNumbers],
+                                            })
+                                          } else {
+                                            setMachineEditor({
+                                              mode: 'edit',
+                                              context: 'customer',
+                                              ownerCustomerId: item.ownerCustomerId,
+                                              siteTabKey: customerSiteTab,
+                                              projectId: item.project?.id ?? null,
+                                              siteId: item.siteId,
+                                              machineId: item.machineId,
+                                              machineSerialNumber: item.machineSerialNumber,
+                                              lineReference: item.lineReference ?? '',
+                                              toolSerialNumbers: [...item.toolSerialNumbers],
+                                            })
+                                          }
                                           setMachineEditorError(null)
                                         }}
                                         disabled={!canEdit}
@@ -5487,17 +5665,11 @@ function AppContent() {
     if (!machineEditor) {
       return
     }
-    const customer = db.find(entry => entry.id === machineEditor.customerId)
-    if (!customer) {
+    const owner = db.find(entry => entry.id === machineEditor.ownerCustomerId)
+    if (!owner) {
       setMachineEditorError('Selected customer no longer exists.')
       return
     }
-    const project = customer.projects.find(entry => entry.id === machineEditor.projectId)
-    if (!project) {
-      setMachineEditorError('Selected project no longer exists.')
-      return
-    }
-
     const serial = machineEditor.machineSerialNumber.trim()
     if (!serial) {
       setMachineEditorError('Enter a machine serial number.')
@@ -5505,18 +5677,6 @@ function AppContent() {
     }
 
     const normalizedSerial = serial.toLowerCase()
-    const existingMachines = project.info?.machines ?? []
-    const hasConflict = existingMachines.some((machine, index) => {
-      if (machineEditor.mode === 'edit' && index === machineEditor.machineIndex) {
-        return false
-      }
-      return machine.machineSerialNumber.trim().toLowerCase() === normalizedSerial
-    })
-    if (hasConflict) {
-      setMachineEditorError('Machine serial numbers must be unique within the project.')
-      return
-    }
-
     const normalizedTools: string[] = []
     const seenTools = new Set<string>()
     for (const tool of machineEditor.toolSerialNumbers) {
@@ -5532,44 +5692,112 @@ function AppContent() {
       normalizedTools.push(trimmed)
     }
 
-    const clonedMachines = existingMachines.map(machine => ({
-      machineSerialNumber: machine.machineSerialNumber,
-      ...(machine.lineReference ? { lineReference: machine.lineReference } : {}),
-      toolSerialNumbers: [...machine.toolSerialNumbers],
-    }))
-
-    if (machineEditor.mode === 'edit') {
-      const index = machineEditor.machineIndex ?? -1
-      if (index < 0 || index >= clonedMachines.length) {
-        setMachineEditorError('Selected machine no longer exists.')
-        return
-      }
-      clonedMachines[index] = {
-        machineSerialNumber: serial,
-        ...(machineEditor.lineReference.trim()
-          ? { lineReference: machineEditor.lineReference.trim() }
-          : {}),
-        toolSerialNumbers: normalizedTools,
-      }
-    } else {
-      clonedMachines.push({
-        machineSerialNumber: serial,
-        ...(machineEditor.lineReference.trim()
-          ? { lineReference: machineEditor.lineReference.trim() }
-          : {}),
-        toolSerialNumbers: normalizedTools,
-      })
-    }
-
-    const existingInfo = project.info ?? undefined
-    const info: ProjectInfo = existingInfo ? { ...existingInfo } : {}
-    info.machines = clonedMachines
-
     setIsSavingMachineEditor(true)
     try {
-      updateProjectInfo(customer.id, project.id, info)
-      setMachineEditor(null)
-      setMachineEditorError(null)
+      if (machineEditor.context === 'project') {
+        if (!machineEditor.projectId) {
+          setMachineEditorError('Select a project to continue.')
+          return
+        }
+        const project = owner.projects.find(entry => entry.id === machineEditor.projectId)
+        if (!project) {
+          setMachineEditorError('Selected project no longer exists.')
+          return
+        }
+
+        const existingMachines = project.info?.machines ?? []
+        const hasConflict = existingMachines.some((machine, index) => {
+          if (machineEditor.mode === 'edit' && index === machineEditor.machineIndex) {
+            return false
+          }
+          return machine.machineSerialNumber.trim().toLowerCase() === normalizedSerial
+        })
+        if (hasConflict) {
+          setMachineEditorError('Machine serial numbers must be unique within the project.')
+          return
+        }
+
+        const clonedMachines = existingMachines.map(machine => ({
+          machineSerialNumber: machine.machineSerialNumber,
+          ...(machine.lineReference ? { lineReference: machine.lineReference } : {}),
+          toolSerialNumbers: [...machine.toolSerialNumbers],
+        }))
+
+        if (machineEditor.mode === 'edit') {
+          const index = machineEditor.machineIndex ?? -1
+          if (index < 0 || index >= clonedMachines.length) {
+            setMachineEditorError('Selected machine no longer exists.')
+            return
+          }
+          clonedMachines[index] = {
+            machineSerialNumber: serial,
+            ...(machineEditor.lineReference.trim()
+              ? { lineReference: machineEditor.lineReference.trim() }
+              : {}),
+            toolSerialNumbers: normalizedTools,
+          }
+        } else {
+          clonedMachines.push({
+            machineSerialNumber: serial,
+            ...(machineEditor.lineReference.trim()
+              ? { lineReference: machineEditor.lineReference.trim() }
+              : {}),
+            toolSerialNumbers: normalizedTools,
+          })
+        }
+
+        const existingInfo = project.info ?? undefined
+        const info: ProjectInfo = existingInfo ? { ...existingInfo } : {}
+        info.machines = clonedMachines
+
+        updateProjectInfo(owner.id, project.id, info)
+        setMachineEditor(null)
+        setMachineEditorError(null)
+      } else {
+        const payload = {
+          machineSerialNumber: serial,
+          lineReference: machineEditor.lineReference.trim() || null,
+          toolSerialNumbers: normalizedTools,
+          siteId: machineEditor.siteId,
+          projectId: machineEditor.projectId,
+        }
+
+        if (machineEditor.mode === 'edit' && machineEditor.machineId) {
+          const updated = await updateCustomerMachineRecord(owner.id, machineEditor.machineId, payload)
+          setDb(prev =>
+            prev.map(customer =>
+              customer.id !== owner.id
+                ? customer
+                : {
+                    ...customer,
+                    machines: sortCustomerMachines(
+                      customer.machines.map(machine =>
+                        machine.id === updated.id ? { ...updated } : machine,
+                      ),
+                    ),
+                  },
+            ),
+          )
+        } else {
+          const created = await createCustomerMachineRecord(owner.id, payload)
+          setDb(prev =>
+            prev.map(customer =>
+              customer.id !== owner.id
+                ? customer
+                : {
+                    ...customer,
+                    machines: sortCustomerMachines([...customer.machines, created]),
+                  },
+            ),
+          )
+        }
+
+        setMachineEditor(null)
+        setMachineEditorError(null)
+      }
+    } catch (error) {
+      console.error('Failed to save machine', error)
+      setMachineEditorError(toErrorMessage(error, 'Failed to save machine.'))
     } finally {
       setIsSavingMachineEditor(false)
     }
@@ -7436,49 +7664,123 @@ function AppContent() {
                 </CardHeader>
                 <CardContent>
                   {(() => {
-                    const availableProjects =
-                      projectsBySiteTab[machineEditor.siteTabKey] ?? []
-                    const selectedProject =
-                      availableProjects.find(project => project.id === machineEditor.projectId) ?? null
+                    let disableMachineSave = false
+                    const owner = db.find(entry => entry.id === machineEditor.ownerCustomerId) ?? null
+                    const ownerProjects = owner
+                      ? owner.projects
+                          .slice()
+                          .sort((a, b) => a.number.localeCompare(b.number, undefined, { sensitivity: 'base' }))
+                      : []
+                    const selectedProject = ownerProjects.find(project => project.id === machineEditor.projectId) ?? null
+                    const ownerSites = owner ? owner.sites : []
                     const siteTabMeta = siteTabs.find(tab => tab.key === machineEditor.siteTabKey)
                     const siteLabel = siteTabMeta
                       ? siteTabMeta.label
                       : machineEditor.siteTabKey === UNASSIGNED_SITE_TAB_KEY
                       ? 'Unassigned'
                       : 'Selected site'
-                    const canSelectProject =
-                      machineEditor.mode === 'edit' ? Boolean(selectedProject) : availableProjects.length > 0
+                    const ownerOptions = selectedCustomer
+                      ? [selectedCustomer, ...childCustomers]
+                          .filter((option, index, all) => all.findIndex(candidate => candidate.id === option.id) === index)
+                      : []
+                    const requiresProject = machineEditor.context === 'project'
+                    const canSelectProject = requiresProject ? Boolean(selectedProject) : true
+                    disableMachineSave = requiresProject && !canSelectProject
                     return (
                       <div className='space-y-4'>
                         <div className='text-xs font-medium uppercase tracking-wide text-slate-500'>
                           {`Context: ${siteLabel}`}
                         </div>
-                        {machineEditor.mode === 'create' ? (
-                          <div>
-                            <Label htmlFor='machine-editor-project'>Project</Label>
-                            {availableProjects.length > 0 ? (
+                        {machineEditor.context === 'customer' ? (
+                          <div className='space-y-3'>
+                            <div>
+                              <Label htmlFor='machine-owner-select'>Customer</Label>
+                              {ownerOptions.length > 1 && machineEditor.mode === 'create' ? (
+                                <select
+                                  id='machine-owner-select'
+                                  className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                                  value={machineEditor.ownerCustomerId}
+                                  onChange={event => {
+                                    const nextOwnerId = (event.target as HTMLSelectElement).value
+                                    setMachineEditor(prev => {
+                                      if (!prev) {
+                                        return prev
+                                      }
+                                      const nextOwner = db.find(entry => entry.id === nextOwnerId) ?? null
+                                      const nextSiteId = nextOwner?.sites.some(site => site.id === prev.siteId)
+                                        ? prev.siteId
+                                        : nextOwner?.sites[0]?.id ?? null
+                                      const nextProjectId = nextOwner?.projects.some(project => project.id === prev.projectId)
+                                        ? prev.projectId
+                                        : null
+                                      return {
+                                        ...prev,
+                                        ownerCustomerId: nextOwnerId,
+                                        siteId: nextSiteId,
+                                        projectId: nextProjectId,
+                                      }
+                                    })
+                                    setMachineEditorError(null)
+                                  }}
+                                  disabled={isSavingMachineEditor}
+                                >
+                                  {ownerOptions.map(option => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <p className='mt-1 text-sm font-medium text-slate-800'>
+                                  {owner ? owner.name : 'Customer unavailable'}
+                                </p>
+                              )}
+                            </div>
+                            <div>
+                              <Label htmlFor='machine-owner-site'>Site</Label>
                               <select
-                                id='machine-editor-project'
+                                id='machine-owner-site'
                                 className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                                value={machineEditor.projectId}
+                                value={machineEditor.siteId ?? ''}
                                 onChange={event => {
                                   const value = (event.target as HTMLSelectElement).value
-                                  setMachineEditor(prev => (prev ? { ...prev, projectId: value } : prev))
+                                  setMachineEditor(prev => (prev ? { ...prev, siteId: value ? value : null } : prev))
                                   setMachineEditorError(null)
                                 }}
                                 disabled={isSavingMachineEditor}
                               >
-                                {availableProjects.map(project => (
+                                <option value=''>Unassigned</option>
+                                {ownerSites.map(site => (
+                                  <option key={site.id} value={site.id}>
+                                    {site.name?.trim() || site.address?.trim() || 'Unnamed site'}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <Label htmlFor='machine-owner-project'>Project (optional)</Label>
+                              <select
+                                id='machine-owner-project'
+                                className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                                value={machineEditor.projectId ?? ''}
+                                onChange={event => {
+                                  const value = (event.target as HTMLSelectElement).value
+                                  setMachineEditor(prev => (prev ? { ...prev, projectId: value ? value : null } : prev))
+                                  setMachineEditorError(null)
+                                }}
+                                disabled={isSavingMachineEditor || ownerProjects.length === 0}
+                              >
+                                <option value=''>No project association</option>
+                                {ownerProjects.map(project => (
                                   <option key={project.id} value={project.id}>
                                     {`Project ${project.number}`}
                                   </option>
                                 ))}
                               </select>
-                            ) : (
-                              <p className='mt-1 text-sm text-slate-500'>
-                                No projects available for this site.
-                              </p>
-                            )}
+                              {ownerProjects.length === 0 ? (
+                                <p className='mt-1 text-xs text-slate-500'>No projects recorded for this customer.</p>
+                              ) : null}
+                            </div>
                           </div>
                         ) : (
                           <div>
@@ -7551,7 +7853,7 @@ function AppContent() {
                             }}
                             disabled={
                               isSavingMachineEditor ||
-                              !canSelectProject
+                              disableMachineSave
                             }
                             title='Save machine details'
                           >

@@ -3,6 +3,7 @@ import type {
   BusinessLogo,
   BusinessSettings,
   Customer,
+  CustomerMachine,
   CustomerSite,
   CustomerContact,
   Project,
@@ -41,6 +42,7 @@ const DEFAULT_USER_PASSWORD = 'Demo@123'
 
 type ContactInput = Partial<Omit<CustomerContact, 'id'>> & { id?: string }
 type CustomerSiteInput = Partial<Omit<CustomerSite, 'id'>> & { id?: string }
+type CustomerMachineInput = Partial<Omit<CustomerMachine, 'id'>> & { id?: string }
 type ProjectDocumentsUpdate = Partial<Record<ProjectFileCategory, ProjectFile[] | ProjectFile | null>>
 
 type StorageApi = {
@@ -63,8 +65,31 @@ type StorageApi = {
       contacts?: ContactInput[] | null
       sites?: CustomerSiteInput[] | null
       parentCustomerId?: string | null
+      machines?: CustomerMachineInput[] | null
     },
   ): Promise<Customer>
+  createCustomerMachine(
+    customerId: string,
+    data: {
+      machineSerialNumber: string
+      lineReference?: string | null
+      toolSerialNumbers?: string[]
+      siteId?: string | null
+      projectId?: string | null
+    },
+  ): Promise<CustomerMachine>
+  updateCustomerMachine(
+    customerId: string,
+    machineId: string,
+    data: {
+      machineSerialNumber?: string
+      lineReference?: string | null
+      toolSerialNumbers?: string[]
+      siteId?: string | null
+      projectId?: string | null
+    },
+  ): Promise<CustomerMachine>
+  deleteCustomerMachine(customerId: string, machineId: string): Promise<void>
   deleteCustomer(customerId: string): Promise<void>
   createProject(
     customerId: string,
@@ -195,9 +220,41 @@ export function updateCustomer(
     contacts?: ContactInput[] | null
     sites?: CustomerSiteInput[] | null
     parentCustomerId?: string | null
+    machines?: CustomerMachineInput[] | null
   },
 ): Promise<Customer> {
   return ensureLocalStorage().updateCustomer(customerId, data)
+}
+
+export function createCustomerMachine(
+  customerId: string,
+  data: {
+    machineSerialNumber: string
+    lineReference?: string | null
+    toolSerialNumbers?: string[]
+    siteId?: string | null
+    projectId?: string | null
+  },
+): Promise<CustomerMachine> {
+  return ensureLocalStorage().createCustomerMachine(customerId, data)
+}
+
+export function updateCustomerMachine(
+  customerId: string,
+  machineId: string,
+  data: {
+    machineSerialNumber?: string
+    lineReference?: string | null
+    toolSerialNumbers?: string[]
+    siteId?: string | null
+    projectId?: string | null
+  },
+): Promise<CustomerMachine> {
+  return ensureLocalStorage().updateCustomerMachine(customerId, machineId, data)
+}
+
+export function deleteCustomerMachine(customerId: string, machineId: string): Promise<void> {
+  return ensureLocalStorage().deleteCustomerMachine(customerId, machineId)
 }
 
 export function deleteCustomer(customerId: string): Promise<void> {
@@ -748,6 +805,7 @@ function createLocalStorageStorage(): StorageApi {
       sites: sortSites(sites),
       contacts: [],
       projects: [],
+      machines: [],
     }
   }
 
@@ -785,6 +843,56 @@ function createLocalStorageStorage(): StorageApi {
       phone,
       email,
       siteId,
+    }
+  }
+
+  function normalizeCustomerMachine(value: unknown): CustomerMachine | null {
+    if (!value || typeof value !== 'object') {
+      return null
+    }
+
+    const raw = value as Record<string, unknown>
+    const serial = toOptionalString((raw as { machineSerialNumber?: unknown }).machineSerialNumber)
+    if (!serial) {
+      return null
+    }
+
+    const idRaw = typeof raw.id === 'string' ? raw.id.trim() : ''
+    const lineReference = toOptionalString((raw as { lineReference?: unknown }).lineReference)
+    const toolSerialNumbersSource = Array.isArray(
+      (raw as { toolSerialNumbers?: unknown }).toolSerialNumbers,
+    )
+      ? ((raw as { toolSerialNumbers?: unknown }).toolSerialNumbers as unknown[])
+      : []
+
+    const toolSerialNumbers: string[] = []
+    const seen = new Set<string>()
+    for (const entry of toolSerialNumbersSource) {
+      if (typeof entry !== 'string') {
+        continue
+      }
+      const trimmed = entry.trim()
+      if (!trimmed) {
+        continue
+      }
+      const normalized = trimmed.toLowerCase()
+      if (seen.has(normalized)) {
+        continue
+      }
+      seen.add(normalized)
+      toolSerialNumbers.push(trimmed)
+    }
+
+    const projectId = toOptionalString((raw as { projectId?: unknown }).projectId)
+    const siteId = toOptionalString((raw as { siteId?: unknown }).siteId)
+
+    return {
+      id: idRaw || createId(),
+      machineSerialNumber: serial,
+      lineReference: lineReference ?? undefined,
+      toolSerialNumbers,
+      siteId: siteId ?? undefined,
+      projectId: projectId ?? undefined,
     }
   }
 
@@ -1177,6 +1285,10 @@ function createLocalStorageStorage(): StorageApi {
     return sortByText(sites, site => site.name || site.address || site.id)
   }
 
+  function sortMachines(machines: CustomerMachine[]): CustomerMachine[] {
+    return sortByText(machines, machine => machine.machineSerialNumber || machine.id)
+  }
+
   function normalizeProject(value: unknown, availableSites?: CustomerSite[]): Project | null {
     if (!value || typeof value !== 'object') {
       return null
@@ -1344,6 +1456,13 @@ function createLocalStorageStorage(): StorageApi {
       .map(entry => normalizeLegacySubCustomer(entry, id, sites))
       .filter((entry): entry is Customer => !!entry)
 
+    const machinesSource = Array.isArray((raw as { machines?: unknown }).machines)
+      ? ((raw as { machines?: unknown }).machines as unknown[])
+      : []
+    const machines = machinesSource
+      .map(entry => normalizeCustomerMachine(entry))
+      .filter((machine): machine is CustomerMachine => !!machine)
+
     return {
       customer: {
         id,
@@ -1353,6 +1472,7 @@ function createLocalStorageStorage(): StorageApi {
         sites: sortSites(sites),
         contacts: sortContacts(contacts),
         projects: sortProjects(projects),
+        machines: machines.map(cloneCustomerMachine),
       },
       legacyChildren,
     }
@@ -1728,6 +1848,17 @@ function createLocalStorageStorage(): StorageApi {
     }
   }
 
+  function cloneCustomerMachine(machine: CustomerMachine): CustomerMachine {
+    return {
+      id: machine.id,
+      machineSerialNumber: machine.machineSerialNumber,
+      lineReference: machine.lineReference,
+      toolSerialNumbers: [...machine.toolSerialNumbers],
+      siteId: machine.siteId,
+      projectId: machine.projectId,
+    }
+  }
+
   function cloneCustomer(customer: Customer): Customer {
     return {
       id: customer.id,
@@ -1737,6 +1868,7 @@ function createLocalStorageStorage(): StorageApi {
       sites: customer.sites.map(cloneCustomerSite),
       contacts: customer.contacts.map(cloneCustomerContact),
       projects: customer.projects.map(cloneProject),
+      machines: customer.machines.map(cloneCustomerMachine),
     }
   }
 
@@ -1908,6 +2040,7 @@ function createLocalStorageStorage(): StorageApi {
         sites,
         contacts,
         projects: [],
+        machines: [],
       }
 
       const nextCustomers = sortCustomers([customer, ...db.customers])
@@ -1923,6 +2056,7 @@ function createLocalStorageStorage(): StorageApi {
         contacts?: ContactInput[] | null
         sites?: CustomerSiteInput[] | null
         parentCustomerId?: string | null
+        machines?: CustomerMachineInput[] | null
       },
     ): Promise<Customer> {
       const db = loadDatabase()
@@ -1981,6 +2115,17 @@ function createLocalStorageStorage(): StorageApi {
         nextAddress = customer.address
       }
 
+      const machines =
+        data.machines === undefined
+          ? customer.machines
+          : data.machines === null
+          ? []
+          : sortMachines(
+              data.machines
+                .map(entry => normalizeCustomerMachine(entry))
+                .filter((machine): machine is CustomerMachine => !!machine),
+            )
+
       const nextCustomer: Customer = {
         ...customer,
         name: typeof data.name === 'string' ? data.name.trim() || customer.name : customer.name,
@@ -1988,6 +2133,7 @@ function createLocalStorageStorage(): StorageApi {
         sites,
         contacts,
         parentCustomerId,
+        machines,
       }
 
       const nextCustomers = [...db.customers]
@@ -1998,6 +2144,174 @@ function createLocalStorageStorage(): StorageApi {
         businessSettings: db.businessSettings,
       })
       return cloneCustomer(nextCustomer)
+    },
+    async createCustomerMachine(
+      customerId: string,
+      data: {
+        machineSerialNumber: string
+        lineReference?: string | null
+        toolSerialNumbers?: string[]
+        siteId?: string | null
+        projectId?: string | null
+      },
+    ): Promise<CustomerMachine> {
+      const db = loadDatabase()
+      const located = locateCustomer(db, customerId)
+      if (!located) {
+        throw new Error('Customer not found.')
+      }
+
+      const serial = normalizeInput(data.machineSerialNumber)
+      if (!serial) {
+        throw new Error('Enter a machine serial number.')
+      }
+
+      const normalizedProjectId =
+        typeof data.projectId === 'string' && located.customer.projects.some(project => project.id === data.projectId)
+          ? data.projectId
+          : undefined
+
+      const normalizedSiteId =
+        typeof data.siteId === 'string' && located.customer.sites.some(site => site.id === data.siteId)
+          ? data.siteId
+          : undefined
+
+      const existingSerials = located.customer.machines.map(machine => machine.machineSerialNumber.trim().toLowerCase())
+      if (existingSerials.includes(serial.toLowerCase())) {
+        throw new Error('A machine with this serial number already exists for this customer.')
+      }
+
+      const machine = normalizeCustomerMachine({
+        id: createId(),
+        machineSerialNumber: serial,
+        lineReference: data.lineReference ?? undefined,
+        toolSerialNumbers: Array.isArray(data.toolSerialNumbers) ? data.toolSerialNumbers : [],
+        siteId: normalizedSiteId,
+        projectId: normalizedProjectId,
+      })
+
+      if (!machine) {
+        throw new Error('Failed to create machine record.')
+      }
+
+      const nextCustomers = [...db.customers]
+      const nextMachines = sortMachines([...located.customer.machines, machine])
+      nextCustomers[located.index] = {
+        ...located.customer,
+        machines: nextMachines,
+      }
+      saveDatabase({
+        customers: sortCustomers(nextCustomers),
+        users: db.users,
+        businessSettings: db.businessSettings,
+      })
+      return cloneCustomerMachine(machine)
+    },
+    async updateCustomerMachine(
+      customerId: string,
+      machineId: string,
+      data: {
+        machineSerialNumber?: string
+        lineReference?: string | null
+        toolSerialNumbers?: string[]
+        siteId?: string | null
+        projectId?: string | null
+      },
+    ): Promise<CustomerMachine> {
+      const db = loadDatabase()
+      const located = locateCustomer(db, customerId)
+      if (!located) {
+        throw new Error('Customer not found.')
+      }
+
+      const machineIndex = located.customer.machines.findIndex(machine => machine.id === machineId)
+      if (machineIndex === -1) {
+        throw new Error('Machine not found.')
+      }
+
+      const currentMachine = located.customer.machines[machineIndex]
+      const serial =
+        data.machineSerialNumber === undefined
+          ? currentMachine.machineSerialNumber
+          : normalizeInput(data.machineSerialNumber) ?? currentMachine.machineSerialNumber
+
+      if (!serial) {
+        throw new Error('Enter a machine serial number.')
+      }
+
+      const normalizedProjectId =
+        data.projectId === undefined
+          ? currentMachine.projectId
+          : typeof data.projectId === 'string' && located.customer.projects.some(project => project.id === data.projectId)
+          ? data.projectId
+          : undefined
+
+      const normalizedSiteId =
+        data.siteId === undefined
+          ? currentMachine.siteId
+          : typeof data.siteId === 'string' && located.customer.sites.some(site => site.id === data.siteId)
+          ? data.siteId
+          : undefined
+
+      const normalizedMachine = normalizeCustomerMachine({
+        id: currentMachine.id,
+        machineSerialNumber: serial,
+        lineReference:
+          data.lineReference === undefined ? currentMachine.lineReference : data.lineReference ?? undefined,
+        toolSerialNumbers:
+          data.toolSerialNumbers === undefined ? currentMachine.toolSerialNumbers : data.toolSerialNumbers ?? [],
+        siteId: normalizedSiteId,
+        projectId: normalizedProjectId,
+      })
+
+      if (!normalizedMachine) {
+        throw new Error('Failed to update machine record.')
+      }
+
+      const duplicate = located.customer.machines.some(
+        (machine, index) =>
+          index !== machineIndex && machine.machineSerialNumber.trim().toLowerCase() === serial.toLowerCase(),
+      )
+      if (duplicate) {
+        throw new Error('A machine with this serial number already exists for this customer.')
+      }
+
+      const nextCustomers = [...db.customers]
+      const nextMachines = [...located.customer.machines]
+      nextMachines[machineIndex] = normalizedMachine
+      nextCustomers[located.index] = {
+        ...located.customer,
+        machines: sortMachines(nextMachines),
+      }
+      saveDatabase({
+        customers: sortCustomers(nextCustomers),
+        users: db.users,
+        businessSettings: db.businessSettings,
+      })
+      return cloneCustomerMachine(normalizedMachine)
+    },
+    async deleteCustomerMachine(customerId: string, machineId: string): Promise<void> {
+      const db = loadDatabase()
+      const located = locateCustomer(db, customerId)
+      if (!located) {
+        throw new Error('Customer not found.')
+      }
+
+      if (!located.customer.machines.some(machine => machine.id === machineId)) {
+        return
+      }
+
+      const nextCustomers = [...db.customers]
+      const nextMachines = located.customer.machines.filter(machine => machine.id !== machineId)
+      nextCustomers[located.index] = {
+        ...located.customer,
+        machines: sortMachines(nextMachines),
+      }
+      saveDatabase({
+        customers: sortCustomers(nextCustomers),
+        users: db.users,
+        businessSettings: db.businessSettings,
+      })
     },
     async deleteCustomer(customerId: string): Promise<void> {
       const db = loadDatabase()
