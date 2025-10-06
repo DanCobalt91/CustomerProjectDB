@@ -185,6 +185,9 @@ type OnsiteReportDraft = {
   additionalNotes: string
   signedByName: string
   signedByPosition: string
+  machineId: string
+  serviceInformation: string
+  firmwareVersion: string
 }
 
 type ProjectFileTab =
@@ -560,6 +563,19 @@ export default function ProjectPage({
     const fallbackSite = customer.sites.find(site => site.address?.trim()) ?? null
     const preferredAddress =
       projectSite?.address?.trim() || fallbackSite?.address?.trim() || customer.address || ''
+    const associatedMachines = customer.machines.filter(machine => {
+      if (machine.projectId === project.id) {
+        return true
+      }
+      if (project.siteId && machine.siteId === project.siteId) {
+        return true
+      }
+      return false
+    })
+    const defaultMachineId =
+      associatedMachines.find(machine => machine.projectId === project.id)?.id ??
+      associatedMachines[0]?.id ??
+      ''
 
     return {
       reportDate,
@@ -573,6 +589,9 @@ export default function ProjectPage({
       additionalNotes: '',
       signedByName: '',
       signedByPosition: '',
+      machineId: defaultMachineId,
+      serviceInformation: '',
+      firmwareVersion: '',
     }
   }, [
     businessSettings,
@@ -580,6 +599,8 @@ export default function ProjectPage({
     customer.address,
     customer.contacts,
     customer.sites,
+    customer.machines,
+    project.id,
     project.siteId,
   ])
 
@@ -605,6 +626,28 @@ export default function ProjectPage({
     const onsiteCount = project.onsiteReports?.length ?? 0
     return projectFilesCount + (project.customerSignOff ? 1 : 0) + onsiteCount
   }, [project.customerSignOff, project.documents, project.onsiteReports])
+  const machineOptions = useMemo(() => {
+    const options = customer.machines.map(machine => {
+      const serial = machine.machineSerialNumber.trim() || 'Machine'
+      const line = machine.lineReference?.trim()
+      const parts = [serial]
+      if (line) {
+        parts.push(`(${line})`)
+      }
+      const priority = machine.projectId === project.id ? 0 : project.siteId && machine.siteId === project.siteId ? 1 : 2
+      return {
+        id: machine.id,
+        label: parts.join(' '),
+        priority,
+      }
+    })
+    return options.sort((a, b) => {
+      if (a.priority !== b.priority) {
+        return a.priority - b.priority
+      }
+      return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' })
+    })
+  }, [customer.machines, project.id, project.siteId])
   const hasProjectInfo = useMemo(() => {
     const info = project.info
     if (!info) {
@@ -1315,6 +1358,9 @@ export default function ProjectPage({
     const materialsUsed = onsiteReportDraft.materialsUsed.trim()
     const additionalNotes = onsiteReportDraft.additionalNotes.trim()
     const signedByPosition = onsiteReportDraft.signedByPosition.trim()
+    const machineId = onsiteReportDraft.machineId.trim()
+    const serviceInformation = onsiteReportDraft.serviceInformation.trim()
+    const firmwareVersion = onsiteReportDraft.firmwareVersion.trim()
 
     setIsSavingOnsiteReport(true)
     setOnsiteReportError(null)
@@ -1334,6 +1380,9 @@ export default function ProjectPage({
         signatureDataUrl,
         signaturePaths: usableStrokes,
         signatureDimensions: { width: rect.width, height: rect.height },
+        machineId: machineId || undefined,
+        serviceInformation: serviceInformation || undefined,
+        firmwareVersion: firmwareVersion || undefined,
       })
       if (result) {
         setOnsiteReportError(result)
@@ -1921,6 +1970,36 @@ export default function ProjectPage({
                   disabled={!canEdit || isSavingOnsiteReport}
                 />
               </div>
+              <div>
+                <Label htmlFor='onsite-machine'>Machine serviced</Label>
+                <select
+                  id='onsite-machine'
+                  className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                  value={onsiteReportDraft.machineId}
+                  onChange={event => updateOnsiteReportField('machineId', (event.target as HTMLSelectElement).value)}
+                  disabled={!canEdit || isSavingOnsiteReport || machineOptions.length === 0}
+                >
+                  <option value=''>Select machine</option>
+                  {machineOptions.map(option => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                {machineOptions.length === 0 ? (
+                  <p className='mt-1 text-xs text-slate-500'>Record machines for this customer to track service history.</p>
+                ) : null}
+              </div>
+              <div>
+                <Label htmlFor='onsite-firmware'>Firmware version</Label>
+                <Input
+                  id='onsite-firmware'
+                  value={onsiteReportDraft.firmwareVersion}
+                  onChange={event => updateOnsiteReportField('firmwareVersion', (event.target as HTMLInputElement).value)}
+                  placeholder='e.g. v2.3.1'
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
               <div className='md:col-span-2'>
                 <Label htmlFor='onsite-site-address'>Site address</Label>
                 <textarea
@@ -1930,6 +2009,18 @@ export default function ProjectPage({
                   value={onsiteReportDraft.siteAddress}
                   onChange={event => updateOnsiteReportField('siteAddress', (event.target as HTMLTextAreaElement).value)}
                   placeholder='Where was the work completed?'
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+              </div>
+              <div className='md:col-span-2'>
+                <Label htmlFor='onsite-service-info'>Service information</Label>
+                <textarea
+                  id='onsite-service-info'
+                  className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                  rows={3}
+                  value={onsiteReportDraft.serviceInformation}
+                  onChange={event => updateOnsiteReportField('serviceInformation', (event.target as HTMLTextAreaElement).value)}
+                  placeholder='Document the service activities performed on the machine'
                   disabled={!canEdit || isSavingOnsiteReport}
                 />
               </div>
@@ -2037,6 +2128,9 @@ export default function ProjectPage({
                           Arrival {report.arrivalTime || '—'} · Departure {report.departureTime || '—'}
                         </div>
                       )}
+                      <div className='text-xs text-slate-500'>
+                        Machine: {report.machineSerialNumber || 'Not specified'}
+                      </div>
                       {createdDisplay && (
                         <div className='text-xs text-slate-400'>Created {createdDisplay}</div>
                       )}
@@ -2067,6 +2161,18 @@ export default function ProjectPage({
                     </div>
                   </div>
                   <div className='mt-4 grid gap-4 md:grid-cols-2'>
+                    <div>
+                      <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Service information</div>
+                      <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>
+                        {report.serviceInformation || 'Not provided.'}
+                      </p>
+                    </div>
+                    <div>
+                      <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Firmware version</div>
+                      <p className='mt-2 text-sm text-slate-700'>
+                        {report.firmwareVersion || 'Not provided.'}
+                      </p>
+                    </div>
                     <div>
                       <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Work summary</div>
                       <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>

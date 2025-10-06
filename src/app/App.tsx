@@ -19,6 +19,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import type {
   Customer,
   CustomerMachine,
+  MachineHanding,
   CustomerContact,
   CustomerSite,
   Project,
@@ -91,6 +92,7 @@ import {
   type ProjectInfoDraftDefaults,
 } from '../lib/projectInfo'
 import type { OnsiteReportSubmission } from '../lib/onsiteReport'
+import MachinePage from './MachinePage'
 
 const PROJECT_FILE_MIME_BY_EXTENSION: Record<string, string> = {
   pdf: 'application/pdf',
@@ -231,6 +233,14 @@ type MachineEditorState = {
   machineSerialNumber: string
   lineReference: string
   toolSerialNumbers: string[]
+  model: string
+  make: string
+  handing: MachineHanding | ''
+  dateInstalled: string
+  dateLastService: string
+  lastServiceCount: string
+  firmwareVersion: string
+  notes: string
 }
 
 function createSiteDraft(site?: CustomerSite | null): CustomerSiteDraft {
@@ -645,8 +655,16 @@ function AppContent() {
   const [users, setUsers] = useState<User[]>([])
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+  const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null)
   const [activePage, setActivePage] = useState<
-    'home' | 'myTasks' | 'customers' | 'projects' | 'customerDetail' | 'projectDetail' | 'settings'
+    | 'home'
+    | 'myTasks'
+    | 'customers'
+    | 'projects'
+    | 'customerDetail'
+    | 'projectDetail'
+    | 'machineDetail'
+    | 'settings'
   >('home')
   const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [businessSettings, setBusinessSettings] = useState<BusinessSettings>(DEFAULT_BUSINESS_SETTINGS)
@@ -1910,6 +1928,14 @@ function AppContent() {
       machineIndex?: number
       machineId?: string
       siteId: string | null
+      model?: string
+      make?: string
+      handing?: MachineHanding
+      dateInstalled?: string
+      dateLastService?: string
+      lastServiceCount?: number
+      firmwareVersion?: string
+      notes?: string
     }
 
     const parentProjectLineItems: CustomerLineItem[] = activeSiteTab
@@ -1955,6 +1981,14 @@ function AppContent() {
               project: linkedProject,
               machineId: machine.id,
               siteId: machine.siteId ?? null,
+              model: machine.model,
+              make: machine.make,
+              handing: machine.handing,
+              dateInstalled: machine.dateInstalled,
+              dateLastService: machine.dateLastService,
+              lastServiceCount: machine.lastServiceCount,
+              firmwareVersion: machine.firmwareVersion,
+              notes: machine.notes,
             }
           })
       : []
@@ -1995,6 +2029,14 @@ function AppContent() {
           project: linkedProject,
           machineId: machine.id,
           siteId: machine.siteId ?? null,
+          model: machine.model,
+          make: machine.make,
+          handing: machine.handing,
+          dateInstalled: machine.dateInstalled,
+          dateLastService: machine.dateLastService,
+          lastServiceCount: machine.lastServiceCount,
+          firmwareVersion: machine.firmwareVersion,
+          notes: machine.notes,
         }
       }),
     )
@@ -2558,6 +2600,14 @@ function AppContent() {
                       machineSerialNumber: '',
                       lineReference: '',
                       toolSerialNumbers: [],
+                      model: '',
+                      make: '',
+                      handing: '',
+                      dateInstalled: '',
+                      dateLastService: '',
+                      lastServiceCount: '',
+                      firmwareVersion: '',
+                      notes: '',
                     })
                     setMachineEditorError(null)
                   }}
@@ -2896,61 +2946,99 @@ function AppContent() {
                                     )}
                                   </td>
                                   <td className='px-4 py-3'>
-                                    {isChildOwner ? (
-                                      <Button
-                                        size='sm'
-                                        variant='outline'
-                                        onClick={() => {
-                                          setSelectedCustomerId(item.ownerCustomerId)
-                                          setActivePage('customerDetail')
-                                        }}
-                                      >
-                                        <ChevronRight size={16} /> View customer
-                                      </Button>
-                                    ) : (
-                                      <Button
-                                        size='sm'
-                                        variant='ghost'
-                                        onClick={() => {
-                                          if (!selectedCustomer) {
-                                            return
-                                          }
-                                          if (item.source === 'project' && item.project) {
-                                            setMachineEditor({
-                                              mode: 'edit',
-                                              context: 'project',
-                                              ownerCustomerId: item.ownerCustomerId,
-                                              siteTabKey: customerSiteTab,
-                                              projectId: item.project.id,
-                                              siteId: item.siteId,
-                                              machineIndex: item.machineIndex,
-                                              machineSerialNumber: item.machineSerialNumber,
-                                              lineReference: item.lineReference ?? '',
-                                              toolSerialNumbers: [...item.toolSerialNumbers],
-                                            })
-                                          } else {
-                                            setMachineEditor({
-                                              mode: 'edit',
-                                              context: 'customer',
-                                              ownerCustomerId: item.ownerCustomerId,
-                                              siteTabKey: customerSiteTab,
-                                              projectId: item.project?.id ?? null,
-                                              siteId: item.siteId,
-                                              machineId: item.machineId,
-                                              machineSerialNumber: item.machineSerialNumber,
-                                              lineReference: item.lineReference ?? '',
-                                              toolSerialNumbers: [...item.toolSerialNumbers],
-                                            })
-                                          }
-                                          setMachineEditorError(null)
-                                        }}
-                                        disabled={!canEdit}
-                                        title={canEdit ? 'Edit machine' : 'Read-only access'}
-                                      >
-                                        <Pencil size={16} />
-                                        <span className='sr-only'>Edit machine</span>
-                                      </Button>
-                                    )}
+                                    <div className='flex flex-wrap items-center gap-2'>
+                                      {item.machineId ? (
+                                        <Button
+                                          size='sm'
+                                          variant='outline'
+                                          onClick={() => {
+                                            setSelectedCustomerId(item.ownerCustomerId)
+                                            setSelectedProjectId(item.project?.id ?? null)
+                                            setSelectedMachineId(item.machineId ?? null)
+                                            setActivePage('machineDetail')
+                                          }}
+                                        >
+                                          <ChevronRight size={16} /> View machine
+                                        </Button>
+                                      ) : null}
+                                      {isChildOwner ? (
+                                        <Button
+                                          size='sm'
+                                          variant='outline'
+                                          onClick={() => {
+                                            setSelectedCustomerId(item.ownerCustomerId)
+                                            setActivePage('customerDetail')
+                                          }}
+                                        >
+                                          <ChevronRight size={16} /> View customer
+                                        </Button>
+                                      ) : (
+                                        <Button
+                                          size='sm'
+                                          variant='ghost'
+                                          onClick={() => {
+                                            if (!selectedCustomer) {
+                                              return
+                                            }
+                                            if (item.source === 'project' && item.project) {
+                                              setMachineEditor({
+                                                mode: 'edit',
+                                                context: 'project',
+                                                ownerCustomerId: item.ownerCustomerId,
+                                                siteTabKey: customerSiteTab,
+                                                projectId: item.project.id,
+                                                siteId: item.siteId,
+                                                machineIndex: item.machineIndex,
+                                                machineSerialNumber: item.machineSerialNumber,
+                                                lineReference: item.lineReference ?? '',
+                                                toolSerialNumbers: [...item.toolSerialNumbers],
+                                                model: item.model ?? '',
+                                                make: item.make ?? '',
+                                                handing: item.handing ?? '',
+                                                dateInstalled: item.dateInstalled ?? '',
+                                                dateLastService: item.dateLastService ?? '',
+                                                lastServiceCount:
+                                                  item.lastServiceCount !== undefined
+                                                    ? String(item.lastServiceCount)
+                                                    : '',
+                                                firmwareVersion: item.firmwareVersion ?? '',
+                                                notes: item.notes ?? '',
+                                              })
+                                            } else {
+                                              setMachineEditor({
+                                                mode: 'edit',
+                                                context: 'customer',
+                                                ownerCustomerId: item.ownerCustomerId,
+                                                siteTabKey: customerSiteTab,
+                                                projectId: item.project?.id ?? null,
+                                                siteId: item.siteId,
+                                                machineId: item.machineId,
+                                                machineSerialNumber: item.machineSerialNumber,
+                                                lineReference: item.lineReference ?? '',
+                                                toolSerialNumbers: [...item.toolSerialNumbers],
+                                                model: item.model ?? '',
+                                                make: item.make ?? '',
+                                                handing: item.handing ?? '',
+                                                dateInstalled: item.dateInstalled ?? '',
+                                                dateLastService: item.dateLastService ?? '',
+                                                lastServiceCount:
+                                                  item.lastServiceCount !== undefined
+                                                    ? String(item.lastServiceCount)
+                                                    : '',
+                                                firmwareVersion: item.firmwareVersion ?? '',
+                                                notes: item.notes ?? '',
+                                              })
+                                            }
+                                            setMachineEditorError(null)
+                                          }}
+                                          disabled={!canEdit}
+                                          title={canEdit ? 'Edit machine' : 'Read-only access'}
+                                        >
+                                          <Pencil size={16} />
+                                          <span className='sr-only'>Edit machine</span>
+                                        </Button>
+                                      )}
+                                    </div>
                                   </td>
                                 </tr>
                               )
@@ -3396,6 +3484,121 @@ function AppContent() {
       />
     )
   }
+
+  const renderMachineDetailPage = () => {
+    if (!selectedMachineId) {
+      return (
+        <Card className='panel'>
+          <CardHeader>
+            <div className='text-lg font-semibold text-slate-900'>Machine not selected</div>
+          </CardHeader>
+          <CardContent>
+            <p className='text-sm text-slate-600'>Return to the customer to choose a machine.</p>
+            <div className='mt-4'>
+              <Button
+                onClick={() => {
+                  setSelectedMachineId(null)
+                  setActivePage('customerDetail')
+                }}
+              >
+                Back to customer
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )
+    }
+
+    const customer = selectedCustomerId ? customerLookup.get(selectedCustomerId) ?? null : null
+    if (!customer) {
+      return (
+        <Card className='panel'>
+          <CardHeader>
+            <div className='text-lg font-semibold text-slate-900'>Customer not found</div>
+          </CardHeader>
+          <CardContent>
+            <p className='text-sm text-slate-600'>The customer for this machine could not be found.</p>
+            <div className='mt-4'>
+              <Button
+                onClick={() => {
+                  setSelectedMachineId(null)
+                  setActivePage('customers')
+                }}
+              >
+                Return to customers
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )
+    }
+
+    const machine = customer.machines.find(entry => entry.id === selectedMachineId) ?? null
+    if (!machine) {
+      return (
+        <Card className='panel'>
+          <CardHeader>
+            <div className='text-lg font-semibold text-slate-900'>Machine not found</div>
+          </CardHeader>
+          <CardContent>
+            <p className='text-sm text-slate-600'>This machine may have been removed from the customer record.</p>
+            <div className='mt-4'>
+              <Button
+                onClick={() => {
+                  setSelectedMachineId(null)
+                  setActivePage('customerDetail')
+                }}
+              >
+                Back to customer
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )
+    }
+
+    return (
+      <MachinePage
+        customer={customer}
+        machine={machine}
+        canEdit={canEdit}
+        onBack={() => {
+          setSelectedMachineId(null)
+          setActivePage('customerDetail')
+        }}
+        onEdit={() => {
+          setMachineEditor({
+            mode: 'edit',
+            context: 'customer',
+            ownerCustomerId: customer.id,
+            siteTabKey: machine.siteId ?? UNASSIGNED_SITE_TAB_KEY,
+            projectId: machine.projectId ?? null,
+            siteId: machine.siteId ?? null,
+            machineId: machine.id,
+            machineSerialNumber: machine.machineSerialNumber,
+            lineReference: machine.lineReference ?? '',
+            toolSerialNumbers: [...machine.toolSerialNumbers],
+            model: machine.model ?? '',
+            make: machine.make ?? '',
+            handing: machine.handing ?? '',
+            dateInstalled: machine.dateInstalled ?? '',
+            dateLastService: machine.dateLastService ?? '',
+            lastServiceCount:
+              typeof machine.lastServiceCount === 'number' ? String(machine.lastServiceCount) : '',
+            firmwareVersion: machine.firmwareVersion ?? '',
+            notes: machine.notes ?? '',
+          })
+          setMachineEditorError(null)
+        }}
+        onNavigateToProject={projectId => {
+          setSelectedCustomerId(customer.id)
+          setSelectedProjectId(projectId)
+          setActivePage('projectDetail')
+        }}
+      />
+    )
+  }
+
   const renderCustomersSidebar = () => null
 
   const renderProjectsSidebar = () => null
@@ -5329,6 +5532,19 @@ function AppContent() {
       return 'Capture a signature to continue.'
     }
 
+    const machineId = submission.machineId?.trim()
+    const serviceInformation = submission.serviceInformation?.trim()
+    const firmwareVersion = submission.firmwareVersion?.trim()
+    let machineSerialNumber: string | undefined
+    let machineToUpdate: CustomerMachine | null = null
+    if (machineId) {
+      const matchedMachine = customer.machines.find(machine => machine.id === machineId) ?? null
+      if (matchedMachine) {
+        machineSerialNumber = matchedMachine.machineSerialNumber
+        machineToUpdate = matchedMachine
+      }
+    }
+
     const createdAt = new Date().toISOString()
 
     try {
@@ -5351,6 +5567,9 @@ function AppContent() {
         signaturePaths: submission.signaturePaths,
         signatureDimensions: submission.signatureDimensions,
         createdAt,
+        machineSerialNumber,
+        serviceInformation,
+        firmwareVersion,
       })
 
       const report: ProjectOnsiteReport = {
@@ -5369,6 +5588,10 @@ function AppContent() {
         signatureDataUrl: submission.signatureDataUrl,
         pdfDataUrl,
         createdAt,
+        machineId: machineToUpdate ? machineId : undefined,
+        machineSerialNumber,
+        serviceInformation: serviceInformation || undefined,
+        firmwareVersion: firmwareVersion || undefined,
       }
 
       const existingReports = project.onsiteReports ?? []
@@ -5394,6 +5617,43 @@ function AppContent() {
 
       try {
         await updateProjectRecord(projectId, { onsiteReports: nextReports })
+        if (machineToUpdate) {
+          const machineUpdates: { dateLastService?: string | null; firmwareVersion?: string | null } = {}
+          let shouldUpdate = false
+          if (
+            reportDate &&
+            (!machineToUpdate.dateLastService ||
+              new Date(reportDate).getTime() >= new Date(machineToUpdate.dateLastService).getTime())
+          ) {
+            machineUpdates.dateLastService = reportDate
+            shouldUpdate = true
+          }
+          if (firmwareVersion && firmwareVersion !== machineToUpdate.firmwareVersion) {
+            machineUpdates.firmwareVersion = firmwareVersion
+            shouldUpdate = true
+          }
+          if (shouldUpdate) {
+            try {
+              const updatedMachine = await updateCustomerMachineRecord(customer.id, machineToUpdate.id, machineUpdates)
+              setDb(prev =>
+                prev.map(entry =>
+                  entry.id !== customer.id
+                    ? entry
+                    : {
+                        ...entry,
+                        machines: sortCustomerMachines(
+                          entry.machines.map(machine =>
+                            machine.id === updatedMachine.id ? { ...updatedMachine } : machine,
+                          ),
+                        ),
+                      },
+                ),
+              )
+            } catch (updateError) {
+              console.error('Failed to update machine service details', updateError)
+            }
+          }
+        }
         setActionError(null)
         return null
       } catch (error) {
@@ -5704,6 +5964,24 @@ function AppContent() {
     const normalizedTool = normalizedTools[0]?.toLowerCase() ?? null
     let projectInfoUpdate: { projectId: string; info: ProjectInfo } | null = null
 
+    const model = machineEditor.model.trim()
+    const make = machineEditor.make.trim()
+    const firmwareVersion = machineEditor.firmwareVersion.trim()
+    const notes = machineEditor.notes.trim()
+    const dateInstalled = machineEditor.dateInstalled.trim()
+    const dateLastService = machineEditor.dateLastService.trim()
+    const handingValue: MachineHanding | null = machineEditor.handing ? machineEditor.handing : null
+    const lastServiceCountInput = machineEditor.lastServiceCount.trim()
+    let lastServiceCountNumber: number | null = null
+    if (lastServiceCountInput) {
+      const parsed = Number(lastServiceCountInput)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        setMachineEditorError('Enter a valid non-negative number for the last service count.')
+        return
+      }
+      lastServiceCountNumber = Math.floor(parsed)
+    }
+
     if (machineEditor.context === 'project') {
       if (!machineEditor.projectId) {
         setMachineEditorError('Select a project to continue.')
@@ -5821,6 +6099,14 @@ function AppContent() {
           toolSerialNumbers: normalizedTools,
           siteId: machineEditor.siteId,
           projectId: machineEditor.projectId,
+          model: model || null,
+          make: make || null,
+          handing: handingValue,
+          dateInstalled: dateInstalled || null,
+          dateLastService: dateLastService || null,
+          lastServiceCount: lastServiceCountNumber,
+          firmwareVersion: firmwareVersion || null,
+          notes: notes || null,
         }
 
         if (machineEditor.mode === 'edit' && machineEditor.machineId) {
@@ -6605,7 +6891,7 @@ function AppContent() {
   }
 
   const resolvedPage: 'home' | 'myTasks' | 'customers' | 'projects' | 'settings' =
-    activePage === 'customerDetail'
+    activePage === 'customerDetail' || activePage === 'machineDetail'
       ? 'customers'
       : activePage === 'projectDetail'
       ? 'projects'
@@ -6624,6 +6910,7 @@ function AppContent() {
 
   const handleNavigate = (page: 'home' | 'myTasks' | 'customers' | 'projects' | 'settings') => {
     setIsSidebarOpen(false)
+    setSelectedMachineId(null)
     if (page === 'projects') {
       setSelectedProjectId(null)
       setActivePage('projects')
@@ -6663,6 +6950,8 @@ function AppContent() {
       ? 'Customer Records'
       : activePage === 'customerDetail'
       ? 'Customer Details'
+      : activePage === 'machineDetail'
+      ? 'Machine Details'
       : activePage === 'projects'
       ? 'Projects'
       : activePage === 'settings'
@@ -6678,6 +6967,8 @@ function AppContent() {
       ? 'Select a customer from the index to review their details and contacts.'
       : activePage === 'customerDetail'
       ? 'Review contacts, addresses, and linked projects for the selected customer.'
+      : activePage === 'machineDetail'
+      ? 'Inspect machine specifications and review service history.'
       : activePage === 'projects'
       ? 'Choose a project from the index to manage its lifecycle and documents.'
       : activePage === 'settings'
@@ -6902,6 +7193,8 @@ function AppContent() {
             ? renderCustomersIndex()
             : activePage === 'customerDetail'
             ? renderCustomerDetailPage()
+            : activePage === 'machineDetail'
+            ? renderMachineDetailPage()
             : activePage === 'projects'
             ? renderProjectsIndex()
             : activePage === 'settings'
@@ -7895,6 +8188,126 @@ function AppContent() {
                               : 'Enter the machine serial number before adding tools.'
                           }
                         />
+                        <div className='grid gap-3 md:grid-cols-2'>
+                          <div>
+                            <Label htmlFor='machine-editor-model'>Model (optional)</Label>
+                            <Input
+                              id='machine-editor-model'
+                              value={machineEditor.model}
+                              onChange={event => {
+                                const value = (event.target as HTMLInputElement).value
+                                setMachineEditor(prev => (prev ? { ...prev, model: value } : prev))
+                              }}
+                              placeholder='e.g. XR-500'
+                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor='machine-editor-make'>Make (optional)</Label>
+                            <Input
+                              id='machine-editor-make'
+                              value={machineEditor.make}
+                              onChange={event => {
+                                const value = (event.target as HTMLInputElement).value
+                                setMachineEditor(prev => (prev ? { ...prev, make: value } : prev))
+                              }}
+                              placeholder='e.g. Cobalt Systems'
+                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor='machine-editor-handing'>Handing</Label>
+                            <select
+                              id='machine-editor-handing'
+                              className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                              value={machineEditor.handing}
+                              onChange={event => {
+                                const value = (event.target as HTMLSelectElement).value as MachineHanding | ''
+                                setMachineEditor(prev => (prev ? { ...prev, handing: value } : prev))
+                              }}
+                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                            >
+                              <option value=''>Not specified</option>
+                              <option value='left'>Left</option>
+                              <option value='right'>Right</option>
+                            </select>
+                          </div>
+                          <div>
+                            <Label htmlFor='machine-editor-firmware'>Firmware Version</Label>
+                            <Input
+                              id='machine-editor-firmware'
+                              value={machineEditor.firmwareVersion}
+                              onChange={event => {
+                                const value = (event.target as HTMLInputElement).value
+                                setMachineEditor(prev => (prev ? { ...prev, firmwareVersion: value } : prev))
+                              }}
+                              placeholder='e.g. v2.3.1'
+                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor='machine-editor-installed'>Date Installed</Label>
+                            <input
+                              id='machine-editor-installed'
+                              type='date'
+                              className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                              value={machineEditor.dateInstalled}
+                              onChange={event => {
+                                const value = (event.target as HTMLInputElement).value
+                                setMachineEditor(prev => (prev ? { ...prev, dateInstalled: value } : prev))
+                              }}
+                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor='machine-editor-last-service'>Date of Last Service</Label>
+                            <input
+                              id='machine-editor-last-service'
+                              type='date'
+                              className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                              value={machineEditor.dateLastService}
+                              onChange={event => {
+                                const value = (event.target as HTMLInputElement).value
+                                setMachineEditor(prev => (prev ? { ...prev, dateLastService: value } : prev))
+                              }}
+                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                            />
+                          </div>
+                          <div>
+                            <Label htmlFor='machine-editor-service-count'>Last Service Count</Label>
+                            <Input
+                              id='machine-editor-service-count'
+                              type='number'
+                              inputMode='numeric'
+                              min={0}
+                              value={machineEditor.lastServiceCount}
+                              onChange={event => {
+                                const value = (event.target as HTMLInputElement).value
+                                setMachineEditor(prev => (prev ? { ...prev, lastServiceCount: value } : prev))
+                              }}
+                              placeholder='e.g. 12'
+                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <Label htmlFor='machine-editor-notes'>Notes</Label>
+                          <textarea
+                            id='machine-editor-notes'
+                            className='mt-1 w-full rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                            value={machineEditor.notes}
+                            onChange={event => {
+                              const value = (event.target as HTMLTextAreaElement).value
+                              setMachineEditor(prev => (prev ? { ...prev, notes: value } : prev))
+                            }}
+                            rows={3}
+                            placeholder='Internal notes about this machine'
+                            disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                          />
+                          {machineEditor.context === 'project' ? (
+                            <p className='mt-1 text-xs text-slate-500'>Detailed machine information can be managed from the customer record.</p>
+                          ) : null}
+                        </div>
                         {machineEditorError && (
                           <p className='flex items-center gap-1 text-sm text-rose-600'>
                             <AlertCircle size={14} /> {machineEditorError}

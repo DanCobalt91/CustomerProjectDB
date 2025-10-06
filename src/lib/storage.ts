@@ -4,6 +4,7 @@ import type {
   BusinessSettings,
   Customer,
   CustomerMachine,
+  MachineHanding,
   CustomerSite,
   CustomerContact,
   Project,
@@ -76,6 +77,14 @@ type StorageApi = {
       toolSerialNumbers?: string[]
       siteId?: string | null
       projectId?: string | null
+      model?: string | null
+      make?: string | null
+      handing?: MachineHanding | null
+      dateInstalled?: string | null
+      dateLastService?: string | null
+      lastServiceCount?: number | null
+      firmwareVersion?: string | null
+      notes?: string | null
     },
   ): Promise<CustomerMachine>
   updateCustomerMachine(
@@ -87,6 +96,14 @@ type StorageApi = {
       toolSerialNumbers?: string[]
       siteId?: string | null
       projectId?: string | null
+      model?: string | null
+      make?: string | null
+      handing?: MachineHanding | null
+      dateInstalled?: string | null
+      dateLastService?: string | null
+      lastServiceCount?: number | null
+      firmwareVersion?: string | null
+      notes?: string | null
     },
   ): Promise<CustomerMachine>
   deleteCustomerMachine(customerId: string, machineId: string): Promise<void>
@@ -234,6 +251,14 @@ export function createCustomerMachine(
     toolSerialNumbers?: string[]
     siteId?: string | null
     projectId?: string | null
+    model?: string | null
+    make?: string | null
+    handing?: MachineHanding | null
+    dateInstalled?: string | null
+    dateLastService?: string | null
+    lastServiceCount?: number | null
+    firmwareVersion?: string | null
+    notes?: string | null
   },
 ): Promise<CustomerMachine> {
   return ensureLocalStorage().createCustomerMachine(customerId, data)
@@ -248,6 +273,14 @@ export function updateCustomerMachine(
     toolSerialNumbers?: string[]
     siteId?: string | null
     projectId?: string | null
+    model?: string | null
+    make?: string | null
+    handing?: MachineHanding | null
+    dateInstalled?: string | null
+    dateLastService?: string | null
+    lastServiceCount?: number | null
+    firmwareVersion?: string | null
+    notes?: string | null
   },
 ): Promise<CustomerMachine> {
   return ensureLocalStorage().updateCustomerMachine(customerId, machineId, data)
@@ -859,6 +892,24 @@ function createLocalStorageStorage(): StorageApi {
 
     const idRaw = typeof raw.id === 'string' ? raw.id.trim() : ''
     const lineReference = toOptionalString((raw as { lineReference?: unknown }).lineReference)
+    const model = toOptionalString((raw as { model?: unknown }).model)
+    const make = toOptionalString((raw as { make?: unknown }).make)
+    const handingRaw = toOptionalString((raw as { handing?: unknown }).handing)?.toLowerCase()
+    const handing = handingRaw === 'left' || handingRaw === 'right' ? (handingRaw as MachineHanding) : undefined
+    const dateInstalled = normalizeDateOnlyValue((raw as { dateInstalled?: unknown }).dateInstalled)
+    const dateLastService = normalizeDateOnlyValue((raw as { dateLastService?: unknown }).dateLastService)
+    const firmwareVersion = toOptionalString((raw as { firmwareVersion?: unknown }).firmwareVersion)
+    const notes = toOptionalString((raw as { notes?: unknown }).notes)
+    let lastServiceCount: number | undefined
+    const lastServiceCountRaw = (raw as { lastServiceCount?: unknown }).lastServiceCount
+    if (typeof lastServiceCountRaw === 'number' && Number.isFinite(lastServiceCountRaw)) {
+      lastServiceCount = Math.max(0, Math.floor(lastServiceCountRaw))
+    } else if (typeof lastServiceCountRaw === 'string') {
+      const parsed = parseInt(lastServiceCountRaw.trim(), 10)
+      if (!Number.isNaN(parsed)) {
+        lastServiceCount = Math.max(0, parsed)
+      }
+    }
     const toolSerialNumbersSource = Array.isArray(
       (raw as { toolSerialNumbers?: unknown }).toolSerialNumbers,
     )
@@ -893,6 +944,14 @@ function createLocalStorageStorage(): StorageApi {
       toolSerialNumbers,
       siteId: siteId ?? undefined,
       projectId: projectId ?? undefined,
+      model: model ?? undefined,
+      make: make ?? undefined,
+      handing,
+      dateInstalled: dateInstalled ?? undefined,
+      dateLastService: dateLastService ?? undefined,
+      lastServiceCount,
+      firmwareVersion: firmwareVersion ?? undefined,
+      notes: notes ?? undefined,
     }
   }
 
@@ -1252,6 +1311,10 @@ function createLocalStorageStorage(): StorageApi {
     const signedByPosition = toOptionalString((raw as { signedByPosition?: unknown }).signedByPosition)
     const signatureDataUrl = toOptionalString((raw as { signatureDataUrl?: unknown }).signatureDataUrl)
     const pdfDataUrl = toOptionalString((raw as { pdfDataUrl?: unknown }).pdfDataUrl)
+    const machineId = toOptionalString((raw as { machineId?: unknown }).machineId)
+    const machineSerialNumber = toOptionalString((raw as { machineSerialNumber?: unknown }).machineSerialNumber)
+    const serviceInformation = toOptionalString((raw as { serviceInformation?: unknown }).serviceInformation)
+    const firmwareVersion = toOptionalString((raw as { firmwareVersion?: unknown }).firmwareVersion)
     const createdAtRaw = typeof raw.createdAt === 'string' ? raw.createdAt : null
     const createdAt =
       createdAtRaw && !Number.isNaN(Date.parse(createdAtRaw))
@@ -1274,6 +1337,10 @@ function createLocalStorageStorage(): StorageApi {
       signatureDataUrl,
       pdfDataUrl,
       createdAt,
+      machineId: machineId ?? undefined,
+      machineSerialNumber: machineSerialNumber ?? undefined,
+      serviceInformation: serviceInformation ?? undefined,
+      firmwareVersion: firmwareVersion ?? undefined,
     }
   }
 
@@ -1856,6 +1923,14 @@ function createLocalStorageStorage(): StorageApi {
       toolSerialNumbers: [...machine.toolSerialNumbers],
       siteId: machine.siteId,
       projectId: machine.projectId,
+      model: machine.model,
+      make: machine.make,
+      handing: machine.handing,
+      dateInstalled: machine.dateInstalled,
+      dateLastService: machine.dateLastService,
+      lastServiceCount: machine.lastServiceCount,
+      firmwareVersion: machine.firmwareVersion,
+      notes: machine.notes,
     }
   }
 
@@ -2153,6 +2228,14 @@ function createLocalStorageStorage(): StorageApi {
         toolSerialNumbers?: string[]
         siteId?: string | null
         projectId?: string | null
+        model?: string | null
+        make?: string | null
+        handing?: MachineHanding | null
+        dateInstalled?: string | null
+        dateLastService?: string | null
+        lastServiceCount?: number | null
+        firmwareVersion?: string | null
+        notes?: string | null
       },
     ): Promise<CustomerMachine> {
       const db = loadDatabase()
@@ -2188,6 +2271,14 @@ function createLocalStorageStorage(): StorageApi {
         toolSerialNumbers: Array.isArray(data.toolSerialNumbers) ? data.toolSerialNumbers : [],
         siteId: normalizedSiteId,
         projectId: normalizedProjectId,
+        model: data.model ?? undefined,
+        make: data.make ?? undefined,
+        handing: data.handing ?? undefined,
+        dateInstalled: data.dateInstalled ?? undefined,
+        dateLastService: data.dateLastService ?? undefined,
+        lastServiceCount: data.lastServiceCount ?? undefined,
+        firmwareVersion: data.firmwareVersion ?? undefined,
+        notes: data.notes ?? undefined,
       })
 
       if (!machine) {
@@ -2216,6 +2307,14 @@ function createLocalStorageStorage(): StorageApi {
         toolSerialNumbers?: string[]
         siteId?: string | null
         projectId?: string | null
+        model?: string | null
+        make?: string | null
+        handing?: MachineHanding | null
+        dateInstalled?: string | null
+        dateLastService?: string | null
+        lastServiceCount?: number | null
+        firmwareVersion?: string | null
+        notes?: string | null
       },
     ): Promise<CustomerMachine> {
       const db = loadDatabase()
@@ -2262,6 +2361,18 @@ function createLocalStorageStorage(): StorageApi {
           data.toolSerialNumbers === undefined ? currentMachine.toolSerialNumbers : data.toolSerialNumbers ?? [],
         siteId: normalizedSiteId,
         projectId: normalizedProjectId,
+        model: data.model === undefined ? currentMachine.model : data.model ?? undefined,
+        make: data.make === undefined ? currentMachine.make : data.make ?? undefined,
+        handing: data.handing === undefined ? currentMachine.handing : data.handing ?? undefined,
+        dateInstalled:
+          data.dateInstalled === undefined ? currentMachine.dateInstalled : data.dateInstalled ?? undefined,
+        dateLastService:
+          data.dateLastService === undefined ? currentMachine.dateLastService : data.dateLastService ?? undefined,
+        lastServiceCount:
+          data.lastServiceCount === undefined ? currentMachine.lastServiceCount : data.lastServiceCount ?? undefined,
+        firmwareVersion:
+          data.firmwareVersion === undefined ? currentMachine.firmwareVersion : data.firmwareVersion ?? undefined,
+        notes: data.notes === undefined ? currentMachine.notes : data.notes ?? undefined,
       })
 
       if (!normalizedMachine) {

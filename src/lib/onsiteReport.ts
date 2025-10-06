@@ -18,4 +18,7 @@ export type OnsiteReportSubmission = {
   signatureDataUrl: string
   signaturePaths: CustomerSignOffSignatureStroke[]
   signatureDimensions: CustomerSignOffSignatureDimensions
+  machineId?: string
+  serviceInformation?: string
+  firmwareVersion?: string
 }
