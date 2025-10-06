@@ -1109,6 +1109,13 @@ function AppContent() {
       }
       return
     }
+    if (siteTabs.length === 1) {
+      const [onlyTab] = siteTabs
+      if (customerSiteTab !== onlyTab.key) {
+        setCustomerSiteTab(onlyTab.key)
+      }
+      return
+    }
     if (!siteTabs.some(tab => tab.key === customerSiteTab)) {
       setCustomerSiteTab(defaultSiteTabKey)
     }
