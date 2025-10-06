@@ -76,6 +76,9 @@ export type OnsiteReportPdfInput = {
   signaturePaths: CustomerSignOffSignatureStroke[]
   signatureDimensions: CustomerSignOffSignatureDimensions
   createdAt: string
+  machineSerialNumber?: string
+  serviceInformation?: string
+  firmwareVersion?: string
 }
 
 const BUSINESS_LOGO_MAX_WIDTH_PT = (240 / 96) * 72
@@ -711,6 +714,11 @@ export async function generateOnsiteReportPdf(data: OnsiteReportPdfInput): Promi
   drawLabelValue('Arrival Time', formatTimeValue(data.arrivalTime))
   drawLabelValue('Departure Time', formatTimeValue(data.departureTime))
   drawLabelValue('Customer Contact', data.customerContact)
+
+  drawHeading('Service Details', 16, 16)
+  drawLabelValue('Machine', data.machineSerialNumber)
+  drawLabelValue('Firmware Version', data.firmwareVersion)
+  drawTextBlock('Service Information', data.serviceInformation)
 
   drawTextBlock('Work Summary', data.workSummary)
   drawTextBlock('Materials Used', data.materialsUsed)

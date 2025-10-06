@@ -58,6 +58,8 @@ export type ProjectMachine = {
   toolSerialNumbers: string[];
 };
 
+export type MachineHanding = 'left' | 'right';
+
 export type CustomerMachine = {
   id: string;
   machineSerialNumber: string;
@@ -65,6 +67,14 @@ export type CustomerMachine = {
   toolSerialNumbers: string[];
   siteId?: string;
   projectId?: string;
+  model?: string;
+  make?: string;
+  handing?: MachineHanding;
+  dateInstalled?: string;
+  dateLastService?: string;
+  lastServiceCount?: number;
+  firmwareVersion?: string;
+  notes?: string;
 };
 
 export type ProjectInfo = {
@@ -138,6 +148,10 @@ export type ProjectOnsiteReport = {
   signatureDataUrl?: string;
   pdfDataUrl?: string;
   createdAt: string;
+  machineId?: string;
+  machineSerialNumber?: string;
+  serviceInformation?: string;
+  firmwareVersion?: string;
 };
 
 export type CustomerSignOffDecision = 'option1' | 'option2' | 'option3';
