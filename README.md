@@ -35,6 +35,12 @@ npm run preview
 All data is stored in the browser `localStorage` under key `customer-project-db` (older `cpdb.v1` data is migrated automatically).
 Clearing browser storage resets the demo database.
 
+## Troubleshooting
+
+### "Unable to read field 'customerProjectId' from Storage"
+
+CustomerProjectDB keeps its demo workspace in your browser's `localStorage`. If that data is missing the active project record, any upload that relies on it (for example, project documents or sign-off PDFs) will fail with this error. Open **Settings → Data** and clear/import fresh workspace data or clear the browser storage before trying again.
+
 
 ## GitHub Setup
 

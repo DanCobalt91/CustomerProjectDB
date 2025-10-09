@@ -693,11 +693,18 @@ function AppContent() {
   const storageNotice = 'Data is stored in your browser for testing only. Clearing your cache will remove it.'
 
   const toErrorMessage = useCallback((error: unknown, fallback: string) => {
-    if (error instanceof Error && error.message) {
-      return error.message
-    }
-    if (typeof error === 'string' && error) {
-      return error
+    const message =
+      error instanceof Error && error.message
+        ? error.message
+        : typeof error === 'string' && error
+        ? error
+        : null
+
+    if (message) {
+      if (/customerProjectId/i.test(message) && /storage/i.test(message)) {
+        return 'The browser data for this workspace is missing the selected project. Clear the demo data from Settings → Data (or clear your browser storage) and try again.'
+      }
+      return message
     }
     return fallback
   }, [])
