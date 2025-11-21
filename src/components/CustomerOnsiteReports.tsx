@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import { AlertCircle, Download, FileText, Trash2, X } from 'lucide-react'
+import { AlertCircle, Download, FileText, Pencil, Plus, Trash2, X } from 'lucide-react'
 
 import type {
   BusinessSettings,
@@ -8,6 +8,7 @@ import type {
   CustomerContact,
   Project,
   ProjectOnsiteReport,
+  OnsiteServiceEntry,
 } from '../types'
 import { Card, CardContent, CardHeader } from './ui/Card'
 import Button from './ui/Button'
@@ -15,6 +16,7 @@ import Input from './ui/Input'
 import Label from './ui/Label'
 import { getBusinessEndTimeForDate, getBusinessStartTimeForDate } from '../lib/businessHours'
 import type { OnsiteReportSubmission } from '../lib/onsiteReport'
+import { createId } from '../lib/id'
 
 type Props = {
   customer: Customer
@@ -37,18 +39,18 @@ type OnsiteReportDraft = {
   additionalNotes: string
   signedByName: string
   signedByPosition: string
-  machineId: string
-  serviceInformation: string
-  firmwareVersion: string
+  serviceEntries: ServiceEntryDraft[]
 }
+
+type ServiceEntryDraft = Omit<OnsiteServiceEntry, 'id'> & { id?: string }
 
 type ProjectScopedReport = {
   report: ProjectOnsiteReport
   project: Project
 }
 
-const CUSTOMER_ADDRESS_OPTION = '__customer_address__'
 const CUSTOM_SITE_OPTION = '__custom__'
+const NEW_MACHINE_OPTION = '__new_machine__'
 
 export function CustomerOnsiteReports({
   businessSettings,
@@ -65,12 +67,15 @@ export function CustomerOnsiteReports({
   const [selectedSiteOption, setSelectedSiteOption] = useState<string>(() =>
     resolveDefaultSiteOption(customer, activeProjectId),
   )
-  const [selectedContactId, setSelectedContactId] = useState<string>('')
   const [isCreatingOnsiteReport, setIsCreatingOnsiteReport] = useState(false)
   const [isSavingOnsiteReport, setIsSavingOnsiteReport] = useState(false)
   const [onsiteReportError, setOnsiteReportError] = useState<string | null>(null)
   const [onsiteHasSignature, setOnsiteHasSignature] = useState(false)
   const [removingOnsiteReportId, setRemovingOnsiteReportId] = useState<string | null>(null)
+  const [serviceEntryError, setServiceEntryError] = useState<string | null>(null)
+  const [showServiceEntryEditor, setShowServiceEntryEditor] = useState(false)
+  const [serviceEntryMode, setServiceEntryMode] = useState<'create' | 'edit'>('create')
+  const [serviceEntryDraft, setServiceEntryDraft] = useState<ServiceEntryDraft | null>(null)
   const onsiteSignatureCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const onsiteSignatureDrawingRef = useRef(false)
   const onsiteSignatureStrokesRef = useRef<Array<Array<{ x: number; y: number }>>>([])
@@ -83,7 +88,6 @@ export function CustomerOnsiteReports({
   useEffect(() => {
     setOnsiteReportDraft(buildDefaultDraft(customer, businessSettings, currentUserName, activeProjectId))
     setSelectedSiteOption(resolveDefaultSiteOption(customer, activeProjectId))
-    setSelectedContactId('')
     resetOnsiteSignature()
   }, [activeProjectId, businessSettings, currentUserName, customer])
 
@@ -128,13 +132,17 @@ export function CustomerOnsiteReports({
     })
   }, [activeProject, customer.machines])
 
+  const machineLookup = useMemo(() => new Map(customer.machines.map(machine => [machine.id, machine])), [customer.machines])
+
   const contactOptions = useMemo(() => sortContacts(customer.contacts), [customer.contacts])
 
   const siteOptions = useMemo(() => {
+    const seenAddresses = new Set<string>()
     const options: Array<{ value: string; label: string; address: string }> = []
     customer.sites.forEach(site => {
       const address = site.address?.trim()
-      if (address) {
+      if (address && !seenAddresses.has(address)) {
+        seenAddresses.add(address)
         options.push({
           value: site.id,
           label: site.name?.trim() || address,
@@ -142,11 +150,8 @@ export function CustomerOnsiteReports({
         })
       }
     })
-    if (customer.address?.trim()) {
-      options.push({ value: CUSTOMER_ADDRESS_OPTION, label: 'Customer address', address: customer.address.trim() })
-    }
     return options
-  }, [customer.address, customer.sites])
+  }, [customer.sites])
 
   const updateOnsiteReportField = <K extends keyof OnsiteReportDraft>(field: K, value: string) => {
     setOnsiteReportDraft(prev => {
@@ -182,6 +187,79 @@ export function CustomerOnsiteReports({
     setOnsiteHasSignature(false)
   }, [])
 
+  const openServiceEntryEditor = (entry?: ServiceEntryDraft) => {
+    const defaultMachineId = entry?.machineId ?? machineOptions[0]?.id ?? ''
+    const defaultMachine = defaultMachineId ? machineLookup.get(defaultMachineId) ?? null : null
+    const baseEntry: ServiceEntryDraft = {
+      id: entry?.id,
+      machineId: defaultMachineId,
+      machineSerialNumber: entry?.machineSerialNumber ?? defaultMachine?.machineSerialNumber ?? '',
+      lineReference: entry?.lineReference ?? defaultMachine?.lineReference ?? '',
+      serviceInformation: entry?.serviceInformation ?? '',
+      firmwareVersion: entry?.firmwareVersion ?? defaultMachine?.firmwareVersion ?? '',
+      serviceCount: entry?.serviceCount ?? '',
+    }
+    setServiceEntryMode(entry ? 'edit' : 'create')
+    setServiceEntryDraft(baseEntry)
+    setServiceEntryError(null)
+    setShowServiceEntryEditor(true)
+  }
+
+  const handleServiceEntryMachineSelect = (value: string) => {
+    setServiceEntryDraft(prev => {
+      if (!prev) return prev
+      if (!value || value === NEW_MACHINE_OPTION) {
+        return { ...prev, machineId: '', machineSerialNumber: '', lineReference: '', firmwareVersion: '' }
+      }
+      const machine = machineLookup.get(value)
+      return {
+        ...prev,
+        machineId: value,
+        machineSerialNumber: machine?.machineSerialNumber ?? prev.machineSerialNumber ?? '',
+        lineReference: machine?.lineReference ?? prev.lineReference ?? '',
+        firmwareVersion: machine?.firmwareVersion ?? prev.firmwareVersion ?? '',
+      }
+    })
+  }
+
+  const handleSaveServiceEntry = () => {
+    if (!serviceEntryDraft) return
+    const normalized: OnsiteServiceEntry = {
+      id: serviceEntryDraft.id ?? createId(),
+      machineId: serviceEntryDraft.machineId?.trim() || undefined,
+      machineSerialNumber: serviceEntryDraft.machineSerialNumber?.trim() || undefined,
+      lineReference: serviceEntryDraft.lineReference?.trim() || undefined,
+      serviceInformation: serviceEntryDraft.serviceInformation?.trim() || undefined,
+      firmwareVersion: serviceEntryDraft.firmwareVersion?.trim() || undefined,
+      serviceCount: serviceEntryDraft.serviceCount?.trim() || undefined,
+    }
+
+    if (!normalized.machineSerialNumber && !normalized.serviceInformation) {
+      setServiceEntryError('Add a machine or service details before saving.')
+      return
+    }
+
+    setOnsiteReportDraft(prev => {
+      const existing = prev.serviceEntries ?? []
+      const nextEntries =
+        serviceEntryMode === 'edit'
+          ? existing.map(entry => (entry.id === normalized.id ? normalized : entry))
+          : [...existing, normalized]
+      return { ...prev, serviceEntries: nextEntries }
+    })
+    setServiceEntryError(null)
+    setShowServiceEntryEditor(false)
+    setServiceEntryDraft(null)
+    setServiceEntryMode('create')
+  }
+
+  const handleRemoveServiceEntry = (entryId: string) => {
+    setOnsiteReportDraft(prev => ({
+      ...prev,
+      serviceEntries: prev.serviceEntries.filter(entry => entry.id !== entryId),
+    }))
+  }
+
   const startOnsiteReport = () => {
     setOnsiteReportDraft(
       buildDefaultDraft(customer, businessSettings, currentUserName, activeProjectId, selectedSiteOption, siteOptions),
@@ -191,13 +269,12 @@ export function CustomerOnsiteReports({
     resetOnsiteSignature()
   }
 
-  const cancelOnsiteReport = () => {
+    const cancelOnsiteReport = () => {
     setIsCreatingOnsiteReport(false)
     setIsSavingOnsiteReport(false)
     setOnsiteReportError(null)
     setOnsiteHasSignature(false)
     resetOnsiteSignature()
-    setSelectedContactId('')
   }
 
   const handleOnsiteSignaturePointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
@@ -271,6 +348,10 @@ export function CustomerOnsiteReports({
       setOnsiteReportError('Enter the customer name.')
       return
     }
+    if (onsiteReportDraft.serviceEntries.length === 0) {
+      setOnsiteReportError('Add at least one machine service entry.')
+      return
+    }
 
     const canvas = onsiteSignatureCanvasRef.current
     if (!canvas) {
@@ -289,8 +370,18 @@ export function CustomerOnsiteReports({
     setOnsiteReportError(null)
 
     try {
+      const normalizedEntries = onsiteReportDraft.serviceEntries.map(entry => ({
+        ...entry,
+        id: entry.id ?? createId(),
+      }))
+      const primaryService = normalizedEntries[0]
+
       const submission: OnsiteReportSubmission = {
         ...onsiteReportDraft,
+        serviceEntries: normalizedEntries,
+        machineId: primaryService?.machineId,
+        serviceInformation: primaryService?.serviceInformation,
+        firmwareVersion: primaryService?.firmwareVersion,
         engineerName: currentUserName,
         signatureDataUrl,
         signaturePaths: onsiteSignatureStrokesRef.current,
@@ -305,7 +396,6 @@ export function CustomerOnsiteReports({
           buildDefaultDraft(customer, businessSettings, currentUserName, activeProjectId, selectedSiteOption, siteOptions),
         )
         resetOnsiteSignature()
-        setSelectedContactId('')
         setSelectedSiteOption(resolveDefaultSiteOption(customer, activeProjectId))
       }
     } finally {
@@ -341,17 +431,19 @@ export function CustomerOnsiteReports({
     link.click()
   }
 
-  const handleContactSelect = (contactId: string) => {
-    setSelectedContactId(contactId)
-    if (!contactId) return
-    const contact = contactOptions.find(entry => entry.id === contactId)
-    if (!contact) return
-    setOnsiteReportDraft(prev => ({
-      ...prev,
-      signedByName: contact.name ?? prev.signedByName,
-      signedByPosition: contact.position ?? prev.signedByPosition,
-      customerContact: buildContactInfo(contact) || prev.customerContact,
-    }))
+  const handleCustomerNameChange = (value: string) => {
+    setOnsiteReportDraft(prev => ({ ...prev, signedByName: value }))
+    const trimmed = value.trim().toLowerCase()
+    const matchedContact = contactOptions.find(
+      contact => (contact.name ?? '').trim().toLowerCase() === trimmed,
+    )
+    if (matchedContact) {
+      setOnsiteReportDraft(prev => ({
+        ...prev,
+        signedByPosition: matchedContact.position ?? prev.signedByPosition,
+        customerContact: buildContactInfo(matchedContact) || prev.customerContact,
+      }))
+    }
   }
 
   const handleSiteSelect = (value: string) => {
@@ -365,8 +457,144 @@ export function CustomerOnsiteReports({
   }
 
   return (
-    <Card className='panel'>
-      <CardHeader className='flex flex-col gap-2 border-b border-slate-200 pb-4'>
+    <>
+      {showServiceEntryEditor && serviceEntryDraft && (
+        <div className='fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4'>
+          <div className='w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl'>
+            <div className='flex items-start justify-between gap-3'>
+              <div>
+                <div className='text-lg font-semibold text-slate-900'>
+                  {serviceEntryMode === 'edit' ? 'Edit service entry' : 'Add service entry'}
+                </div>
+                <p className='text-sm text-slate-500'>Capture the machine and its service details.</p>
+              </div>
+              <Button
+                variant='ghost'
+                className='text-slate-500 hover:bg-slate-100'
+                onClick={() => {
+                  setShowServiceEntryEditor(false)
+                  setServiceEntryError(null)
+                  setServiceEntryDraft(null)
+                  setServiceEntryMode('create')
+                }}
+              >
+                <X size={16} />
+              </Button>
+            </div>
+            <div className='mt-4 grid gap-3 md:grid-cols-2'>
+              <div className='md:col-span-2'>
+                <Label htmlFor='service-machine'>Machine</Label>
+                <select
+                  id='service-machine'
+                  className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2'
+                  value={serviceEntryDraft.machineId || ''}
+                  onChange={event => handleServiceEntryMachineSelect((event.target as HTMLSelectElement).value)}
+                  disabled={!canEdit}
+                >
+                  <option value=''>Custom machine</option>
+                  {machineOptions.map(option => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                  <option value={NEW_MACHINE_OPTION}>Create new machine</option>
+                </select>
+              </div>
+              <div>
+                <Label htmlFor='service-serial'>Machine serial</Label>
+                <Input
+                  id='service-serial'
+                  value={serviceEntryDraft.machineSerialNumber ?? ''}
+                  onChange={event =>
+                    setServiceEntryDraft(prev =>
+                      prev ? { ...prev, machineSerialNumber: (event.target as HTMLInputElement).value } : prev,
+                    )
+                  }
+                  placeholder='e.g. SN-12345'
+                  disabled={!canEdit}
+                />
+              </div>
+              <div>
+                <Label htmlFor='service-line'>Line reference</Label>
+                <Input
+                  id='service-line'
+                  value={serviceEntryDraft.lineReference ?? ''}
+                  onChange={event =>
+                    setServiceEntryDraft(prev =>
+                      prev ? { ...prev, lineReference: (event.target as HTMLInputElement).value } : prev,
+                    )
+                  }
+                  placeholder='Optional line identifier'
+                  disabled={!canEdit}
+                />
+              </div>
+              <div>
+                <Label htmlFor='service-firmware'>Firmware version</Label>
+                <Input
+                  id='service-firmware'
+                  value={serviceEntryDraft.firmwareVersion ?? ''}
+                  onChange={event =>
+                    setServiceEntryDraft(prev =>
+                      prev ? { ...prev, firmwareVersion: (event.target as HTMLInputElement).value } : prev,
+                    )
+                  }
+                  placeholder='e.g. v2.3.1'
+                  disabled={!canEdit}
+                />
+              </div>
+              <div>
+                <Label htmlFor='service-count'>Service count</Label>
+                <Input
+                  id='service-count'
+                  value={serviceEntryDraft.serviceCount ?? ''}
+                  onChange={event =>
+                    setServiceEntryDraft(prev =>
+                      prev ? { ...prev, serviceCount: (event.target as HTMLInputElement).value } : prev,
+                    )
+                  }
+                  placeholder='e.g. 1200'
+                  disabled={!canEdit}
+                />
+              </div>
+              <div className='md:col-span-2'>
+                <Label htmlFor='service-info'>Service information</Label>
+                <textarea
+                  id='service-info'
+                  className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100'
+                  rows={4}
+                  value={serviceEntryDraft.serviceInformation ?? ''}
+                  onChange={event =>
+                    setServiceEntryDraft(prev =>
+                      prev ? { ...prev, serviceInformation: (event.target as HTMLTextAreaElement).value } : prev,
+                    )
+                  }
+                  placeholder='Document the service activities performed on this machine'
+                  disabled={!canEdit}
+                />
+              </div>
+            </div>
+            {serviceEntryError && <p className='mt-2 text-sm text-rose-600'>{serviceEntryError}</p>}
+            <div className='mt-4 flex flex-wrap items-center gap-2'>
+              <Button onClick={handleSaveServiceEntry} disabled={!canEdit}>
+                {serviceEntryMode === 'edit' ? 'Update machine' : 'Add machine'}
+              </Button>
+              <Button
+                variant='ghost'
+                onClick={() => {
+                  setShowServiceEntryEditor(false)
+                  setServiceEntryDraft(null)
+                  setServiceEntryError(null)
+                  setServiceEntryMode('create')
+                }}
+              >
+                <X size={16} /> Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      <Card className='panel'>
+        <CardHeader className='flex flex-col gap-2 border-b border-slate-200 pb-4'>
         <div className='flex flex-wrap items-center justify-between gap-2'>
           <div>
             <div className='text-lg font-semibold text-slate-800'>Onsite reports</div>
@@ -447,35 +675,65 @@ export function CustomerOnsiteReports({
                   disabled={!canEdit || isSavingOnsiteReport}
                 />
               </div>
-              <div>
-                <Label htmlFor='onsite-machine'>Machine serviced</Label>
-                <select
-                  id='onsite-machine'
-                  className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                  value={onsiteReportDraft.machineId}
-                  onChange={event => updateOnsiteReportField('machineId', (event.target as HTMLSelectElement).value)}
-                  disabled={!canEdit || isSavingOnsiteReport || machineOptions.length === 0}
-                >
-                  <option value=''>Select machine</option>
-                  {machineOptions.map(option => (
-                    <option key={option.id} value={option.id}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-                {machineOptions.length === 0 ? (
-                  <p className='mt-1 text-xs text-slate-500'>Record machines for this customer to track service history.</p>
-                ) : null}
-              </div>
-              <div>
-                <Label htmlFor='onsite-firmware'>Firmware version</Label>
-                <Input
-                  id='onsite-firmware'
-                  value={onsiteReportDraft.firmwareVersion}
-                  onChange={event => updateOnsiteReportField('firmwareVersion', (event.target as HTMLInputElement).value)}
-                  placeholder='e.g. v2.3.1'
-                  disabled={!canEdit || isSavingOnsiteReport}
-                />
+              <div className='md:col-span-2 space-y-3'>
+                <div className='flex items-center justify-between gap-2'>
+                  <Label className='mb-0'>Machines serviced</Label>
+                  <Button variant='outline' onClick={() => openServiceEntryEditor()} disabled={!canEdit}>
+                    <Plus size={16} /> Add machine
+                  </Button>
+                </div>
+                {onsiteReportDraft.serviceEntries.length === 0 ? (
+                  <div className='rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-3 text-sm text-slate-500'>
+                    Add each serviced machine with its firmware and service details.
+                  </div>
+                ) : (
+                  <div className='grid gap-3 md:grid-cols-2'>
+                    {onsiteReportDraft.serviceEntries.map(entry => {
+                      const label = entry.machineSerialNumber || 'Machine'
+                      return (
+                        <div key={entry.id} className='rounded-xl border border-slate-200 bg-white px-3 py-3 shadow-sm'>
+                          <div className='flex items-start justify-between gap-2'>
+                            <div>
+                              <div className='text-sm font-semibold text-slate-800'>{label}</div>
+                              {entry.lineReference ? (
+                                <div className='text-xs text-slate-500'>Line: {entry.lineReference}</div>
+                              ) : null}
+                              {entry.serviceCount ? (
+                                <div className='text-xs text-slate-500'>Service count: {entry.serviceCount}</div>
+                              ) : null}
+                              {entry.firmwareVersion ? (
+                                <div className='text-xs text-slate-500'>Firmware: {entry.firmwareVersion}</div>
+                              ) : null}
+                            </div>
+                            <div className='flex items-center gap-1'>
+                              <Button
+                                variant='ghost'
+                                className='h-8 w-8 rounded-full text-slate-600 hover:bg-slate-100'
+                                onClick={() => openServiceEntryEditor(entry)}
+                                disabled={!canEdit}
+                              >
+                                <Pencil size={14} />
+                                <span className='sr-only'>Edit service entry</span>
+                              </Button>
+                              <Button
+                                variant='ghost'
+                                className='h-8 w-8 rounded-full text-rose-600 hover:bg-rose-50'
+                                onClick={() => handleRemoveServiceEntry(entry.id)}
+                                disabled={!canEdit}
+                              >
+                                <Trash2 size={14} />
+                                <span className='sr-only'>Remove service entry</span>
+                              </Button>
+                            </div>
+                          </div>
+                          <div className='mt-2 text-xs text-slate-600 whitespace-pre-wrap'>
+                            {entry.serviceInformation || 'No service information captured.'}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
               <div>
                 <Label htmlFor='onsite-site-select'>Site address</Label>
@@ -501,18 +759,6 @@ export function CustomerOnsiteReports({
                   value={onsiteReportDraft.siteAddress}
                   onChange={event => updateOnsiteReportField('siteAddress', (event.target as HTMLTextAreaElement).value)}
                   placeholder='Where was the work completed?'
-                  disabled={!canEdit || isSavingOnsiteReport}
-                />
-              </div>
-              <div className='md:col-span-2'>
-                <Label htmlFor='onsite-service-info'>Service information</Label>
-                <textarea
-                  id='onsite-service-info'
-                  className='mt-1 w-full resize-y rounded-xl border border-slate-200/80 bg-white/90 p-3 text-sm text-slate-800 placeholder-slate-400 transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                  rows={3}
-                  value={onsiteReportDraft.serviceInformation}
-                  onChange={event => updateOnsiteReportField('serviceInformation', (event.target as HTMLTextAreaElement).value)}
-                  placeholder='Document the service activities performed on the machine'
                   disabled={!canEdit || isSavingOnsiteReport}
                 />
               </div>
@@ -553,21 +799,20 @@ export function CustomerOnsiteReports({
                 />
               </div>
               <div>
-                <Label htmlFor='onsite-contact-select'>Customer contact</Label>
-                <select
-                  id='onsite-contact-select'
-                  className='mt-1 w-full rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-sm text-slate-800 shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                  value={selectedContactId}
-                  onChange={event => handleContactSelect((event.target as HTMLSelectElement).value)}
-                  disabled={!canEdit || isSavingOnsiteReport || contactOptions.length === 0}
-                >
-                  <option value=''>Select contact</option>
+                <Label htmlFor='onsite-signee'>Customer name</Label>
+                <Input
+                  id='onsite-signee'
+                  list='onsite-contact-options'
+                  value={onsiteReportDraft.signedByName}
+                  onChange={event => handleCustomerNameChange((event.target as HTMLInputElement).value)}
+                  placeholder='Type a name or pick a saved contact'
+                  disabled={!canEdit || isSavingOnsiteReport}
+                />
+                <datalist id='onsite-contact-options'>
                   {contactOptions.map(contact => (
-                    <option key={contact.id} value={contact.id}>
-                      {contact.name || contact.email || 'Contact'}
-                    </option>
+                    <option key={contact.id} value={contact.name || contact.email || 'Contact'} />
                   ))}
-                </select>
+                </datalist>
               </div>
               <div>
                 <Label htmlFor='onsite-contact-info'>Contact details</Label>
@@ -576,16 +821,6 @@ export function CustomerOnsiteReports({
                   value={onsiteReportDraft.customerContact}
                   onChange={event => updateOnsiteReportField('customerContact', (event.target as HTMLInputElement).value)}
                   placeholder='Phone or email for the customer contact'
-                  disabled={!canEdit || isSavingOnsiteReport}
-                />
-              </div>
-              <div>
-                <Label htmlFor='onsite-signee'>Customer name</Label>
-                <Input
-                  id='onsite-signee'
-                  value={onsiteReportDraft.signedByName}
-                  onChange={event => updateOnsiteReportField('signedByName', (event.target as HTMLInputElement).value)}
-                  placeholder='Customer name'
                   disabled={!canEdit || isSavingOnsiteReport}
                 />
               </div>
@@ -648,6 +883,17 @@ export function CustomerOnsiteReports({
             {sortedReports.map(entry => {
               const { report, project } = entry
               const createdDisplay = formatTimestamp(report.createdAt)
+              const serviceEntries =
+                report.serviceEntries && report.serviceEntries.length > 0
+                  ? report.serviceEntries
+                  : [
+                      {
+                        id: 'legacy',
+                        machineSerialNumber: report.machineSerialNumber,
+                        firmwareVersion: report.firmwareVersion,
+                        serviceInformation: report.serviceInformation,
+                      },
+                    ]
               return (
                 <div key={report.id} className='rounded-2xl border border-slate-200/80 bg-white/90 p-5 shadow-sm'>
                   <div className='flex flex-wrap items-start justify-between gap-3'>
@@ -661,9 +907,7 @@ export function CustomerOnsiteReports({
                           Arrival {report.arrivalTime || '—'} · Departure {report.departureTime || '—'}
                         </div>
                       )}
-                      <div className='text-xs text-slate-500'>
-                        Machine: {report.machineSerialNumber || 'Not specified'}
-                      </div>
+                      <div className='text-xs text-slate-500'>Machines serviced: {serviceEntries.length}</div>
                       {createdDisplay && <div className='text-xs text-slate-400'>Created {createdDisplay}</div>}
                       {report.customerContact && (
                         <div className='text-xs text-slate-500'>Contact: {report.customerContact}</div>
@@ -690,15 +934,29 @@ export function CustomerOnsiteReports({
                     </div>
                   </div>
                   <div className='mt-4 grid gap-4 md:grid-cols-2'>
-                    <div>
-                      <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Service information</div>
-                      <p className='mt-2 whitespace-pre-wrap text-sm text-slate-700'>
-                        {report.serviceInformation || 'Not provided.'}
-                      </p>
-                    </div>
-                    <div>
-                      <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Firmware version</div>
-                      <p className='mt-2 text-sm text-slate-700'>{report.firmwareVersion || 'Not provided.'}</p>
+                    <div className='md:col-span-2 space-y-2'>
+                      <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Machines serviced</div>
+                      <div className='grid gap-2 md:grid-cols-2'>
+                        {serviceEntries.map(entry => (
+                          <div key={entry.id} className='rounded-xl border border-slate-200 bg-white px-3 py-3 shadow-sm'>
+                            <div className='text-sm font-semibold text-slate-800'>
+                              {entry.machineSerialNumber || 'Machine'}
+                            </div>
+                            {entry.lineReference ? (
+                              <div className='text-xs text-slate-500'>Line: {entry.lineReference}</div>
+                            ) : null}
+                            {entry.firmwareVersion ? (
+                              <div className='text-xs text-slate-500'>Firmware: {entry.firmwareVersion}</div>
+                            ) : null}
+                            {entry.serviceCount ? (
+                              <div className='text-xs text-slate-500'>Service count: {entry.serviceCount}</div>
+                            ) : null}
+                            <div className='mt-2 text-xs text-slate-600 whitespace-pre-wrap'>
+                              {entry.serviceInformation || 'No service details recorded.'}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                     <div>
                       <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Work summary</div>
@@ -743,8 +1001,9 @@ export function CustomerOnsiteReports({
             })}
           </div>
         )}
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </>
   )
 }
 
@@ -814,14 +1073,7 @@ function buildDefaultDraft(
   const preferredOption =
     (siteOptions ?? []).find(option => option.value === selectedSiteOption) ??
     (projectSite?.address?.trim() ? { address: projectSite.address.trim() } : null) ??
-    (fallbackSite?.address?.trim() ? { address: fallbackSite.address.trim() } : null) ??
-    (customer.address?.trim() ? { address: customer.address.trim() } : null)
-
-  const associatedMachines = project
-    ? customer.machines.filter(machine => machine.projectId === project.id || machine.siteId === project.siteId)
-    : []
-
-  const defaultMachineId = associatedMachines[0]?.id ?? ''
+    (fallbackSite?.address?.trim() ? { address: fallbackSite.address.trim() } : null)
 
   return {
     reportDate,
@@ -835,9 +1087,7 @@ function buildDefaultDraft(
     additionalNotes: '',
     signedByName: customer.contacts[0]?.name ?? '',
     signedByPosition: customer.contacts[0]?.position ?? '',
-    machineId: defaultMachineId,
-    serviceInformation: '',
-    firmwareVersion: '',
+    serviceEntries: [],
   }
 }
 
@@ -847,6 +1097,6 @@ function resolveDefaultSiteOption(customer: Customer, projectId: string): string
     return project.siteId
   }
   const firstAddress = customer.sites.find(site => site.address?.trim())
-  return firstAddress?.id ?? (customer.address?.trim() ? CUSTOMER_ADDRESS_OPTION : '')
+  return firstAddress?.id ?? ''
 }
 

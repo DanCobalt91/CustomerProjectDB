@@ -1,6 +1,7 @@
 import type {
   CustomerSignOffSignatureDimensions,
   CustomerSignOffSignatureStroke,
+  OnsiteServiceEntry,
 } from '../types'
 
 export type OnsiteReportSubmission = {
@@ -21,4 +22,5 @@ export type OnsiteReportSubmission = {
   machineId?: string
   serviceInformation?: string
   firmwareVersion?: string
+  serviceEntries: OnsiteServiceEntry[]
 }

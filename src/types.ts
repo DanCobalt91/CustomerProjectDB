@@ -85,6 +85,16 @@ export type CustomerMachine = {
   notes?: string;
 };
 
+export type OnsiteServiceEntry = {
+  id: string;
+  machineId?: string;
+  machineSerialNumber?: string;
+  lineReference?: string;
+  serviceInformation?: string;
+  firmwareVersion?: string;
+  serviceCount?: string;
+};
+
 export type ProjectInfo = {
   machines?: ProjectMachine[];
   cobaltOrderNumber?: string;
@@ -160,6 +170,7 @@ export type ProjectOnsiteReport = {
   machineSerialNumber?: string;
   serviceInformation?: string;
   firmwareVersion?: string;
+  serviceEntries?: OnsiteServiceEntry[];
 };
 
 export type CustomerSignOffDecision = 'option1' | 'option2' | 'option3';
