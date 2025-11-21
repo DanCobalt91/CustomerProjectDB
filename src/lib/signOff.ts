@@ -4,6 +4,7 @@ import {
   type CustomerSignOffDecision,
   type CustomerSignOffSignatureDimensions,
   type CustomerSignOffSignatureStroke,
+  type OnsiteServiceEntry,
   type ProjectMachine,
 } from '../types'
 
@@ -79,6 +80,7 @@ export type OnsiteReportPdfInput = {
   machineSerialNumber?: string
   serviceInformation?: string
   firmwareVersion?: string
+  serviceEntries?: OnsiteServiceEntry[]
 }
 
 const BUSINESS_LOGO_MAX_WIDTH_PT = (240 / 96) * 72
@@ -715,10 +717,28 @@ export async function generateOnsiteReportPdf(data: OnsiteReportPdfInput): Promi
   drawLabelValue('Departure Time', formatTimeValue(data.departureTime))
   drawLabelValue('Customer Contact', data.customerContact)
 
+  const serviceEntries: OnsiteServiceEntry[] =
+    data.serviceEntries && data.serviceEntries.length > 0
+      ? data.serviceEntries
+      : [
+          {
+            id: 'fallback',
+            machineSerialNumber: data.machineSerialNumber,
+            serviceInformation: data.serviceInformation,
+            firmwareVersion: data.firmwareVersion,
+          },
+        ]
+
   drawHeading('Service Details', 16, 16)
-  drawLabelValue('Machine', data.machineSerialNumber)
-  drawLabelValue('Firmware Version', data.firmwareVersion)
-  drawTextBlock('Service Information', data.serviceInformation)
+  serviceEntries.forEach((entry, index) => {
+    const machineLabel = serviceEntries.length > 1 ? `Machine ${index + 1}` : 'Machine'
+    drawLabelValue(machineLabel, entry.machineSerialNumber)
+    drawLabelValue('Line', entry.lineReference)
+    drawLabelValue('Firmware Version', entry.firmwareVersion)
+    drawLabelValue('Service Count', entry.serviceCount)
+    drawTextBlock('Service Information', entry.serviceInformation)
+    cursor -= 6
+  })
 
   drawTextBlock('Work Summary', data.workSummary)
   drawTextBlock('Materials Used', data.materialsUsed)

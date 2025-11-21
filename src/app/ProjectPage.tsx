@@ -56,6 +56,7 @@ import {
 } from '../lib/projectInfo'
 import type { OnsiteReportSubmission } from '../lib/onsiteReport'
 import { getBusinessEndTimeForDate, getBusinessStartTimeForDate } from '../lib/businessHours'
+import { createId } from '../lib/id'
 
 export type ProjectPageProps = {
   customer: Customer
@@ -1334,6 +1335,15 @@ export default function ProjectPage({
     const serviceInformation = onsiteReportDraft.serviceInformation.trim()
     const firmwareVersion = onsiteReportDraft.firmwareVersion.trim()
 
+    const serviceEntries = [
+      {
+        id: createId(),
+        machineId: machineId || undefined,
+        serviceInformation: serviceInformation || undefined,
+        firmwareVersion: firmwareVersion || undefined,
+      },
+    ]
+
     setIsSavingOnsiteReport(true)
     setOnsiteReportError(null)
     try {
@@ -1355,6 +1365,7 @@ export default function ProjectPage({
         machineId: machineId || undefined,
         serviceInformation: serviceInformation || undefined,
         firmwareVersion: firmwareVersion || undefined,
+        serviceEntries,
       })
       if (result) {
         setOnsiteReportError(result)

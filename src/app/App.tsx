@@ -780,7 +780,9 @@ function AppContent() {
   const [isSavingCustomerEditor, setIsSavingCustomerEditor] = useState(false)
   const [customerSiteTab, setCustomerSiteTab] = useState<CustomerSiteTabKey>('')
   const [activeContactIdsByTab, setActiveContactIdsByTab] = useState<Record<string, string | null>>({})
-  const [customerProjectSection, setCustomerProjectSection] = useState<'projects' | 'lines' | 'subCustomers'>(
+  const [customerProjectSection, setCustomerProjectSection] = useState<
+    'projects' | 'lines' | 'subCustomers' | 'onsiteReports'
+  >(
     'projects',
   )
   const [customerProjectsTab, setCustomerProjectsTab] = useState<'active' | 'complete'>('active')
@@ -2127,11 +2129,21 @@ function AppContent() {
     const canViewLines =
       !!activeSiteTab || childProjectItems.length > 0 || childStandaloneItems.length > 0
 
-    const customerSectionTabs: Array<{ value: 'subCustomers' | 'projects' | 'lines'; label: string; count: number }> = [
+    const onsiteReportCount = selectedCustomer.projects.reduce(
+      (total, project) => total + (project.onsiteReports?.length ?? 0),
+      0,
+    )
+
+    const customerSectionTabs: Array<{
+      value: 'subCustomers' | 'projects' | 'lines' | 'onsiteReports'
+      label: string
+      count: number
+    }> = [
       { value: 'projects', label: 'Projects', count: projectsForCurrentSite.length },
       ...(childCustomers.length > 0
         ? [{ value: 'subCustomers' as const, label: 'Sub-customers', count: childCustomers.length }]
         : []),
+      { value: 'onsiteReports', label: 'Onsite reports', count: onsiteReportCount },
       { value: 'lines', label: 'Lines', count: lineItems.length },
     ]
 
@@ -2579,15 +2591,6 @@ function AppContent() {
             </div>
           </div>
           
-          <CustomerOnsiteReports
-            customer={selectedCustomer}
-            businessSettings={businessSettings}
-            currentUserName={currentUserName}
-            canEdit={canEdit}
-            onCreateOnsiteReport={createOnsiteReport}
-            onDeleteOnsiteReport={deleteOnsiteReport}
-          />
-
           <div className='mt-8 space-y-4'>
             <div className='flex flex-wrap items-center justify-between gap-2'>
               <div className='flex flex-wrap items-center gap-2'>
@@ -2634,7 +2637,7 @@ function AppContent() {
                 >
                   <Plus size={16} /> Add Project
                 </Button>
-              ) : (
+              ) : customerProjectSection === 'lines' ? (
                 <Button
                   variant='outline'
                   onClick={() => {
@@ -2678,7 +2681,7 @@ function AppContent() {
                 >
                   <Plus size={16} /> Add Machine
                 </Button>
-              )}
+              ) : null}
             </div>
 
             {customerProjectSection === 'subCustomers' ? (
@@ -2784,6 +2787,15 @@ function AppContent() {
                   })
                 )}
               </div>
+            ) : customerProjectSection === 'onsiteReports' ? (
+              <CustomerOnsiteReports
+                customer={selectedCustomer}
+                businessSettings={businessSettings}
+                currentUserName={currentUserName}
+                canEdit={canEdit}
+                onCreateOnsiteReport={createOnsiteReport}
+                onDeleteOnsiteReport={deleteOnsiteReport}
+              />
             ) : customerProjectSection === 'projects' ? (
               <>
                 <div className='flex flex-wrap items-center gap-2 border-b border-slate-200 pb-2'>
@@ -5586,10 +5598,30 @@ function AppContent() {
       return 'Capture a signature to continue.'
     }
 
-    const machineId = submission.machineId?.trim()
-    const serviceInformation = submission.serviceInformation?.trim()
-    const firmwareVersion = submission.firmwareVersion?.trim()
-    let machineSerialNumber: string | undefined
+    const serviceEntries = (submission.serviceEntries ?? []).map(entry => {
+      const matchedMachine = entry.machineId
+        ? customer.machines.find(machine => machine.id === entry.machineId) ?? null
+        : null
+      return {
+        ...entry,
+        machineId: entry.machineId?.trim() || undefined,
+        machineSerialNumber: entry.machineSerialNumber?.trim() || matchedMachine?.machineSerialNumber || undefined,
+        lineReference: entry.lineReference?.trim() || matchedMachine?.lineReference || undefined,
+        serviceInformation: entry.serviceInformation?.trim() || undefined,
+        firmwareVersion: entry.firmwareVersion?.trim() || matchedMachine?.firmwareVersion || undefined,
+        serviceCount: entry.serviceCount?.trim() || undefined,
+      }
+    })
+
+    if (serviceEntries.length === 0) {
+      return 'Add at least one machine service entry.'
+    }
+
+    const primaryService = serviceEntries[0]
+    const machineId = primaryService.machineId
+    const serviceInformation = primaryService.serviceInformation
+    const firmwareVersion = primaryService.firmwareVersion
+    let machineSerialNumber: string | undefined = primaryService.machineSerialNumber
     let machineToUpdate: CustomerMachine | null = null
     if (machineId) {
       const matchedMachine = customer.machines.find(machine => machine.id === machineId) ?? null
@@ -5624,6 +5656,7 @@ function AppContent() {
         machineSerialNumber,
         serviceInformation,
         firmwareVersion,
+        serviceEntries,
       })
 
       const report: ProjectOnsiteReport = {
@@ -5646,6 +5679,7 @@ function AppContent() {
         machineSerialNumber,
         serviceInformation: serviceInformation || undefined,
         firmwareVersion: firmwareVersion || undefined,
+        serviceEntries,
       }
 
       const existingReports = project.onsiteReports ?? []
@@ -5671,24 +5705,45 @@ function AppContent() {
 
       try {
         await updateProjectRecord(projectId, { onsiteReports: nextReports })
-        if (machineToUpdate) {
-          const machineUpdates: { dateLastService?: string | null; firmwareVersion?: string | null } = {}
+        const machinesById = new Map(customer.machines.map(machine => [machine.id, machine]))
+        for (const entry of serviceEntries) {
+          if (!entry.machineId) continue
+          const machine = machinesById.get(entry.machineId)
+          if (!machine) continue
+
+          const machineUpdates: {
+            dateLastService?: string | null
+            firmwareVersion?: string | null
+            lastServiceCount?: number | null
+          } = {}
           let shouldUpdate = false
+
           if (
             reportDate &&
-            (!machineToUpdate.dateLastService ||
-              new Date(reportDate).getTime() >= new Date(machineToUpdate.dateLastService).getTime())
+            (!machine.dateLastService ||
+              new Date(reportDate).getTime() >= new Date(machine.dateLastService).getTime())
           ) {
             machineUpdates.dateLastService = reportDate
             shouldUpdate = true
           }
-          if (firmwareVersion && firmwareVersion !== machineToUpdate.firmwareVersion) {
-            machineUpdates.firmwareVersion = firmwareVersion
+
+          if (entry.firmwareVersion && entry.firmwareVersion !== machine.firmwareVersion) {
+            machineUpdates.firmwareVersion = entry.firmwareVersion
             shouldUpdate = true
           }
+
+          if (entry.serviceCount) {
+            const parsedCount = Number(entry.serviceCount)
+            if (!Number.isNaN(parsedCount) && parsedCount !== machine.lastServiceCount) {
+              machineUpdates.lastServiceCount = parsedCount
+              shouldUpdate = true
+            }
+          }
+
           if (shouldUpdate) {
             try {
-              const updatedMachine = await updateCustomerMachineRecord(customer.id, machineToUpdate.id, machineUpdates)
+              const updatedMachine = await updateCustomerMachineRecord(customer.id, machine.id, machineUpdates)
+              machinesById.set(machine.id, updatedMachine)
               setDb(prev =>
                 prev.map(entry =>
                   entry.id !== customer.id
@@ -5696,8 +5751,8 @@ function AppContent() {
                     : {
                         ...entry,
                         machines: sortCustomerMachines(
-                          entry.machines.map(machine =>
-                            machine.id === updatedMachine.id ? { ...updatedMachine } : machine,
+                          entry.machines.map(machineEntry =>
+                            machineEntry.id === updatedMachine.id ? { ...updatedMachine } : machineEntry,
                           ),
                         ),
                       },
