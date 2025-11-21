@@ -1049,6 +1049,19 @@ function AppContent() {
       addProjectToSite(project, project.siteId)
     })
 
+    if (childCustomers.length > 0) {
+      childCustomers.forEach(child => {
+        child.projects.forEach(project => {
+          const annotatedProject: Project = {
+            ...project,
+            linkedSubCustomerId: project.linkedSubCustomerId ?? child.id,
+            linkedSubCustomerSiteId: project.linkedSubCustomerSiteId ?? project.siteId ?? undefined,
+          }
+          addProjectToSite(annotatedProject, project.siteId)
+        })
+      })
+    }
+
     if (selectedCustomer.parentCustomerId) {
       const parent = customerLookup.get(selectedCustomer.parentCustomerId) ?? null
       if (parent) {
@@ -1071,7 +1084,7 @@ function AppContent() {
     }
 
     return map
-  }, [customerLookup, selectedCustomer])
+  }, [childCustomers, customerLookup, selectedCustomer])
   const parentCustomer = useMemo(() => {
     if (!selectedCustomer?.parentCustomerId) {
       return null
