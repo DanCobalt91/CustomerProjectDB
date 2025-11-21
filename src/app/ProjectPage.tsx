@@ -17,7 +17,6 @@ import {
 } from 'lucide-react'
 import { AnimatePresence, motion } from 'framer-motion'
 import type {
-  BusinessDay,
   BusinessSettings,
   Customer,
   Project,
@@ -56,6 +55,7 @@ import {
   type ProjectInfoDraft,
 } from '../lib/projectInfo'
 import type { OnsiteReportSubmission } from '../lib/onsiteReport'
+import { getBusinessEndTimeForDate, getBusinessStartTimeForDate } from '../lib/businessHours'
 
 export type ProjectPageProps = {
   customer: Customer
@@ -202,39 +202,8 @@ const PROJECT_FILE_TAB_OPTIONS: Array<{ value: ProjectFileTab; label: string }> 
   { value: 'mechanical', label: 'Mechanical' },
   { value: 'electrical', label: 'Electrical' },
   { value: 'installation', label: 'Installation' },
-  { value: 'onsiteReports', label: 'Onsite reports' },
   { value: 'finalAcceptance', label: 'Final acceptance' },
 ]
-
-const JS_DAY_TO_BUSINESS_DAY: BusinessDay[] = [
-  'sunday',
-  'monday',
-  'tuesday',
-  'wednesday',
-  'thursday',
-  'friday',
-  'saturday',
-]
-
-function getBusinessDayKey(date: Date): BusinessDay {
-  return JS_DAY_TO_BUSINESS_DAY[date.getDay()] ?? 'monday'
-}
-
-function getBusinessStartTimeForDate(
-  settings: BusinessSettings,
-  dateString: string,
-): string {
-  if (!dateString) {
-    return settings.hours.monday?.start ?? DEFAULT_BUSINESS_SETTINGS.hours.monday.start
-  }
-  const parsed = new Date(`${dateString}T00:00:00`)
-  if (Number.isNaN(parsed.getTime())) {
-    return settings.hours.monday?.start ?? DEFAULT_BUSINESS_SETTINGS.hours.monday.start
-  }
-  const dayKey = getBusinessDayKey(parsed)
-  const hours = settings.hours[dayKey] ?? DEFAULT_BUSINESS_SETTINGS.hours[dayKey]
-  return hours.start
-}
 
 function isProjectFileCategoryTab(value: ProjectFileTab): value is ProjectFileCategory {
   return PROJECT_FILE_CATEGORIES.includes(value as ProjectFileCategory)
@@ -558,7 +527,8 @@ export default function ProjectPage({
     const now = new Date()
     const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000)
     const reportDate = local.toISOString().slice(0, 10)
-    const defaultTime = getBusinessStartTimeForDate(businessSettings, reportDate)
+    const defaultArrival = getBusinessStartTimeForDate(businessSettings, reportDate)
+    const defaultDeparture = getBusinessEndTimeForDate(businessSettings, reportDate)
     const projectSite = project.siteId ? customer.sites.find(site => site.id === project.siteId) ?? null : null
     const fallbackSite = customer.sites.find(site => site.address?.trim()) ?? null
     const preferredAddress =
@@ -579,8 +549,8 @@ export default function ProjectPage({
 
     return {
       reportDate,
-      arrivalTime: defaultTime,
-      departureTime: defaultTime,
+      arrivalTime: defaultArrival,
+      departureTime: defaultDeparture,
       engineerName: currentUserDisplayName,
       customerContact: customer.contacts[0]?.name ?? '',
       siteAddress: preferredAddress,
@@ -952,14 +922,16 @@ export default function ProjectPage({
       if (field === 'reportDate') {
         const nextDate = value
         const previousStart = getBusinessStartTimeForDate(businessSettings, prev.reportDate)
+        const previousEnd = getBusinessEndTimeForDate(businessSettings, prev.reportDate)
         const nextStart = getBusinessStartTimeForDate(businessSettings, nextDate)
+        const nextEnd = getBusinessEndTimeForDate(businessSettings, nextDate)
         const shouldUpdateArrival = !prev.arrivalTime || prev.arrivalTime === previousStart
-        const shouldUpdateDeparture = !prev.departureTime || prev.departureTime === previousStart
+        const shouldUpdateDeparture = !prev.departureTime || prev.departureTime === previousEnd
         return {
           ...prev,
           reportDate: nextDate,
           arrivalTime: shouldUpdateArrival ? nextStart : prev.arrivalTime,
-          departureTime: shouldUpdateDeparture ? nextStart : prev.departureTime,
+          departureTime: shouldUpdateDeparture ? nextEnd : prev.departureTime,
         }
       }
       return { ...prev, [field]: value } as OnsiteReportDraft
