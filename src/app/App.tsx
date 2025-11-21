@@ -94,6 +94,7 @@ import {
 } from '../lib/projectInfo'
 import type { OnsiteReportSubmission } from '../lib/onsiteReport'
 import MachinePage from './MachinePage'
+import { CustomerOnsiteReports } from '../components/CustomerOnsiteReports'
 
 const PROJECT_FILE_MIME_BY_EXTENSION: Record<string, string> = {
   pdf: 'application/pdf',
@@ -2577,6 +2578,15 @@ function AppContent() {
               )}
             </div>
           </div>
+          
+          <CustomerOnsiteReports
+            customer={selectedCustomer}
+            businessSettings={businessSettings}
+            currentUserName={currentUserName}
+            canEdit={canEdit}
+            onCreateOnsiteReport={createOnsiteReport}
+            onDeleteOnsiteReport={deleteOnsiteReport}
+          />
 
           <div className='mt-8 space-y-4'>
             <div className='flex flex-wrap items-center justify-between gap-2'>
