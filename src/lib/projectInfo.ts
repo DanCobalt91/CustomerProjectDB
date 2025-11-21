@@ -11,6 +11,14 @@ export type ProjectMachineDraft = {
   machineSerialNumber: string
   lineReference: string
   toolSerialNumbers: string[]
+  model?: string
+  make?: string
+  handing?: ProjectMachine['handing'] | ''
+  dateInstalled?: string
+  dateLastService?: string
+  lastServiceCount?: string
+  firmwareVersion?: string
+  notes?: string
 }
 
 export type ProjectInfoDraft = {
@@ -49,6 +57,15 @@ export function createProjectInfoDraft(
         machineSerialNumber: machine.machineSerialNumber,
         lineReference: machine.lineReference ?? '',
         toolSerialNumbers: machine.toolSerialNumbers ? [...machine.toolSerialNumbers] : [],
+        model: machine.model,
+        make: machine.make,
+        handing: (machine.handing ?? '') as ProjectMachineDraft['handing'],
+        dateInstalled: machine.dateInstalled,
+        dateLastService: machine.dateLastService,
+        lastServiceCount:
+          typeof machine.lastServiceCount === 'number' ? String(machine.lastServiceCount) : '',
+        firmwareVersion: machine.firmwareVersion,
+        notes: machine.notes,
       })),
     )
   } else if (info) {
@@ -117,6 +134,14 @@ export function parseProjectInfoDraft(
   for (const machine of draft.machines) {
     const machineSerialNumber = machine.machineSerialNumber.trim()
     const lineReference = machine.lineReference.trim()
+    const model = machine.model?.trim() ?? ''
+    const make = machine.make?.trim() ?? ''
+    const firmwareVersion = machine.firmwareVersion?.trim() ?? ''
+    const notes = machine.notes?.trim() ?? ''
+    const dateInstalled = machine.dateInstalled?.trim() ?? ''
+    const dateLastService = machine.dateLastService?.trim() ?? ''
+    const handing = machine.handing?.trim() ?? ''
+    const lastServiceCountInput = machine.lastServiceCount?.trim() ?? ''
     const normalizedTools: string[] = []
     const seenTools = new Set<string>()
     for (const tool of machine.toolSerialNumbers) {
@@ -161,6 +186,22 @@ export function parseProjectInfoDraft(
     }
     if (lineReference) {
       machineEntry.lineReference = lineReference
+    }
+    if (model) machineEntry.model = model
+    if (make) machineEntry.make = make
+    if (firmwareVersion) machineEntry.firmwareVersion = firmwareVersion
+    if (notes) machineEntry.notes = notes
+    if (dateInstalled) machineEntry.dateInstalled = dateInstalled
+    if (dateLastService) machineEntry.dateLastService = dateLastService
+    if (handing === 'left' || handing === 'right') {
+      machineEntry.handing = handing
+    }
+    if (lastServiceCountInput) {
+      const parsedCount = Number(lastServiceCountInput)
+      if (!Number.isFinite(parsedCount) || parsedCount < 0) {
+        return { info: null, error: 'Enter a valid non-negative last service count.' }
+      }
+      machineEntry.lastServiceCount = Math.floor(parsedCount)
     }
     machines.push(machineEntry)
   }

@@ -56,6 +56,14 @@ export type ProjectMachine = {
   machineSerialNumber: string;
   lineReference?: string;
   toolSerialNumbers: string[];
+  model?: string;
+  make?: string;
+  handing?: MachineHanding;
+  dateInstalled?: string;
+  dateLastService?: string;
+  lastServiceCount?: number;
+  firmwareVersion?: string;
+  notes?: string;
 };
 
 export type MachineHanding = 'left' | 'right';
