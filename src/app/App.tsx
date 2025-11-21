@@ -29,6 +29,7 @@ import type {
   ProjectFileCategory,
   ProjectInfo,
   ProjectOnsiteReport,
+  ProjectMachine,
   ProjectStatus,
   ProjectStatusLogEntry,
   WOType,
@@ -1980,6 +1981,14 @@ function AppContent() {
             project,
             machineIndex: index,
             siteId: project.siteId ?? null,
+            model: machine.model,
+            make: machine.make,
+            handing: machine.handing,
+            dateInstalled: machine.dateInstalled,
+            dateLastService: machine.dateLastService,
+            lastServiceCount: machine.lastServiceCount,
+            firmwareVersion: machine.firmwareVersion,
+            notes: machine.notes,
           }))
         })
       : []
@@ -2035,6 +2044,14 @@ function AppContent() {
           project,
           machineIndex: index,
           siteId: project.siteId ?? null,
+          model: machine.model,
+          make: machine.make,
+          handing: machine.handing,
+          dateInstalled: machine.dateInstalled,
+          dateLastService: machine.dateLastService,
+          lastServiceCount: machine.lastServiceCount,
+          firmwareVersion: machine.firmwareVersion,
+          notes: machine.notes,
         }))
       }),
     )
@@ -6047,9 +6064,36 @@ function AppContent() {
         }
       }
 
+      const buildMachinePayload = () => {
+        const payload: ProjectMachine = {
+          machineSerialNumber: serial,
+          ...(machineEditor.lineReference.trim()
+            ? { lineReference: machineEditor.lineReference.trim() }
+            : {}),
+          toolSerialNumbers: normalizedTools,
+        }
+        if (model) payload.model = model
+        if (make) payload.make = make
+        if (firmwareVersion) payload.firmwareVersion = firmwareVersion
+        if (notes) payload.notes = notes
+        if (dateInstalled) payload.dateInstalled = dateInstalled
+        if (dateLastService) payload.dateLastService = dateLastService
+        if (handingValue) payload.handing = handingValue
+        if (lastServiceCountNumber !== null) payload.lastServiceCount = lastServiceCountNumber
+        return payload
+      }
+
       const clonedMachines = existingMachines.map(machine => ({
         machineSerialNumber: machine.machineSerialNumber,
         ...(machine.lineReference ? { lineReference: machine.lineReference } : {}),
+        ...(machine.model ? { model: machine.model } : {}),
+        ...(machine.make ? { make: machine.make } : {}),
+        ...(machine.firmwareVersion ? { firmwareVersion: machine.firmwareVersion } : {}),
+        ...(machine.notes ? { notes: machine.notes } : {}),
+        ...(machine.dateInstalled ? { dateInstalled: machine.dateInstalled } : {}),
+        ...(machine.dateLastService ? { dateLastService: machine.dateLastService } : {}),
+        ...(machine.handing ? { handing: machine.handing } : {}),
+        ...(machine.lastServiceCount !== undefined ? { lastServiceCount: machine.lastServiceCount } : {}),
         toolSerialNumbers: [...machine.toolSerialNumbers],
       }))
 
@@ -6059,21 +6103,9 @@ function AppContent() {
           setMachineEditorError('Selected machine no longer exists.')
           return
         }
-        clonedMachines[index] = {
-          machineSerialNumber: serial,
-          ...(machineEditor.lineReference.trim()
-            ? { lineReference: machineEditor.lineReference.trim() }
-            : {}),
-          toolSerialNumbers: normalizedTools,
-        }
+        clonedMachines[index] = buildMachinePayload()
       } else {
-        clonedMachines.push({
-          machineSerialNumber: serial,
-          ...(machineEditor.lineReference.trim()
-            ? { lineReference: machineEditor.lineReference.trim() }
-            : {}),
-          toolSerialNumbers: normalizedTools,
-        })
+        clonedMachines.push(buildMachinePayload())
       }
 
       const existingInfo = project.info ?? undefined
@@ -8026,7 +8058,7 @@ function AppContent() {
               exit={{ scale: 0.96, opacity: 0 }}
               onClick={event => event.stopPropagation()}
             >
-              <Card className='panel'>
+              <Card className='panel max-h-[calc(100vh-2rem)] overflow-y-auto'>
                 <CardHeader className='flex items-center justify-between'>
                   <div className='flex items-center gap-2'>
                     {machineEditor.mode === 'create' ? (
@@ -8226,7 +8258,7 @@ function AppContent() {
                                 setMachineEditor(prev => (prev ? { ...prev, model: value } : prev))
                               }}
                               placeholder='e.g. XR-500'
-                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                              disabled={isSavingMachineEditor}
                             />
                           </div>
                           <div>
@@ -8239,7 +8271,7 @@ function AppContent() {
                                 setMachineEditor(prev => (prev ? { ...prev, make: value } : prev))
                               }}
                               placeholder='e.g. Cobalt Systems'
-                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                              disabled={isSavingMachineEditor}
                             />
                           </div>
                           <div>
@@ -8252,7 +8284,7 @@ function AppContent() {
                                 const value = (event.target as HTMLSelectElement).value as MachineHanding | ''
                                 setMachineEditor(prev => (prev ? { ...prev, handing: value } : prev))
                               }}
-                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                              disabled={isSavingMachineEditor}
                             >
                               <option value=''>Not specified</option>
                               <option value='left'>Left</option>
@@ -8269,7 +8301,7 @@ function AppContent() {
                                 setMachineEditor(prev => (prev ? { ...prev, firmwareVersion: value } : prev))
                               }}
                               placeholder='e.g. v2.3.1'
-                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                              disabled={isSavingMachineEditor}
                             />
                           </div>
                           <div>
@@ -8283,7 +8315,7 @@ function AppContent() {
                                 const value = (event.target as HTMLInputElement).value
                                 setMachineEditor(prev => (prev ? { ...prev, dateInstalled: value } : prev))
                               }}
-                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                              disabled={isSavingMachineEditor}
                             />
                           </div>
                           <div>
@@ -8297,7 +8329,7 @@ function AppContent() {
                                 const value = (event.target as HTMLInputElement).value
                                 setMachineEditor(prev => (prev ? { ...prev, dateLastService: value } : prev))
                               }}
-                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                              disabled={isSavingMachineEditor}
                             />
                           </div>
                           <div>
@@ -8313,7 +8345,7 @@ function AppContent() {
                                 setMachineEditor(prev => (prev ? { ...prev, lastServiceCount: value } : prev))
                               }}
                               placeholder='e.g. 12'
-                              disabled={isSavingMachineEditor || machineEditor.context === 'project'}
+                              disabled={isSavingMachineEditor}
                             />
                           </div>
                         </div>
@@ -8331,9 +8363,6 @@ function AppContent() {
                             placeholder='Internal notes about this machine'
                             disabled={isSavingMachineEditor || machineEditor.context === 'project'}
                           />
-                          {machineEditor.context === 'project' ? (
-                            <p className='mt-1 text-xs text-slate-500'>Detailed machine information can be managed from the customer record.</p>
-                          ) : null}
                         </div>
                         {machineEditorError && (
                           <p className='flex items-center gap-1 text-sm text-rose-600'>

@@ -1029,6 +1029,23 @@ function createLocalStorageStorage(): StorageApi {
     return accumulator
   }
 
+  function normalizeNumberValue(value: unknown): number | undefined {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      if (!trimmed) {
+        return undefined
+      }
+      const parsed = Number(trimmed)
+      if (Number.isFinite(parsed)) {
+        return parsed
+      }
+    }
+    return undefined
+  }
+
   function normalizeDateOnlyValue(value: unknown): string | undefined {
     if (typeof value !== 'string') {
       return undefined
@@ -1152,7 +1169,12 @@ function createLocalStorageStorage(): StorageApi {
     const machines: ProjectMachine[] = []
     const machineMap = new Map<string, ProjectMachine>()
 
-    const addMachine = (serial: string, line: string | null, tools: string[]) => {
+    const addMachine = (
+      serial: string,
+      line: string | null,
+      tools: string[],
+      details: Partial<ProjectMachine> = {},
+    ) => {
       const machineSerial = serial.trim()
       const key = machineSerial.toLowerCase()
       const normalizedTools: string[] = []
@@ -1187,6 +1209,30 @@ function createLocalStorageStorage(): StorageApi {
         if (!existing.lineReference && line?.trim()) {
           existing.lineReference = line.trim()
         }
+        if (!existing.model && details.model?.trim()) {
+          existing.model = details.model.trim()
+        }
+        if (!existing.make && details.make?.trim()) {
+          existing.make = details.make.trim()
+        }
+        if (!existing.firmwareVersion && details.firmwareVersion?.trim()) {
+          existing.firmwareVersion = details.firmwareVersion.trim()
+        }
+        if (!existing.notes && details.notes?.trim()) {
+          existing.notes = details.notes.trim()
+        }
+        if (!existing.dateInstalled && details.dateInstalled?.trim()) {
+          existing.dateInstalled = details.dateInstalled.trim()
+        }
+        if (!existing.dateLastService && details.dateLastService?.trim()) {
+          existing.dateLastService = details.dateLastService.trim()
+        }
+        if (!existing.handing && (details.handing === 'left' || details.handing === 'right')) {
+          existing.handing = details.handing
+        }
+        if (existing.lastServiceCount === undefined && details.lastServiceCount !== undefined) {
+          existing.lastServiceCount = details.lastServiceCount
+        }
       } else {
         const entry: ProjectMachine = {
           machineSerialNumber: machineSerial,
@@ -1194,6 +1240,18 @@ function createLocalStorageStorage(): StorageApi {
         }
         if (line?.trim()) {
           entry.lineReference = line.trim()
+        }
+        if (details.model?.trim()) entry.model = details.model.trim()
+        if (details.make?.trim()) entry.make = details.make.trim()
+        if (details.firmwareVersion?.trim()) entry.firmwareVersion = details.firmwareVersion.trim()
+        if (details.notes?.trim()) entry.notes = details.notes.trim()
+        if (details.dateInstalled?.trim()) entry.dateInstalled = details.dateInstalled.trim()
+        if (details.dateLastService?.trim()) entry.dateLastService = details.dateLastService.trim()
+        if (details.handing === 'left' || details.handing === 'right') {
+          entry.handing = details.handing
+        }
+        if (details.lastServiceCount !== undefined) {
+          entry.lastServiceCount = details.lastServiceCount
         }
         machineMap.set(key, entry)
         machines.push(entry)
@@ -1216,12 +1274,44 @@ function createLocalStorageStorage(): StorageApi {
             (entryRaw as { lineName?: unknown }).lineName ??
             (entryRaw as { lineNumber?: unknown }).lineNumber,
         )
+        const model = toOptionalString((entryRaw as { model?: unknown }).model)
+        const make = toOptionalString((entryRaw as { make?: unknown }).make)
+        const handing =
+          (entryRaw as { handing?: unknown }).handing === 'left' ||
+          (entryRaw as { handing?: unknown }).handing === 'right'
+            ? ((entryRaw as { handing?: unknown }).handing as ProjectMachine['handing'])
+            : undefined
+        const dateInstalled = normalizeDateOnlyValue(
+          (entryRaw as { dateInstalled?: unknown }).dateInstalled,
+        )
+        const dateLastService = normalizeDateOnlyValue(
+          (entryRaw as { dateLastService?: unknown }).dateLastService,
+        )
+        const firmwareVersion = toOptionalString(
+          (entryRaw as { firmwareVersion?: unknown }).firmwareVersion,
+        )
+        const notes = toOptionalString((entryRaw as { notes?: unknown }).notes)
+        const lastServiceCountValue = normalizeNumberValue(
+          (entryRaw as { lastServiceCount?: unknown }).lastServiceCount,
+        )
+        const lastServiceCount = Number.isFinite(lastServiceCountValue)
+          ? Math.floor(lastServiceCountValue as number)
+          : undefined
         const toolList =
           normalizeStringArrayValue(
             (entryRaw as { toolSerialNumbers?: unknown; toolSerials?: unknown }).toolSerialNumbers ??
               (entryRaw as { toolSerials?: unknown }).toolSerials,
           ) ?? []
-        addMachine(serial ?? '', line ?? projectLineReference ?? null, toolList)
+        addMachine(serial ?? '', line ?? projectLineReference ?? null, toolList, {
+          model,
+          make,
+          handing,
+          dateInstalled,
+          dateLastService,
+          firmwareVersion,
+          notes,
+          lastServiceCount,
+        })
       }
     }
 
