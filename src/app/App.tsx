@@ -43,6 +43,7 @@ import type {
   BusinessLogo,
   BusinessSettings,
   BusinessDay,
+  ProjectPart,
 } from '../types'
 import {
   BUSINESS_DAYS,
@@ -55,6 +56,7 @@ import {
 import {
   listCustomers,
   listUsers,
+  listPartsCatalog,
   createCustomer as createCustomerRecord,
   updateCustomer as updateCustomerRecord,
   deleteCustomer as deleteCustomerRecord,
@@ -73,6 +75,7 @@ import {
   deleteUser as deleteUserRecord,
   exportDatabase as exportDatabaseRecords,
   importDatabase as importDatabaseRecords,
+  updatePartsCatalog as updatePartsCatalogRecords,
   getBusinessSettings,
   updateBusinessSettings as updateBusinessSettingsRecord,
 } from '../lib/storage'
@@ -95,6 +98,7 @@ import {
 import type { OnsiteReportSubmission } from '../lib/onsiteReport'
 import MachinePage from './MachinePage'
 import { CustomerOnsiteReports } from '../components/CustomerOnsiteReports'
+import PartsDatabasePage from './PartsDatabasePage'
 
 const PROJECT_FILE_MIME_BY_EXTENSION: Record<string, string> = {
   pdf: 'application/pdf',
@@ -114,6 +118,23 @@ const BUSINESS_LOGO_OUTPUT_QUALITY = 0.9
 function guessMimeTypeFromName(name: string): string {
   const extension = name.split('.').pop()?.toLowerCase() ?? ''
   return PROJECT_FILE_MIME_BY_EXTENSION[extension] ?? 'application/octet-stream'
+}
+
+function collectPartsCatalogFromProjects(customers: Customer[]): ProjectPart[] {
+  const partsByKey = new Map<string, ProjectPart>()
+  for (const customer of customers) {
+    for (const project of customer.projects) {
+      const catalog = project.info?.partsCatalog
+      if (!catalog) continue
+      for (const part of catalog) {
+        const key = part.partNumber.trim().toLowerCase() || part.id
+        if (!partsByKey.has(key)) {
+          partsByKey.set(key, { ...part })
+        }
+      }
+    }
+  }
+  return Array.from(partsByKey.values())
 }
 
 function isAllowedProjectFile(file: File): boolean {
@@ -655,6 +676,7 @@ function getPasswordStrengthMeta(password: string): { label: string; className: 
 function AppContent() {
   const [db, setDb] = useState<Customer[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const [partsCatalog, setPartsCatalog] = useState<ProjectPart[]>([])
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null)
@@ -663,6 +685,7 @@ function AppContent() {
     | 'myTasks'
     | 'customers'
     | 'projects'
+    | 'partsDatabase'
     | 'customerDetail'
     | 'projectDetail'
     | 'machineDetail'
@@ -887,15 +910,22 @@ function AppContent() {
       }
 
       try {
-        const [customers, usersResult, settingsResult] = await Promise.all([
+        const [customers, usersResult, settingsResult, partsResult] = await Promise.all([
           listCustomers(),
           listUsers(),
           getBusinessSettings(),
+          listPartsCatalog(),
         ])
         setDb(customers)
         setUsers(usersResult)
         setBusinessSettings(settingsResult)
         setBusinessSettingsDraft(cloneBusinessSettings(settingsResult))
+        const derivedParts =
+          partsResult.length > 0 ? partsResult : collectPartsCatalogFromProjects(customers)
+        setPartsCatalog(derivedParts)
+        if (partsResult.length === 0 && derivedParts.length > 0) {
+          void updatePartsCatalogRecords(derivedParts)
+        }
         setBusinessSettingsMessage(null)
         setBusinessSettingsError(null)
         setLoadError(null)
@@ -910,7 +940,7 @@ function AppContent() {
         }
       }
     },
-    [toErrorMessage],
+    [toErrorMessage, updatePartsCatalogRecords],
   )
 
   useEffect(() => {
@@ -1577,13 +1607,14 @@ function AppContent() {
           sum + customer.projects.reduce((projectSum, project) => projectSum + project.wos.length, 0),
         0,
       )
+      const partsTotal = data.partsCatalog.length
 
       setSettingsSuccess(
         `Saved ${fileName} with ${customerTotal} ${
           customerTotal === 1 ? 'customer' : 'customers'
-        }, ${projectTotal} ${projectTotal === 1 ? 'project' : 'projects'}, and ${workOrderTotal} ${
+        }, ${projectTotal} ${projectTotal === 1 ? 'project' : 'projects'}, ${workOrderTotal} ${
           workOrderTotal === 1 ? 'work order' : 'work orders'
-        }.`,
+        }, and ${partsTotal} ${partsTotal === 1 ? 'part' : 'parts'}.`,
       )
     } catch (error) {
       console.error('Failed to export data', error)
@@ -1607,12 +1638,18 @@ function AppContent() {
           throw new Error('The selected file is not valid JSON.')
         }
 
-        const { customers, users: importedUsers, businessSettings: importedSettings } =
+        const {
+          customers,
+          users: importedUsers,
+          businessSettings: importedSettings,
+          partsCatalog: importedPartsCatalog,
+        } =
           await importDatabaseRecords(parsed)
         setDb(customers)
         setUsers(importedUsers)
         setBusinessSettings(importedSettings)
         setBusinessSettingsDraft(cloneBusinessSettings(importedSettings))
+        setPartsCatalog(importedPartsCatalog)
         setBusinessSettingsMessage(null)
         setBusinessSettingsError(null)
         setNewProjectInfoDraft(
@@ -1642,8 +1679,10 @@ function AppContent() {
         setSettingsSuccess(
           `Imported ${customers.length} ${
             customers.length === 1 ? 'customer' : 'customers'
-          }, ${projectTotal} ${projectTotal === 1 ? 'project' : 'projects'}, and ${workOrderTotal} ${
+          }, ${projectTotal} ${projectTotal === 1 ? 'project' : 'projects'}, ${workOrderTotal} ${
             workOrderTotal === 1 ? 'work order' : 'work orders'
+          }, and ${importedPartsCatalog.length} ${
+            importedPartsCatalog.length === 1 ? 'part' : 'parts'
           }.`,
         )
       } catch (error) {
@@ -1664,6 +1703,15 @@ function AppContent() {
       setLoadError,
       setActionError,
     ],
+  )
+
+  const handleSavePartsCatalog = useCallback(
+    async (nextCatalog: ProjectPart[]) => {
+      const saved = await updatePartsCatalogRecords(nextCatalog)
+      setPartsCatalog(saved)
+      return saved
+    },
+    [setPartsCatalog, updatePartsCatalogRecords],
   )
 
   const handleImportChange = useCallback(
@@ -3259,6 +3307,14 @@ function AppContent() {
     )
   }
 
+  const renderPartsDatabasePage = () => (
+    <PartsDatabasePage
+      partsCatalog={partsCatalog}
+      canEdit={canEdit}
+      onSavePartsCatalog={handleSavePartsCatalog}
+    />
+  )
+
   const renderMyTasksPage = () => {
     const hasTasks = filteredTasks.length > 0
 
@@ -3523,6 +3579,10 @@ function AppContent() {
           void deleteProject(selectedProjectData.customer.id, selectedProjectData.project.id)
           setActivePage('projects')
         }}
+        partsCatalog={partsCatalog}
+        onNavigateToPartsDatabase={() => {
+          setActivePage('partsDatabase')
+        }}
         onNavigateToCustomer={() => {
           setActivePage('customerDetail')
           setSelectedProjectId(null)
@@ -3668,6 +3728,25 @@ function AppContent() {
   const renderCustomersSidebar = () => null
 
   const renderProjectsSidebar = () => null
+
+  const renderPartsDatabaseSidebar = () => (
+    <Card className='panel'>
+      <CardHeader className='flex-col items-start gap-3'>
+        <div>
+          <div className='text-lg font-semibold text-slate-900'>Parts catalog</div>
+          <p className='text-sm text-slate-500'>Shared list available for project BOMs.</p>
+        </div>
+        <span className='rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white shadow'>
+          {partsCatalog.length === 1 ? '1 part' : `${partsCatalog.length} parts`}
+        </span>
+      </CardHeader>
+      <CardContent>
+        <p className='text-sm text-slate-500'>
+          Add or update parts here, then build BOMs inside individual projects.
+        </p>
+      </CardContent>
+    </Card>
+  )
 
 
   const renderMyTasksSidebar = () => (
@@ -7014,7 +7093,7 @@ function AppContent() {
     )
   }
 
-  const resolvedPage: 'home' | 'myTasks' | 'customers' | 'projects' | 'settings' =
+  const resolvedPage: 'home' | 'myTasks' | 'customers' | 'projects' | 'partsDatabase' | 'settings' =
     activePage === 'customerDetail' || activePage === 'machineDetail'
       ? 'customers'
       : activePage === 'projectDetail'
@@ -7030,9 +7109,11 @@ function AppContent() {
       ? renderCustomersSidebar()
       : resolvedPage === 'projects'
       ? renderProjectsSidebar()
+      : resolvedPage === 'partsDatabase'
+      ? renderPartsDatabaseSidebar()
       : renderSettingsSidebar()
 
-  const handleNavigate = (page: 'home' | 'myTasks' | 'customers' | 'projects' | 'settings') => {
+  const handleNavigate = (page: 'home' | 'myTasks' | 'customers' | 'projects' | 'partsDatabase' | 'settings') => {
     setIsSidebarOpen(false)
     setSelectedMachineId(null)
     if (page === 'projects') {
@@ -7040,6 +7121,8 @@ function AppContent() {
       setActivePage('projects')
     } else if (page === 'customers') {
       setActivePage('customers')
+    } else if (page === 'partsDatabase') {
+      setActivePage('partsDatabase')
     } else if (page === 'settings') {
       setActivePage('settings')
     } else if (page === 'myTasks') {
@@ -7078,6 +7161,8 @@ function AppContent() {
       ? 'Machine Details'
       : activePage === 'projects'
       ? 'Projects'
+      : activePage === 'partsDatabase'
+      ? 'Parts Database'
       : activePage === 'settings'
       ? 'Workspace Settings'
       : 'Project Overview'
@@ -7095,15 +7180,21 @@ function AppContent() {
       ? 'Inspect machine specifications and review service history.'
       : activePage === 'projects'
       ? 'Choose a project from the index to manage its lifecycle and documents.'
+      : activePage === 'partsDatabase'
+      ? 'Manage your shared parts catalog for use in project BOMs.'
       : activePage === 'settings'
       ? 'Export a backup or import data into this workspace.'
       : 'Manage documents, work orders, and final acceptance for this project.'
 
-  const navigationItems: Array<{ page: 'home' | 'myTasks' | 'customers' | 'projects' | 'settings'; label: string }> = [
+  const navigationItems: Array<{
+    page: 'home' | 'myTasks' | 'customers' | 'projects' | 'partsDatabase' | 'settings'
+    label: string
+  }> = [
     { page: 'home', label: 'Home' },
     { page: 'myTasks', label: 'My Tasks' },
     { page: 'customers', label: 'Customers' },
     { page: 'projects', label: 'Projects' },
+    { page: 'partsDatabase', label: 'Parts Database' },
     { page: 'settings', label: 'Settings' },
   ]
 
@@ -7321,6 +7412,8 @@ function AppContent() {
             ? renderMachineDetailPage()
             : activePage === 'projects'
             ? renderProjectsIndex()
+            : activePage === 'partsDatabase'
+            ? renderPartsDatabasePage()
             : activePage === 'settings'
             ? renderSettingsPage()
             : renderProjectDetailPage()}
