@@ -130,6 +130,10 @@ const PROJECT_FILE_METADATA: Record<ProjectFileCategory, { label: string; descri
     label: 'Installation Pack',
     description: 'Store installation packs and site-ready documentation.',
   },
+  bom: {
+    label: 'Bill of Materials',
+    description: 'Auto-generated BOM PDFs created when you save the BOM builder.',
+  },
 }
 
 const FINAL_ACCEPTANCE_UPLOAD_DESCRIPTION =
@@ -140,6 +144,7 @@ const UPLOAD_OPTIONS: Array<{ value: UploadCategory; label: string }> = [
   { value: 'mechanical', label: 'Mechanical Schematics' },
   { value: 'electrical', label: 'Electrical Schematics' },
   { value: 'installation', label: 'Installation Pack' },
+  { value: 'bom', label: 'Bill of Materials' },
   { value: 'finalAcceptance', label: 'Final Acceptance' },
 ]
 
@@ -208,6 +213,7 @@ const PROJECT_FILE_TAB_OPTIONS: Array<{ value: ProjectFileTab; label: string }> 
   { value: 'mechanical', label: 'Mechanical' },
   { value: 'electrical', label: 'Electrical' },
   { value: 'installation', label: 'Installation' },
+  { value: 'bom', label: 'BOM' },
   { value: 'finalAcceptance', label: 'Final acceptance' },
 ]
 
@@ -428,6 +434,7 @@ export default function ProjectPage({
     electrical: null,
     mechanical: null,
     installation: null,
+    bom: null,
   })
   const [removingFile, setRemovingFile] = useState<{ category: ProjectFileCategory; fileId: string } | null>(null)
   const [expandedPreviews, setExpandedPreviews] = useState<Set<string>>(() => new Set())
@@ -779,7 +786,7 @@ export default function ProjectPage({
     setIsNoteDialogOpen(false)
     setWoForm({ number: '', type: 'Build', note: '' })
     setWoError(null)
-    setFileErrors({ fds: null, electrical: null, mechanical: null, installation: null })
+    setFileErrors({ fds: null, electrical: null, mechanical: null, installation: null, bom: null })
     setRemovingFile(null)
     setExpandedPreviews(new Set())
     setActiveTab('tasks')

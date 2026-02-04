@@ -83,6 +83,22 @@ export type OnsiteReportPdfInput = {
   serviceEntries?: OnsiteServiceEntry[]
 }
 
+export type BomPdfRow = {
+  partNumber: string
+  quantity: string
+  description: string
+  designations: string
+}
+
+export type BomPdfInput = {
+  businessName: string
+  businessLogo?: BusinessLogo | null
+  projectNumber: string
+  customerName: string
+  createdAt: string
+  rows: BomPdfRow[]
+}
+
 const BUSINESS_LOGO_MAX_WIDTH_PT = (240 / 96) * 72
 const BUSINESS_LOGO_MAX_HEIGHT_PT = (120 / 96) * 72
 
@@ -177,6 +193,23 @@ function drawRectangle(
   builder.content += `${formatNumber(fr)} ${formatNumber(fg)} ${formatNumber(fb)} rg\n`
   builder.content += `${formatNumber(sr)} ${formatNumber(sg)} ${formatNumber(sb)} RG\n1 w\n`
   builder.content += `${formatNumber(x)} ${formatNumber(y)} ${formatNumber(width)} ${formatNumber(height)} re B\n`
+}
+
+function drawLine(
+  builder: { content: string },
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  stroke: Rgb,
+  width = 1,
+) {
+  const [sr, sg, sb] = stroke
+  builder.content += `${formatNumber(sr)} ${formatNumber(sg)} ${formatNumber(sb)} RG\n${formatNumber(
+    width,
+  )} w\n${formatNumber(x1)} ${formatNumber(y1)} m ${formatNumber(x2)} ${formatNumber(
+    y2,
+  )} l S\n`
 }
 
 function drawSignaturePaths(
@@ -779,6 +812,253 @@ export async function generateOnsiteReportPdf(data: OnsiteReportPdfInput): Promi
   const contentBytes = new TextEncoder().encode(contentStream)
 
   const objects: PdfObject[] = []
+  const fontRegularRef = objects.length + 1
+  objects.push({ type: 'value', content: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>' })
+  const fontBoldRef = objects.length + 1
+  objects.push({ type: 'value', content: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>' })
+
+  let logoResourceRef: { name: string; objectNumber: number } | null = null
+  if (logoObject && logoPlacement) {
+    const objectNumber = objects.length + 1
+    objects.push(logoObject)
+    logoResourceRef = { name: logoPlacement.name, objectNumber }
+  }
+
+  const contentRef = objects.length + 1
+  objects.push({ type: 'stream', content: contentBytes })
+
+  const pageRef = objects.length + 1
+  const pagesRef = pageRef + 1
+
+  const resourceEntries: string[] = [`/Font << /F1 ${fontRegularRef} 0 R /F2 ${fontBoldRef} 0 R >>`]
+  if (logoResourceRef) {
+    resourceEntries.push(`/XObject << /${logoResourceRef.name} ${logoResourceRef.objectNumber} 0 R >>`)
+  }
+
+  const pageObject =
+    `<< /Type /Page /Parent ${pagesRef} 0 R /MediaBox [0 0 ${formatNumber(pageWidth)} ${formatNumber(
+      pageHeight,
+    )}] /Resources << ${resourceEntries.join(' ')} >> /Contents ${contentRef} 0 R >>`
+  objects.push({ type: 'value', content: pageObject })
+  objects.push({ type: 'value', content: `<< /Type /Pages /Kids [${pageRef} 0 R] /Count 1 >>` })
+  objects.push({ type: 'value', content: `<< /Type /Catalog /Pages ${pagesRef} 0 R >>` })
+
+  const pdfBytes = buildPdf(objects)
+  const base64 = encodeBase64(pdfBytes)
+  return `data:application/pdf;base64,${base64}`
+}
+
+export async function generateBomPdf(data: BomPdfInput): Promise<string> {
+  const pageWidth = 841.89
+  const pageHeight = 595.28
+  const margin = 24
+  const columnGap = 16
+  const footerHeight = 44
+  const columnWidth = (pageWidth - margin * 2 - columnGap) / 2
+
+  const headingColor: Rgb = [0.1, 0.12, 0.2]
+  const labelColor: Rgb = [0.35, 0.4, 0.5]
+  const lineColor: Rgb = [0.2, 0.24, 0.32]
+  const tableHeaderFill: Rgb = [0.94, 0.95, 0.97]
+  const tableBodyFill: Rgb = [1, 1, 1]
+
+  const businessName = data.businessName.trim() || 'CustomerProjectDB'
+  let logoObject: PdfObject | null = null
+  let logoPlacement:
+    | { name: string; drawWidth: number; drawHeight: number; drawX: number; drawY: number }
+    | null = null
+  if (data.businessLogo) {
+    try {
+      const resource = createPdfImageResource(data.businessLogo, 'Im1')
+      const widthPt = (resource.widthPx / 96) * 72
+      const heightPt = (resource.heightPx / 96) * 72
+      const scale = Math.min(
+        BUSINESS_LOGO_MAX_WIDTH_PT / widthPt,
+        BUSINESS_LOGO_MAX_HEIGHT_PT / heightPt,
+        1,
+      )
+      const drawWidth = widthPt * scale
+      const drawHeight = heightPt * scale
+      const drawX = pageWidth - margin - drawWidth
+      const drawY = pageHeight - margin - drawHeight
+      logoObject = resource.object
+      logoPlacement = { name: resource.name, drawWidth, drawHeight, drawX, drawY }
+    } catch (error) {
+      console.error('Failed to prepare logo for BOM PDF', error)
+    }
+  }
+
+  const measure = createTextMeasurer()
+  const builder = { content: '' }
+
+  if (logoPlacement) {
+    builder.content += `q ${formatNumber(logoPlacement.drawWidth)} 0 0 ${formatNumber(
+      logoPlacement.drawHeight,
+    )} ${formatNumber(logoPlacement.drawX)} ${formatNumber(logoPlacement.drawY)} cm /${
+      logoPlacement.name
+    } Do Q\n`
+  }
+
+  const headerY = pageHeight - margin - 4
+  appendTextLine(builder, businessName, margin, headerY, 'F2', 16, headingColor)
+
+  const columnsTop = pageHeight - margin - 28
+  const tableHeaderHeight = 18
+  const rowHeight = 18
+  const contentBottom = margin + footerHeight
+  const availableHeight = columnsTop - contentBottom - tableHeaderHeight
+  const maxRows = Math.max(1, Math.floor(availableHeight / rowHeight))
+
+  const rows = [...data.rows]
+  const columnRows = [
+    rows.slice(0, maxRows),
+    rows.slice(maxRows, maxRows * 2),
+  ]
+
+  const columnWidths = {
+    part: 72,
+    qty: 40,
+    designation: 90,
+  }
+
+  const truncate = (value: string, maxWidth: number, fontSize: number, isBold: boolean) => {
+    if (measure(value, fontSize, isBold) <= maxWidth) {
+      return value
+    }
+    let trimmed = value
+    while (trimmed.length > 0 && measure(`${trimmed}…`, fontSize, isBold) > maxWidth) {
+      trimmed = trimmed.slice(0, -1)
+    }
+    return trimmed.length > 0 ? `${trimmed}…` : '…'
+  }
+
+  columnRows.forEach((entries, columnIndex) => {
+    const columnX = margin + columnIndex * (columnWidth + columnGap)
+    const columnTitleY = columnsTop + 8
+    appendTextLine(builder, 'Bill of Materials', columnX + 2, columnTitleY, 'F2', 12, headingColor)
+
+    const tableTop = columnsTop
+    const partWidth = columnWidths.part
+    const qtyWidth = columnWidths.qty
+    const designationWidth = columnWidths.designation
+    const descriptionWidth = columnWidth - partWidth - qtyWidth - designationWidth
+    const columnLines = [
+      columnX,
+      columnX + partWidth,
+      columnX + partWidth + qtyWidth,
+      columnX + partWidth + qtyWidth + descriptionWidth,
+      columnX + columnWidth,
+    ]
+
+    const rowCount = Math.min(entries.length, maxRows)
+    const tableHeight = tableHeaderHeight + rowCount * rowHeight
+    const tableBottom = tableTop - tableHeight
+
+    drawRectangle(builder, columnX, tableBottom, columnWidth, tableHeight, tableBodyFill, lineColor)
+    drawRectangle(
+      builder,
+      columnX,
+      tableTop - tableHeaderHeight,
+      columnWidth,
+      tableHeaderHeight,
+      tableHeaderFill,
+      lineColor,
+    )
+
+    const headerBaseline = tableTop - 13
+    appendTextLine(builder, 'PRC', columnX + 4, headerBaseline, 'F2', 9, headingColor)
+    appendTextLine(builder, 'Qty', columnX + partWidth + 4, headerBaseline, 'F2', 9, headingColor)
+    appendTextLine(
+      builder,
+      'Description',
+      columnX + partWidth + qtyWidth + 4,
+      headerBaseline,
+      'F2',
+      9,
+      headingColor,
+    )
+    appendTextLine(
+      builder,
+      'Designation(s)',
+      columnX + partWidth + qtyWidth + descriptionWidth + 4,
+      headerBaseline,
+      'F2',
+      9,
+      headingColor,
+    )
+
+    for (let index = 0; index <= rowCount; index += 1) {
+      const y = tableTop - tableHeaderHeight - index * rowHeight
+      drawLine(builder, columnX, y, columnX + columnWidth, y, lineColor, 0.8)
+    }
+
+    columnLines.forEach(x => {
+      drawLine(builder, x, tableTop, x, tableBottom, lineColor, 0.8)
+    })
+
+    entries.slice(0, rowCount).forEach((entry, index) => {
+      const rowTop = tableTop - tableHeaderHeight - index * rowHeight
+      const textY = rowTop - 13
+      const partText = truncate(entry.partNumber, partWidth - 8, 9, false)
+      const qtyText = truncate(entry.quantity, qtyWidth - 8, 9, false)
+      const descriptionText = truncate(entry.description, descriptionWidth - 8, 9, false)
+      const designationText = truncate(entry.designations, designationWidth - 8, 9, false)
+      appendTextLine(builder, partText, columnX + 4, textY, 'F1', 9, headingColor)
+      appendTextLine(builder, qtyText, columnX + partWidth + 4, textY, 'F1', 9, headingColor)
+      appendTextLine(
+        builder,
+        descriptionText,
+        columnX + partWidth + qtyWidth + 4,
+        textY,
+        'F1',
+        9,
+        headingColor,
+      )
+      appendTextLine(
+        builder,
+        designationText,
+        columnX + partWidth + qtyWidth + descriptionWidth + 4,
+        textY,
+        'F1',
+        9,
+        headingColor,
+      )
+    })
+  })
+
+  drawLine(builder, margin, contentBottom + 18, pageWidth - margin, contentBottom + 18, lineColor, 0.9)
+  appendTextLine(
+    builder,
+    `Project: ${data.projectNumber}`,
+    margin,
+    contentBottom + 4,
+    'F2',
+    10,
+    headingColor,
+  )
+  appendTextLine(
+    builder,
+    `Customer: ${data.customerName}`,
+    margin + 210,
+    contentBottom + 4,
+    'F1',
+    10,
+    labelColor,
+  )
+  appendTextLine(
+    builder,
+    `Created ${new Date(data.createdAt).toLocaleDateString()}`,
+    pageWidth - margin - 160,
+    contentBottom + 4,
+    'F1',
+    9,
+    labelColor,
+  )
+
+  const contentBytes = new TextEncoder().encode(builder.content)
+  const objects: PdfObject[] = [{ type: 'value', content: '<< /Type /Catalog /Pages 2 0 R >>' }]
+  objects.push({ type: 'value', content: '<< /Type /Pages /Kids [3 0 R] /Count 1 >>' })
+
   const fontRegularRef = objects.length + 1
   objects.push({ type: 'value', content: '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>' })
   const fontBoldRef = objects.length + 1

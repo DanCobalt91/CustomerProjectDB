@@ -80,7 +80,7 @@ import {
   updateBusinessSettings as updateBusinessSettingsRecord,
 } from '../lib/storage'
 import { createId } from '../lib/id'
-import { generateCustomerSignOffPdf, generateOnsiteReportPdf } from '../lib/signOff'
+import { generateBomPdf, generateCustomerSignOffPdf, generateOnsiteReportPdf } from '../lib/signOff'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Label from '../components/ui/Label'
@@ -6480,6 +6480,76 @@ function AppContent() {
     })()
   }
 
+  async function refreshProjectBomDocument(
+    customerId: string,
+    projectId: string,
+    info: ProjectInfo | null,
+  ) {
+    if (!info?.bomEntries || info.bomEntries.length === 0) {
+      return
+    }
+
+    const customer = db.find(entry => entry.id === customerId)
+    const project = customer?.projects.find(entry => entry.id === projectId)
+    if (!customer || !project) {
+      return
+    }
+
+    const partsById = new Map((info.partsCatalog ?? []).map(part => [part.id, part]))
+    const rows = info.bomEntries
+      .map(entry => {
+        const part = partsById.get(entry.partId)
+        const partNumber = part?.partNumber ?? entry.partId
+        const description = part?.description ?? 'Unknown part'
+        return {
+          partNumber,
+          quantity: Number.isFinite(entry.quantity) ? String(entry.quantity) : '',
+          description,
+          designations: entry.designations ?? '',
+        }
+      })
+      .sort((a, b) => b.partNumber.localeCompare(a.partNumber, undefined, { sensitivity: 'base' }))
+
+    const createdAt = new Date().toISOString()
+    const pdfDataUrl = await generateBomPdf({
+      businessName: businessTitle,
+      businessLogo: cloneBusinessLogo(businessSettings.logo),
+      projectNumber: project.number,
+      customerName: customer.name,
+      createdAt,
+      rows,
+    })
+
+    const sanitizedNumber = stripPrefix(project.number, /^P[-\s]?(.+)$/i)
+    const filePayload: ProjectFile = {
+      id: createId(),
+      name: `BOM-${sanitizedNumber || project.number}.pdf`,
+      type: 'application/pdf',
+      dataUrl: pdfDataUrl,
+      uploadedAt: createdAt,
+    }
+
+    const updatedFiles = [filePayload]
+    await updateProjectRecord(projectId, { documents: { bom: updatedFiles } })
+    setDb(prev =>
+      prev.map(entry =>
+        entry.id !== customerId
+          ? entry
+          : {
+              ...entry,
+              projects: entry.projects.map(projectEntry => {
+                if (projectEntry.id !== projectId) {
+                  return projectEntry
+                }
+                const nextDocuments = { ...(projectEntry.documents ?? {}) }
+                nextDocuments.bom = updatedFiles
+                return { ...projectEntry, documents: nextDocuments }
+              }),
+            },
+      ),
+    )
+  }
+
   function updateProjectInfo(customerId: string, projectId: string, info: ProjectInfo | null) {
     if (!canEdit) {
       setActionError('Not authorized to update project information.')
@@ -6503,6 +6573,13 @@ function AppContent() {
       try {
         await updateProjectRecord(projectId, { info })
         setActionError(null)
+        try {
+          await refreshProjectBomDocument(customerId, projectId, info)
+        } catch (error) {
+          console.error('Failed to generate BOM PDF', error)
+          const message = toErrorMessage(error, 'Failed to generate BOM PDF.')
+          setActionError(message)
+        }
       } catch (error) {
         console.error('Failed to update project information', error)
         const message = toErrorMessage(error, 'Failed to update project information.')
