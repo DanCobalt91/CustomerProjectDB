@@ -33,6 +33,7 @@ import type {
   CustomerSignOffSubmission,
   ProjectTask,
   ProjectTaskStatus,
+  ProjectPart,
   User,
 } from '../types'
 import {
@@ -84,6 +85,8 @@ export type ProjectPageProps = {
   onCreateOnsiteReport: (submission: OnsiteReportSubmission) => Promise<string | null>
   onDeleteOnsiteReport: (reportId: string) => Promise<string | null>
   onDeleteProject: () => void
+  partsCatalog: ProjectPart[]
+  onNavigateToPartsDatabase: () => void
   onNavigateToCustomer: () => void
   onReturnToIndex: () => void
   onNavigateToCustomers: () => void
@@ -161,7 +164,7 @@ const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchCl
 const PROJECT_TABS = [
   { value: 'tasks', label: 'Tasks' },
   { value: 'info', label: 'Project Info' },
-  { value: 'parts', label: 'Parts Database' },
+  { value: 'parts', label: 'BOM Builder' },
   { value: 'files', label: 'Project Files' },
   { value: 'workOrders', label: 'Work Orders' },
 ] as const
@@ -390,6 +393,8 @@ export default function ProjectPage({
   onCreateOnsiteReport,
   onDeleteOnsiteReport,
   onDeleteProject,
+  partsCatalog: partsCatalogData,
+  onNavigateToPartsDatabase,
   onNavigateToCustomer,
   onReturnToIndex,
   onNavigateToCustomers,
@@ -413,12 +418,6 @@ export default function ProjectPage({
   const [infoStatus, setInfoStatus] = useState<string | null>(null)
   const [isSavingInfo, setIsSavingInfo] = useState(false)
   const [partSearch, setPartSearch] = useState('')
-  const [partForm, setPartForm] = useState({
-    partNumber: '',
-    description: '',
-    supplier: '',
-    manufacturerNumber: '',
-  })
   const [partsError, setPartsError] = useState<string | null>(null)
   const [partsStatus, setPartsStatus] = useState<string | null>(null)
   const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
@@ -482,8 +481,16 @@ export default function ProjectPage({
   const lastTaskScheduleDefaultsRef = useRef(taskScheduleDefaults)
   const [taskEditError, setTaskEditError] = useState<string | null>(null)
   const [isSavingTaskEdit, setIsSavingTaskEdit] = useState(false)
+
+  useEffect(() => {
+    if (partsCatalogData.length === 0) {
+      return
+    }
+    setInfoDraft(prev => ({ ...prev, partsCatalog: partsCatalogData }))
+  }, [partsCatalogData])
+
   const normalizedPartSearch = partSearch.trim().toLowerCase()
-  const partsCatalog = infoDraft.partsCatalog
+  const partsCatalog = partsCatalogData.length > 0 ? partsCatalogData : infoDraft.partsCatalog
   const bomEntries = infoDraft.bomEntries
   const partsById = useMemo(() => new Map(partsCatalog.map(part => [part.id, part])), [partsCatalog])
   const filteredParts = useMemo(() => {
@@ -983,58 +990,9 @@ export default function ProjectPage({
     if (partsStatus) setPartsStatus(null)
   }
 
-  const updatePartsCatalog = (nextCatalog: ProjectInfoDraft['partsCatalog']) => {
-    setInfoDraft(prev => ({ ...prev, partsCatalog: nextCatalog }))
-    clearPartsFeedback()
-  }
-
   const updateBomEntries = (nextEntries: ProjectInfoDraft['bomEntries']) => {
     setInfoDraft(prev => ({ ...prev, bomEntries: nextEntries }))
     clearPartsFeedback()
-  }
-
-  const handleAddPart = () => {
-    if (!canEdit) {
-      setPartsError('You have read-only access.')
-      return
-    }
-    clearPartsFeedback()
-    const partNumber = partForm.partNumber.trim()
-    const description = partForm.description.trim()
-    const supplier = partForm.supplier.trim()
-    const manufacturerNumber = partForm.manufacturerNumber.trim()
-    if (!partNumber) {
-      setPartsError('Enter a part number before adding a part.')
-      return
-    }
-    const hasDuplicate = partsCatalog.some(
-      part => part.partNumber.trim().toLowerCase() === partNumber.toLowerCase(),
-    )
-    if (hasDuplicate) {
-      setPartsError('That part number already exists in the database.')
-      return
-    }
-    updatePartsCatalog([
-      ...partsCatalog,
-      {
-        id: createId(),
-        partNumber,
-        description,
-        supplier,
-        manufacturerNumber,
-      },
-    ])
-    setPartForm({ partNumber: '', description: '', supplier: '', manufacturerNumber: '' })
-  }
-
-  const handleRemovePart = (partId: string) => {
-    if (!canEdit) {
-      setPartsError('You have read-only access.')
-      return
-    }
-    clearPartsFeedback()
-    updatePartsCatalog(partsCatalog.filter(part => part.id !== partId))
-    updateBomEntries(bomEntries.filter(entry => entry.partId !== partId))
   }
 
   const handleTogglePartSelection = (partId: string) => {
@@ -1065,13 +1023,6 @@ export default function ProjectPage({
     )
   }
 
-  const handleUpdatePart = (
-    partId: string,
-    updates: Partial<ProjectInfoDraft['partsCatalog'][number]>,
-  ) => {
-    updatePartsCatalog(partsCatalog.map(part => (part.id === partId ? { ...part, ...updates } : part)))
-  }
-
   const handleSavePartsAndBom = () => {
     if (!canEdit) {
       setPartsError('You have read-only access.')
@@ -1084,7 +1035,7 @@ export default function ProjectPage({
     }
     onUpdateProjectInfo(info)
     setPartsError(null)
-    setPartsStatus(info ? 'Parts database and BOM saved.' : 'Parts database cleared.')
+    setPartsStatus(info ? 'BOM saved.' : 'BOM cleared.')
   }
 
   const updateOnsiteReportField = <K extends keyof OnsiteReportDraft>(field: K, value: string) => {
@@ -2708,12 +2659,17 @@ export default function ProjectPage({
   const renderPartsDatabase = () => (
     <div className='space-y-6'>
       <section className='space-y-6 rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
-        <div className='space-y-1'>
-          <div className='text-sm font-semibold text-slate-800'>Parts database &amp; BOM builder</div>
-          <p className='text-xs text-slate-500'>
-            Track stocked parts, search across fields, and generate a bill of materials preview.
-          </p>
-          {partsStatus && <p className='text-xs text-emerald-600'>{partsStatus}</p>}
+        <div className='flex flex-wrap items-start justify-between gap-3'>
+          <div className='space-y-1'>
+            <div className='text-sm font-semibold text-slate-800'>BOM builder</div>
+            <p className='text-xs text-slate-500'>
+              Select items from the shared parts database and generate a bill of materials preview.
+            </p>
+            {partsStatus && <p className='text-xs text-emerald-600'>{partsStatus}</p>}
+          </div>
+          <Button variant='outline' onClick={onNavigateToPartsDatabase}>
+            Manage parts database
+          </Button>
         </div>
 
         <div className='grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]'>
@@ -2735,76 +2691,16 @@ export default function ProjectPage({
             </div>
 
             <div className='rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 p-4'>
-              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Add new part</div>
-              <div className='mt-3 grid gap-3 md:grid-cols-4'>
+              <div className='flex flex-wrap items-center justify-between gap-2'>
                 <div>
-                  <Label htmlFor='part-number'>Part no.</Label>
-                  <Input
-                    id='part-number'
-                    value={partForm.partNumber}
-                    onChange={event =>
-                      setPartForm(prev => ({
-                        ...prev,
-                        partNumber: (event.target as HTMLInputElement).value,
-                      }))
-                    }
-                    placeholder='PRC0001'
-                    disabled={!canEdit}
-                  />
+                  <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Parts database</div>
+                  <p className='mt-1 text-xs text-slate-500'>
+                    Add or edit parts in the dedicated database section.
+                  </p>
                 </div>
-                <div className='md:col-span-1'>
-                  <Label htmlFor='part-description'>Description</Label>
-                  <Input
-                    id='part-description'
-                    value={partForm.description}
-                    onChange={event =>
-                      setPartForm(prev => ({
-                        ...prev,
-                        description: (event.target as HTMLInputElement).value,
-                      }))
-                    }
-                    placeholder='e.g. E-stop button'
-                    disabled={!canEdit}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor='part-supplier'>Supplier</Label>
-                  <Input
-                    id='part-supplier'
-                    value={partForm.supplier}
-                    onChange={event =>
-                      setPartForm(prev => ({
-                        ...prev,
-                        supplier: (event.target as HTMLInputElement).value,
-                      }))
-                    }
-                    placeholder='Supplier name'
-                    disabled={!canEdit}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor='part-manufacturer'>Manufacturer no.</Label>
-                  <Input
-                    id='part-manufacturer'
-                    value={partForm.manufacturerNumber}
-                    onChange={event =>
-                      setPartForm(prev => ({
-                        ...prev,
-                        manufacturerNumber: (event.target as HTMLInputElement).value,
-                      }))
-                    }
-                    placeholder='MFG-1234'
-                    disabled={!canEdit}
-                  />
-                </div>
-              </div>
-              <div className='mt-3 flex flex-wrap items-center justify-between gap-2'>
-                <Button onClick={handleAddPart} disabled={!canEdit}>
-                  <Plus size={16} /> Add part
-                </Button>
                 <div className='text-xs text-slate-500'>
                   {partsCatalog.length}{' '}
-                  {partsCatalog.length === 1 ? 'part' : 'parts'} in the database.
+                  {partsCatalog.length === 1 ? 'part' : 'parts'} available.
                 </div>
               </div>
             </div>
@@ -2820,14 +2716,15 @@ export default function ProjectPage({
                       <th className='px-3 py-2'>Supplier</th>
                       <th className='px-3 py-2'>Manufacturer no.</th>
                       <th className='px-3 py-2'>Qty</th>
-                      <th className='px-3 py-2'>Actions</th>
                     </tr>
                   </thead>
                   <tbody className='divide-y divide-slate-200/70 bg-white/90'>
                     {filteredParts.length === 0 ? (
                       <tr>
-                        <td className='px-3 py-4 text-sm text-slate-400' colSpan={7}>
-                          No parts match this search yet.
+                        <td className='px-3 py-4 text-sm text-slate-400' colSpan={6}>
+                          {partsCatalog.length === 0
+                            ? 'No parts are in the database yet.'
+                            : 'No parts match this search yet.'}
                         </td>
                       </tr>
                     ) : (
@@ -2844,50 +2741,10 @@ export default function ProjectPage({
                                 disabled={!canEdit}
                               />
                             </td>
-                            <td className='px-3 py-3'>
-                              <Input
-                                value={part.partNumber}
-                                onChange={event =>
-                                  handleUpdatePart(part.id, {
-                                    partNumber: (event.target as HTMLInputElement).value,
-                                  })
-                                }
-                                disabled={!canEdit}
-                              />
-                            </td>
-                            <td className='px-3 py-3'>
-                              <Input
-                                value={part.description}
-                                onChange={event =>
-                                  handleUpdatePart(part.id, {
-                                    description: (event.target as HTMLInputElement).value,
-                                  })
-                                }
-                                disabled={!canEdit}
-                              />
-                            </td>
-                            <td className='px-3 py-3'>
-                              <Input
-                                value={part.supplier ?? ''}
-                                onChange={event =>
-                                  handleUpdatePart(part.id, {
-                                    supplier: (event.target as HTMLInputElement).value,
-                                  })
-                                }
-                                disabled={!canEdit}
-                              />
-                            </td>
-                            <td className='px-3 py-3'>
-                              <Input
-                                value={part.manufacturerNumber ?? ''}
-                                onChange={event =>
-                                  handleUpdatePart(part.id, {
-                                    manufacturerNumber: (event.target as HTMLInputElement).value,
-                                  })
-                                }
-                                disabled={!canEdit}
-                              />
-                            </td>
+                            <td className='px-3 py-3 font-semibold text-slate-700'>{part.partNumber}</td>
+                            <td className='px-3 py-3'>{part.description || '—'}</td>
+                            <td className='px-3 py-3'>{part.supplier || '—'}</td>
+                            <td className='px-3 py-3'>{part.manufacturerNumber || '—'}</td>
                             <td className='px-3 py-3'>
                               {bomEntry ? (
                                 <input
@@ -2905,15 +2762,6 @@ export default function ProjectPage({
                               ) : (
                                 <span className='text-xs text-slate-400'>—</span>
                               )}
-                            </td>
-                            <td className='px-3 py-3'>
-                              <Button
-                                variant='ghost'
-                                onClick={() => handleRemovePart(part.id)}
-                                disabled={!canEdit}
-                              >
-                                <Trash2 size={14} /> Remove
-                              </Button>
                             </td>
                           </tr>
                         )

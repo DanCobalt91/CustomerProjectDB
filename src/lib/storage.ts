@@ -51,6 +51,7 @@ type ProjectDocumentsUpdate = Partial<Record<ProjectFileCategory, ProjectFile[] 
 type StorageApi = {
   listCustomers(): Promise<Customer[]>
   listUsers(): Promise<User[]>
+  listPartsCatalog(): Promise<ProjectPart[]>
   listProjectsByCustomer(customerId: string): Promise<Project[]>
   listWOs(projectId: string): Promise<WO[]>
   createCustomer(data: {
@@ -186,10 +187,12 @@ type StorageApi = {
   deleteUser(userId: string): Promise<void>
   authenticateUser(credentials: { email: string; password: string }): Promise<User>
   exportDatabase(): Promise<{ customers: Customer[]; users: User[]; businessSettings: BusinessSettings }>
+  updatePartsCatalog(partsCatalog: ProjectPart[]): Promise<ProjectPart[]>
   importDatabase(data: unknown): Promise<{
     customers: Customer[]
     users: User[]
     businessSettings: BusinessSettings
+    partsCatalog: ProjectPart[]
   }>
   getBusinessSettings(): Promise<BusinessSettings>
   updateBusinessSettings(settings: BusinessSettings): Promise<BusinessSettings>
@@ -211,6 +214,10 @@ export function listCustomers(): Promise<Customer[]> {
 
 export function listUsers(): Promise<User[]> {
   return ensureLocalStorage().listUsers()
+}
+
+export function listPartsCatalog(): Promise<ProjectPart[]> {
+  return ensureLocalStorage().listPartsCatalog()
 }
 
 export function listProjectsByCustomer(customerId: string): Promise<Project[]> {
@@ -414,6 +421,7 @@ export function exportDatabase(): Promise<{
   customers: Customer[]
   users: User[]
   businessSettings: BusinessSettings
+  partsCatalog: ProjectPart[]
 }> {
   return ensureLocalStorage().exportDatabase()
 }
@@ -422,8 +430,13 @@ export function importDatabase(data: unknown): Promise<{
   customers: Customer[]
   users: User[]
   businessSettings: BusinessSettings
+  partsCatalog: ProjectPart[]
 }> {
   return ensureLocalStorage().importDatabase(data)
+}
+
+export function updatePartsCatalog(partsCatalog: ProjectPart[]): Promise<ProjectPart[]> {
+  return ensureLocalStorage().updatePartsCatalog(partsCatalog)
 }
 
 export function getBusinessSettings(): Promise<BusinessSettings> {
@@ -439,7 +452,12 @@ function sortByText<T>(items: T[], getValue: (item: T) => string): T[] {
 }
 
 function createLocalStorageStorage(): StorageApi {
-  type Database = { customers: Customer[]; users: User[]; businessSettings: BusinessSettings }
+  type Database = {
+    customers: Customer[]
+    users: User[]
+    businessSettings: BusinessSettings
+    partsCatalog: ProjectPart[]
+  }
 
   type StorageLike = {
     getItem(key: string): string | null
@@ -1156,6 +1174,41 @@ function createLocalStorageStorage(): StorageApi {
     return normalized
   }
 
+  function normalizePartsCatalog(value: unknown): ProjectPart[] {
+    if (!Array.isArray(value)) {
+      return []
+    }
+    const partsCatalog: ProjectPart[] = []
+    for (const entry of value) {
+      if (!entry || typeof entry !== 'object') {
+        continue
+      }
+      const entryRaw = entry as Record<string, unknown>
+      const idRaw = toOptionalString((entryRaw as { id?: unknown }).id)
+      const partNumber = toOptionalString(
+        (entryRaw as { partNumber?: unknown; partNo?: unknown }).partNumber ??
+          (entryRaw as { partNo?: unknown }).partNo,
+      )
+      const description = toOptionalString((entryRaw as { description?: unknown }).description)
+      const supplier = toOptionalString((entryRaw as { supplier?: unknown }).supplier)
+      const manufacturerNumber = toOptionalString(
+        (entryRaw as { manufacturerNumber?: unknown; manufacturerNo?: unknown }).manufacturerNumber ??
+          (entryRaw as { manufacturerNo?: unknown }).manufacturerNo,
+      )
+      if (!partNumber && !description && !supplier && !manufacturerNumber) {
+        continue
+      }
+      partsCatalog.push({
+        id: idRaw || createId(),
+        partNumber: partNumber ?? '',
+        description: description ?? '',
+        supplier: supplier ?? '',
+        manufacturerNumber: manufacturerNumber ?? '',
+      })
+    }
+    return partsCatalog
+  }
+
   function normalizeProjectInfo(value: unknown): ProjectInfo | undefined {
     if (!value || typeof value !== 'object') {
       return undefined
@@ -1362,39 +1415,10 @@ function createLocalStorageStorage(): StorageApi {
         (raw as { targetCompletionDate?: unknown }).targetCompletionDate,
     )
 
-    const partsCatalog: ProjectPart[] = []
-    const partsValue =
+    const partsCatalog = normalizePartsCatalog(
       (raw as { partsCatalog?: unknown; partsDatabase?: unknown }).partsCatalog ??
-      (raw as { partsDatabase?: unknown }).partsDatabase
-    if (Array.isArray(partsValue)) {
-      for (const entry of partsValue) {
-        if (!entry || typeof entry !== 'object') {
-          continue
-        }
-        const entryRaw = entry as Record<string, unknown>
-        const idRaw = toOptionalString((entryRaw as { id?: unknown }).id)
-        const partNumber = toOptionalString(
-          (entryRaw as { partNumber?: unknown; partNo?: unknown }).partNumber ??
-            (entryRaw as { partNo?: unknown }).partNo,
-        )
-        const description = toOptionalString((entryRaw as { description?: unknown }).description)
-        const supplier = toOptionalString((entryRaw as { supplier?: unknown }).supplier)
-        const manufacturerNumber = toOptionalString(
-          (entryRaw as { manufacturerNumber?: unknown; manufacturerNo?: unknown }).manufacturerNumber ??
-            (entryRaw as { manufacturerNo?: unknown }).manufacturerNo,
-        )
-        if (!partNumber && !description && !supplier && !manufacturerNumber) {
-          continue
-        }
-        partsCatalog.push({
-          id: idRaw || createId(),
-          partNumber: partNumber ?? '',
-          description: description ?? '',
-          supplier: supplier ?? '',
-          manufacturerNumber: manufacturerNumber ?? '',
-        })
-      }
-    }
+        (raw as { partsDatabase?: unknown }).partsDatabase,
+    )
 
     const bomEntries: ProjectBomEntry[] = []
     const bomValue =
@@ -1787,6 +1811,7 @@ function createLocalStorageStorage(): StorageApi {
         customers: [],
         users: ensureDefaultUsers([]),
         businessSettings: DEFAULT_BUSINESS_SETTINGS,
+        partsCatalog: [],
       }
     }
 
@@ -1826,10 +1851,16 @@ function createLocalStorageStorage(): StorageApi {
       (value as { businessSettings?: unknown }).businessSettings,
     )
 
+    const partsCatalog = normalizePartsCatalog(
+      (value as { partsCatalog?: unknown; partsDatabase?: unknown }).partsCatalog ??
+        (value as { partsDatabase?: unknown }).partsDatabase,
+    )
+
     return {
       customers: sortCustomers(customers),
       users: normalizedUsers,
       businessSettings,
+      partsCatalog,
     }
   }
 
@@ -1857,6 +1888,7 @@ function createLocalStorageStorage(): StorageApi {
         customers: [],
         users: ensureDefaultUsers([]),
         businessSettings: DEFAULT_BUSINESS_SETTINGS,
+        partsCatalog: [],
       }
     }
 
@@ -1884,6 +1916,7 @@ function createLocalStorageStorage(): StorageApi {
         customers: [],
         users: ensureDefaultUsers([]),
         businessSettings: DEFAULT_BUSINESS_SETTINGS,
+        partsCatalog: [],
       }
     }
   }
@@ -1957,6 +1990,16 @@ function createLocalStorageStorage(): StorageApi {
             designations: entry.designations,
           }))
         : undefined,
+    }
+  }
+
+  function cloneProjectPart(part: ProjectPart): ProjectPart {
+    return {
+      id: part.id,
+      partNumber: part.partNumber,
+      description: part.description,
+      supplier: part.supplier,
+      manufacturerNumber: part.manufacturerNumber,
     }
   }
 
@@ -2230,6 +2273,11 @@ function createLocalStorageStorage(): StorageApi {
       return db.users.map(cloneUser)
     },
 
+    async listPartsCatalog(): Promise<ProjectPart[]> {
+      const db = loadDatabase()
+      return db.partsCatalog.map(cloneProjectPart)
+    },
+
     async listProjectsByCustomer(customerId: string): Promise<Project[]> {
       const db = loadDatabase()
       const located = locateCustomer(db, customerId)
@@ -2297,7 +2345,7 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       const nextCustomers = sortCustomers([customer, ...db.customers])
-      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings, partsCatalog: db.partsCatalog })
       return cloneCustomer(customer)
     },
 
@@ -2395,6 +2443,7 @@ function createLocalStorageStorage(): StorageApi {
         customers: sortCustomers(nextCustomers),
         users: db.users,
         businessSettings: db.businessSettings,
+        partsCatalog: db.partsCatalog,
       })
       return cloneCustomer(nextCustomer)
     },
@@ -2473,6 +2522,7 @@ function createLocalStorageStorage(): StorageApi {
         customers: sortCustomers(nextCustomers),
         users: db.users,
         businessSettings: db.businessSettings,
+        partsCatalog: db.partsCatalog,
       })
       return cloneCustomerMachine(machine)
     },
@@ -2576,6 +2626,7 @@ function createLocalStorageStorage(): StorageApi {
         customers: sortCustomers(nextCustomers),
         users: db.users,
         businessSettings: db.businessSettings,
+        partsCatalog: db.partsCatalog,
       })
       return cloneCustomerMachine(normalizedMachine)
     },
@@ -2600,6 +2651,7 @@ function createLocalStorageStorage(): StorageApi {
         customers: sortCustomers(nextCustomers),
         users: db.users,
         businessSettings: db.businessSettings,
+        partsCatalog: db.partsCatalog,
       })
     },
     async deleteCustomer(customerId: string): Promise<void> {
@@ -2620,6 +2672,7 @@ function createLocalStorageStorage(): StorageApi {
         customers: sortCustomers(reassignedCustomers),
         users: db.users,
         businessSettings: db.businessSettings,
+        partsCatalog: db.partsCatalog,
       })
     },
 
@@ -2745,6 +2798,7 @@ function createLocalStorageStorage(): StorageApi {
         customers: sortCustomers(nextCustomers),
         users: db.users,
         businessSettings: db.businessSettings,
+        partsCatalog: db.partsCatalog,
       })
       return cloneProject(project)
     },
@@ -2996,7 +3050,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = nextProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings, partsCatalog: db.partsCatalog })
       return cloneProject(nextProject)
     },
 
@@ -3012,7 +3066,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects.splice(projectIndex, 1)
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings, partsCatalog: db.partsCatalog })
     },
 
     async createWO(projectId: string, data: { number: string; type: WOType; note?: string }): Promise<WO> {
@@ -3039,7 +3093,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings, partsCatalog: db.partsCatalog })
       return cloneWorkOrder(workOrder)
     },
 
@@ -3058,7 +3112,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings, partsCatalog: db.partsCatalog })
     },
 
     async createTask(
@@ -3095,7 +3149,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings, partsCatalog: db.partsCatalog })
       return cloneProjectTask(task)
     },
 
@@ -3161,7 +3215,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings, partsCatalog: db.partsCatalog })
       return cloneProjectTask(updated)
     },
 
@@ -3185,7 +3239,7 @@ function createLocalStorageStorage(): StorageApi {
       updatedProjects[projectIndex] = updatedProject
       const nextCustomers = [...db.customers]
       nextCustomers[customerIndex] = { ...customer, projects: sortProjects(updatedProjects) }
-      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings })
+      saveDatabase({ customers: nextCustomers, users: db.users, businessSettings: db.businessSettings, partsCatalog: db.partsCatalog })
     },
 
     async createUser(data: {
@@ -3238,7 +3292,7 @@ function createLocalStorageStorage(): StorageApi {
       }
 
       const nextUsers = sortUsers([...db.users, user])
-      saveDatabase({ customers: db.customers, users: nextUsers, businessSettings: db.businessSettings })
+      saveDatabase({ customers: db.customers, users: nextUsers, businessSettings: db.businessSettings, partsCatalog: db.partsCatalog })
       return cloneUser(user)
     },
 
@@ -3332,7 +3386,7 @@ function createLocalStorageStorage(): StorageApi {
         updated,
         ...db.users.slice(index + 1),
       ])
-      saveDatabase({ customers: db.customers, users: nextUsers, businessSettings: db.businessSettings })
+      saveDatabase({ customers: db.customers, users: nextUsers, businessSettings: db.businessSettings, partsCatalog: db.partsCatalog })
       return cloneUser(updated)
     },
 
@@ -3362,19 +3416,33 @@ function createLocalStorageStorage(): StorageApi {
       if (nextUsers.length === db.users.length) {
         throw new Error('User not found.')
       }
-      saveDatabase({ customers: db.customers, users: nextUsers, businessSettings: db.businessSettings })
+      saveDatabase({ customers: db.customers, users: nextUsers, businessSettings: db.businessSettings, partsCatalog: db.partsCatalog })
+    },
+
+    async updatePartsCatalog(partsCatalog: ProjectPart[]): Promise<ProjectPart[]> {
+      const db = loadDatabase()
+      const normalized = normalizePartsCatalog(partsCatalog)
+      saveDatabase({
+        customers: db.customers,
+        users: db.users,
+        businessSettings: db.businessSettings,
+        partsCatalog: normalized,
+      })
+      return normalized.map(cloneProjectPart)
     },
 
     async exportDatabase(): Promise<{
       customers: Customer[]
       users: User[]
       businessSettings: BusinessSettings
+      partsCatalog: ProjectPart[]
     }> {
       const db = loadDatabase()
       return {
         customers: db.customers.map(cloneCustomer),
         users: db.users.map(cloneUser),
         businessSettings: cloneBusinessSettings(db.businessSettings),
+        partsCatalog: db.partsCatalog.map(cloneProjectPart),
       }
     },
 
@@ -3382,6 +3450,7 @@ function createLocalStorageStorage(): StorageApi {
       customers: Customer[]
       users: User[]
       businessSettings: BusinessSettings
+      partsCatalog: ProjectPart[]
     }> {
       let source: unknown = data
       if (typeof data === 'string') {
@@ -3398,6 +3467,7 @@ function createLocalStorageStorage(): StorageApi {
         customers: normalized.customers.map(cloneCustomer),
         users: normalized.users.map(cloneUser),
         businessSettings: cloneBusinessSettings(normalized.businessSettings),
+        partsCatalog: normalized.partsCatalog.map(cloneProjectPart),
       }
     },
 
@@ -3409,7 +3479,7 @@ function createLocalStorageStorage(): StorageApi {
     async updateBusinessSettings(settings: BusinessSettings): Promise<BusinessSettings> {
       const normalized = normalizeBusinessSettings(settings)
       const db = loadDatabase()
-      saveDatabase({ customers: db.customers, users: db.users, businessSettings: normalized })
+      saveDatabase({ customers: db.customers, users: db.users, businessSettings: normalized, partsCatalog: db.partsCatalog })
       return cloneBusinessSettings(normalized)
     },
   }
