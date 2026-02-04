@@ -411,7 +411,7 @@ export default function PartsDatabasePage({
               <div className='rounded-2xl border border-slate-200/80 bg-white/90 p-4 text-sm text-slate-600'>
                 <p className='font-semibold text-slate-800'>Parts ready for BOMs</p>
                 <p className='mt-1 text-xs text-slate-500'>
-                  Use the BOM Builder tab in a project to select from this list.
+                  Use the BOM section in project files to create a BOM from this list.
                 </p>
                 <div className='mt-4 text-xs text-slate-500'>
                   {draftCatalog.length} {draftCatalog.length === 1 ? 'part' : 'parts'} available.

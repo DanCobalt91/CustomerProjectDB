@@ -3742,7 +3742,7 @@ function AppContent() {
       </CardHeader>
       <CardContent>
         <p className='text-sm text-slate-500'>
-          Add or update parts here, then build BOMs inside individual projects.
+          Add or update parts here, then build BOMs from each project's files tab.
         </p>
       </CardContent>
     </Card>
