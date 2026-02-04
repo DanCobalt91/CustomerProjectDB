@@ -161,6 +161,7 @@ const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchCl
 const PROJECT_TABS = [
   { value: 'tasks', label: 'Tasks' },
   { value: 'info', label: 'Project Info' },
+  { value: 'parts', label: 'Parts Database' },
   { value: 'files', label: 'Project Files' },
   { value: 'workOrders', label: 'Work Orders' },
 ] as const
@@ -2700,331 +2701,335 @@ export default function ProjectPage({
           )}
         </section>
 
-        <section className='space-y-6 rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
-          <div className='space-y-1'>
-            <div className='text-sm font-semibold text-slate-800'>Parts database &amp; BOM builder</div>
-            <p className='text-xs text-slate-500'>
-              Maintain the parts catalog, search across fields, and generate a bill of materials preview.
-            </p>
-            {partsStatus && <p className='text-xs text-emerald-600'>{partsStatus}</p>}
-          </div>
-
-          <div className='grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]'>
-            <div className='space-y-4'>
-              <div className='flex flex-wrap items-center justify-between gap-3'>
-                <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Parts database</div>
-                <div className='relative w-full max-w-xs'>
-                  <Search className='pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400' />
-                  <input
-                    className='w-full rounded-xl border border-slate-200/80 bg-white/90 py-2 pl-9 pr-3 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                    value={partSearch}
-                    onChange={event => {
-                      setPartSearch((event.target as HTMLInputElement).value)
-                      clearPartsFeedback()
-                    }}
-                    placeholder='Search part no, description, supplier…'
-                  />
-                </div>
-              </div>
-
-              <div className='rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 p-4'>
-                <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Add new part</div>
-                <div className='mt-3 grid gap-3 md:grid-cols-4'>
-                  <div>
-                    <Label htmlFor='part-number'>Part no.</Label>
-                    <Input
-                      id='part-number'
-                      value={partForm.partNumber}
-                      onChange={event =>
-                        setPartForm(prev => ({
-                          ...prev,
-                          partNumber: (event.target as HTMLInputElement).value,
-                        }))
-                      }
-                      placeholder='PRC0001'
-                      disabled={!canEdit}
-                    />
-                  </div>
-                  <div className='md:col-span-1'>
-                    <Label htmlFor='part-description'>Description</Label>
-                    <Input
-                      id='part-description'
-                      value={partForm.description}
-                      onChange={event =>
-                        setPartForm(prev => ({
-                          ...prev,
-                          description: (event.target as HTMLInputElement).value,
-                        }))
-                      }
-                      placeholder='e.g. E-stop button'
-                      disabled={!canEdit}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor='part-supplier'>Supplier</Label>
-                    <Input
-                      id='part-supplier'
-                      value={partForm.supplier}
-                      onChange={event =>
-                        setPartForm(prev => ({
-                          ...prev,
-                          supplier: (event.target as HTMLInputElement).value,
-                        }))
-                      }
-                      placeholder='Supplier name'
-                      disabled={!canEdit}
-                    />
-                  </div>
-                  <div>
-                    <Label htmlFor='part-manufacturer'>Manufacturer no.</Label>
-                    <Input
-                      id='part-manufacturer'
-                      value={partForm.manufacturerNumber}
-                      onChange={event =>
-                        setPartForm(prev => ({
-                          ...prev,
-                          manufacturerNumber: (event.target as HTMLInputElement).value,
-                        }))
-                      }
-                      placeholder='MFG-1234'
-                      disabled={!canEdit}
-                    />
-                  </div>
-                </div>
-                <div className='mt-3 flex flex-wrap items-center justify-between gap-2'>
-                  <Button onClick={handleAddPart} disabled={!canEdit}>
-                    <Plus size={16} /> Add part
-                  </Button>
-                  <div className='text-xs text-slate-500'>
-                    {partsCatalog.length}{' '}
-                    {partsCatalog.length === 1 ? 'part' : 'parts'} in the database.
-                  </div>
-                </div>
-              </div>
-
-              <div className='overflow-hidden rounded-2xl border border-slate-200/80'>
-                <div className='max-h-[420px] overflow-auto'>
-                  <table className='min-w-full text-left text-xs text-slate-600'>
-                    <thead className='sticky top-0 bg-slate-100/80 text-[11px] uppercase tracking-wide text-slate-500'>
-                      <tr>
-                        <th className='px-3 py-2'>Select</th>
-                        <th className='px-3 py-2'>Part no.</th>
-                        <th className='px-3 py-2'>Description</th>
-                        <th className='px-3 py-2'>Supplier</th>
-                        <th className='px-3 py-2'>Manufacturer no.</th>
-                        <th className='px-3 py-2'>Qty</th>
-                        <th className='px-3 py-2'>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody className='divide-y divide-slate-200/70 bg-white/90'>
-                      {filteredParts.length === 0 ? (
-                        <tr>
-                          <td className='px-3 py-4 text-sm text-slate-400' colSpan={7}>
-                            No parts match this search yet.
-                          </td>
-                        </tr>
-                      ) : (
-                        filteredParts.map(part => {
-                          const bomEntry = bomEntries.find(entry => entry.partId === part.id)
-                          return (
-                            <tr key={part.id} className='align-top'>
-                              <td className='px-3 py-3'>
-                                <input
-                                  type='checkbox'
-                                  className='h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-200'
-                                  checked={Boolean(bomEntry)}
-                                  onChange={() => handleTogglePartSelection(part.id)}
-                                  disabled={!canEdit}
-                                />
-                              </td>
-                              <td className='px-3 py-3'>
-                                <Input
-                                  value={part.partNumber}
-                                  onChange={event =>
-                                    handleUpdatePart(part.id, {
-                                      partNumber: (event.target as HTMLInputElement).value,
-                                    })
-                                  }
-                                  disabled={!canEdit}
-                                />
-                              </td>
-                              <td className='px-3 py-3'>
-                                <Input
-                                  value={part.description}
-                                  onChange={event =>
-                                    handleUpdatePart(part.id, {
-                                      description: (event.target as HTMLInputElement).value,
-                                    })
-                                  }
-                                  disabled={!canEdit}
-                                />
-                              </td>
-                              <td className='px-3 py-3'>
-                                <Input
-                                  value={part.supplier ?? ''}
-                                  onChange={event =>
-                                    handleUpdatePart(part.id, {
-                                      supplier: (event.target as HTMLInputElement).value,
-                                    })
-                                  }
-                                  disabled={!canEdit}
-                                />
-                              </td>
-                              <td className='px-3 py-3'>
-                                <Input
-                                  value={part.manufacturerNumber ?? ''}
-                                  onChange={event =>
-                                    handleUpdatePart(part.id, {
-                                      manufacturerNumber: (event.target as HTMLInputElement).value,
-                                    })
-                                  }
-                                  disabled={!canEdit}
-                                />
-                              </td>
-                              <td className='px-3 py-3'>
-                                {bomEntry ? (
-                                  <input
-                                    type='number'
-                                    min='1'
-                                    className='w-20 rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                                    value={bomEntry.quantity}
-                                    onChange={event =>
-                                      handleUpdateBomEntry(bomEntry.id, {
-                                        quantity: (event.target as HTMLInputElement).value,
-                                      })
-                                    }
-                                    disabled={!canEdit}
-                                  />
-                                ) : (
-                                  <span className='text-xs text-slate-400'>—</span>
-                                )}
-                              </td>
-                              <td className='px-3 py-3'>
-                                <Button
-                                  variant='ghost'
-                                  onClick={() => handleRemovePart(part.id)}
-                                  disabled={!canEdit}
-                                >
-                                  <Trash2 size={14} /> Remove
-                                </Button>
-                              </td>
-                            </tr>
-                          )
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-
-            <div className='space-y-4'>
-              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Bill of materials</div>
-              <div className='rounded-2xl border border-slate-200/80 bg-white/90 p-4'>
-                <div className='flex items-center justify-between'>
-                  <div className='text-sm font-semibold text-slate-800'>Bill of Materials</div>
-                  <div className='text-xs text-slate-500'>
-                    {bomRows.length} {bomRows.length === 1 ? 'line' : 'lines'}
-                  </div>
-                </div>
-                {bomRows.length === 0 ? (
-                  <p className='mt-4 text-xs text-slate-400'>
-                    Select parts from the database to populate the BOM preview.
-                  </p>
-                ) : (
-                  <div className='mt-4 grid gap-4 md:grid-cols-2'>
-                    {[0, 1].map(columnIndex => {
-                      const midpoint = Math.ceil(bomRows.length / 2)
-                      const rows =
-                        columnIndex === 0 ? bomRows.slice(0, midpoint) : bomRows.slice(midpoint)
-                      return (
-                        <div
-                          key={`bom-column-${columnIndex}`}
-                          className='overflow-hidden rounded-xl border border-slate-200'
-                        >
-                          <table className='min-w-full text-left text-[11px] text-slate-600'>
-                            <thead className='bg-slate-100/80 uppercase tracking-wide text-slate-500'>
-                              <tr>
-                                <th className='px-3 py-2'>PRC</th>
-                                <th className='px-3 py-2'>Qty</th>
-                                <th className='px-3 py-2'>Description</th>
-                                <th className='px-3 py-2'>Designation(s)</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {rows.length === 0 ? (
-                                <tr>
-                                  <td className='px-3 py-3 text-xs text-slate-400' colSpan={4}>
-                                    —
-                                  </td>
-                                </tr>
-                              ) : (
-                                rows.map(({ entry, part }) => (
-                                  <tr key={entry.id} className='border-b border-dashed border-slate-200'>
-                                    <td className='px-3 py-2 font-semibold text-slate-700'>
-                                      {part.partNumber}
-                                    </td>
-                                    <td className='px-3 py-2'>
-                                      <input
-                                        type='number'
-                                        min='1'
-                                        className='w-16 rounded-lg border border-slate-200/80 bg-white/90 px-2 py-1 text-xs text-slate-800 shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                                        value={entry.quantity}
-                                        onChange={event =>
-                                          handleUpdateBomEntry(entry.id, {
-                                            quantity: (event.target as HTMLInputElement).value,
-                                          })
-                                        }
-                                        disabled={!canEdit}
-                                      />
-                                    </td>
-                                    <td className='px-3 py-2 text-slate-600'>
-                                      {part.description || '—'}
-                                    </td>
-                                    <td className='px-3 py-2'>
-                                      <input
-                                        className='w-full rounded-lg border border-slate-200/80 bg-white/90 px-2 py-1 text-xs text-slate-800 shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
-                                        value={entry.designations}
-                                        onChange={event =>
-                                          handleUpdateBomEntry(entry.id, {
-                                            designations: (event.target as HTMLInputElement).value,
-                                          })
-                                        }
-                                        placeholder='e.g. 4AT1'
-                                        disabled={!canEdit}
-                                      />
-                                    </td>
-                                  </tr>
-                                ))
-                              )}
-                            </tbody>
-                          </table>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-              {partsError && (
-                <p className='flex items-center gap-1 text-sm text-rose-600'>
-                  <AlertCircle size={14} /> {partsError}
-                </p>
-              )}
-              <div className='flex flex-wrap justify-end gap-2'>
-                <Button variant='ghost' onClick={() => updateBomEntries([])} disabled={!canEdit}>
-                  Clear BOM
-                </Button>
-                <Button onClick={handleSavePartsAndBom} disabled={!canEdit}>
-                  {partsStatus ? 'Saved' : 'Save parts & BOM'}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </section>
-
       </div>
     )
   }
+
+  const renderPartsDatabase = () => (
+    <div className='space-y-6'>
+      <section className='space-y-6 rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
+        <div className='space-y-1'>
+          <div className='text-sm font-semibold text-slate-800'>Parts database &amp; BOM builder</div>
+          <p className='text-xs text-slate-500'>
+            Track stocked parts, search across fields, and generate a bill of materials preview.
+          </p>
+          {partsStatus && <p className='text-xs text-emerald-600'>{partsStatus}</p>}
+        </div>
+
+        <div className='grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]'>
+          <div className='space-y-4'>
+            <div className='flex flex-wrap items-center justify-between gap-3'>
+              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Stocked parts</div>
+              <div className='relative w-full max-w-xs'>
+                <Search className='pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400' />
+                <input
+                  className='w-full rounded-xl border border-slate-200/80 bg-white/90 py-2 pl-9 pr-3 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                  value={partSearch}
+                  onChange={event => {
+                    setPartSearch((event.target as HTMLInputElement).value)
+                    clearPartsFeedback()
+                  }}
+                  placeholder='Search part no, description, supplier…'
+                />
+              </div>
+            </div>
+
+            <div className='rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 p-4'>
+              <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Add new part</div>
+              <div className='mt-3 grid gap-3 md:grid-cols-4'>
+                <div>
+                  <Label htmlFor='part-number'>Part no.</Label>
+                  <Input
+                    id='part-number'
+                    value={partForm.partNumber}
+                    onChange={event =>
+                      setPartForm(prev => ({
+                        ...prev,
+                        partNumber: (event.target as HTMLInputElement).value,
+                      }))
+                    }
+                    placeholder='PRC0001'
+                    disabled={!canEdit}
+                  />
+                </div>
+                <div className='md:col-span-1'>
+                  <Label htmlFor='part-description'>Description</Label>
+                  <Input
+                    id='part-description'
+                    value={partForm.description}
+                    onChange={event =>
+                      setPartForm(prev => ({
+                        ...prev,
+                        description: (event.target as HTMLInputElement).value,
+                      }))
+                    }
+                    placeholder='e.g. E-stop button'
+                    disabled={!canEdit}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor='part-supplier'>Supplier</Label>
+                  <Input
+                    id='part-supplier'
+                    value={partForm.supplier}
+                    onChange={event =>
+                      setPartForm(prev => ({
+                        ...prev,
+                        supplier: (event.target as HTMLInputElement).value,
+                      }))
+                    }
+                    placeholder='Supplier name'
+                    disabled={!canEdit}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor='part-manufacturer'>Manufacturer no.</Label>
+                  <Input
+                    id='part-manufacturer'
+                    value={partForm.manufacturerNumber}
+                    onChange={event =>
+                      setPartForm(prev => ({
+                        ...prev,
+                        manufacturerNumber: (event.target as HTMLInputElement).value,
+                      }))
+                    }
+                    placeholder='MFG-1234'
+                    disabled={!canEdit}
+                  />
+                </div>
+              </div>
+              <div className='mt-3 flex flex-wrap items-center justify-between gap-2'>
+                <Button onClick={handleAddPart} disabled={!canEdit}>
+                  <Plus size={16} /> Add part
+                </Button>
+                <div className='text-xs text-slate-500'>
+                  {partsCatalog.length}{' '}
+                  {partsCatalog.length === 1 ? 'part' : 'parts'} in the database.
+                </div>
+              </div>
+            </div>
+
+            <div className='overflow-hidden rounded-2xl border border-slate-200/80'>
+              <div className='max-h-[420px] overflow-auto'>
+                <table className='min-w-full text-left text-xs text-slate-600'>
+                  <thead className='sticky top-0 bg-slate-100/80 text-[11px] uppercase tracking-wide text-slate-500'>
+                    <tr>
+                      <th className='px-3 py-2'>Select</th>
+                      <th className='px-3 py-2'>Part no.</th>
+                      <th className='px-3 py-2'>Description</th>
+                      <th className='px-3 py-2'>Supplier</th>
+                      <th className='px-3 py-2'>Manufacturer no.</th>
+                      <th className='px-3 py-2'>Qty</th>
+                      <th className='px-3 py-2'>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className='divide-y divide-slate-200/70 bg-white/90'>
+                    {filteredParts.length === 0 ? (
+                      <tr>
+                        <td className='px-3 py-4 text-sm text-slate-400' colSpan={7}>
+                          No parts match this search yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredParts.map(part => {
+                        const bomEntry = bomEntries.find(entry => entry.partId === part.id)
+                        return (
+                          <tr key={part.id} className='align-top'>
+                            <td className='px-3 py-3'>
+                              <input
+                                type='checkbox'
+                                className='h-4 w-4 rounded border-slate-300 text-sky-600 focus:ring-sky-200'
+                                checked={Boolean(bomEntry)}
+                                onChange={() => handleTogglePartSelection(part.id)}
+                                disabled={!canEdit}
+                              />
+                            </td>
+                            <td className='px-3 py-3'>
+                              <Input
+                                value={part.partNumber}
+                                onChange={event =>
+                                  handleUpdatePart(part.id, {
+                                    partNumber: (event.target as HTMLInputElement).value,
+                                  })
+                                }
+                                disabled={!canEdit}
+                              />
+                            </td>
+                            <td className='px-3 py-3'>
+                              <Input
+                                value={part.description}
+                                onChange={event =>
+                                  handleUpdatePart(part.id, {
+                                    description: (event.target as HTMLInputElement).value,
+                                  })
+                                }
+                                disabled={!canEdit}
+                              />
+                            </td>
+                            <td className='px-3 py-3'>
+                              <Input
+                                value={part.supplier ?? ''}
+                                onChange={event =>
+                                  handleUpdatePart(part.id, {
+                                    supplier: (event.target as HTMLInputElement).value,
+                                  })
+                                }
+                                disabled={!canEdit}
+                              />
+                            </td>
+                            <td className='px-3 py-3'>
+                              <Input
+                                value={part.manufacturerNumber ?? ''}
+                                onChange={event =>
+                                  handleUpdatePart(part.id, {
+                                    manufacturerNumber: (event.target as HTMLInputElement).value,
+                                  })
+                                }
+                                disabled={!canEdit}
+                              />
+                            </td>
+                            <td className='px-3 py-3'>
+                              {bomEntry ? (
+                                <input
+                                  type='number'
+                                  min='1'
+                                  className='w-20 rounded-xl border border-slate-200/80 bg-white/90 px-3 py-2 text-sm text-slate-800 shadow-sm transition focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                                  value={bomEntry.quantity}
+                                  onChange={event =>
+                                    handleUpdateBomEntry(bomEntry.id, {
+                                      quantity: (event.target as HTMLInputElement).value,
+                                    })
+                                  }
+                                  disabled={!canEdit}
+                                />
+                              ) : (
+                                <span className='text-xs text-slate-400'>—</span>
+                              )}
+                            </td>
+                            <td className='px-3 py-3'>
+                              <Button
+                                variant='ghost'
+                                onClick={() => handleRemovePart(part.id)}
+                                disabled={!canEdit}
+                              >
+                                <Trash2 size={14} /> Remove
+                              </Button>
+                            </td>
+                          </tr>
+                        )
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <div className='space-y-4'>
+            <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Bill of materials</div>
+            <div className='rounded-2xl border border-slate-200/80 bg-white/90 p-4'>
+              <div className='flex items-center justify-between'>
+                <div className='text-sm font-semibold text-slate-800'>Bill of Materials</div>
+                <div className='text-xs text-slate-500'>
+                  {bomRows.length} {bomRows.length === 1 ? 'line' : 'lines'}
+                </div>
+              </div>
+              {bomRows.length === 0 ? (
+                <p className='mt-4 text-xs text-slate-400'>
+                  Select parts from the database to populate the BOM preview.
+                </p>
+              ) : (
+                <div className='mt-4 grid gap-4 md:grid-cols-2'>
+                  {[0, 1].map(columnIndex => {
+                    const midpoint = Math.ceil(bomRows.length / 2)
+                    const rows =
+                      columnIndex === 0 ? bomRows.slice(0, midpoint) : bomRows.slice(midpoint)
+                    return (
+                      <div
+                        key={`bom-column-${columnIndex}`}
+                        className='overflow-hidden rounded-xl border border-slate-200'
+                      >
+                        <table className='min-w-full text-left text-[11px] text-slate-600'>
+                          <thead className='bg-slate-100/80 uppercase tracking-wide text-slate-500'>
+                            <tr>
+                              <th className='px-3 py-2'>PRC</th>
+                              <th className='px-3 py-2'>Qty</th>
+                              <th className='px-3 py-2'>Description</th>
+                              <th className='px-3 py-2'>Designation(s)</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rows.length === 0 ? (
+                              <tr>
+                                <td className='px-3 py-3 text-xs text-slate-400' colSpan={4}>
+                                  —
+                                </td>
+                              </tr>
+                            ) : (
+                              rows.map(({ entry, part }) => (
+                                <tr key={entry.id} className='border-b border-dashed border-slate-200'>
+                                  <td className='px-3 py-2 font-semibold text-slate-700'>
+                                    {part.partNumber}
+                                  </td>
+                                  <td className='px-3 py-2'>
+                                    <input
+                                      type='number'
+                                      min='1'
+                                      className='w-16 rounded-lg border border-slate-200/80 bg-white/90 px-2 py-1 text-xs text-slate-800 shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                                      value={entry.quantity}
+                                      onChange={event =>
+                                        handleUpdateBomEntry(entry.id, {
+                                          quantity: (event.target as HTMLInputElement).value,
+                                        })
+                                      }
+                                      disabled={!canEdit}
+                                    />
+                                  </td>
+                                  <td className='px-3 py-2 text-slate-600'>
+                                    {part.description || '—'}
+                                  </td>
+                                  <td className='px-3 py-2'>
+                                    <input
+                                      className='w-full rounded-lg border border-slate-200/80 bg-white/90 px-2 py-1 text-xs text-slate-800 shadow-sm focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-100 disabled:cursor-not-allowed disabled:bg-slate-100/70'
+                                      value={entry.designations}
+                                      onChange={event =>
+                                        handleUpdateBomEntry(entry.id, {
+                                          designations: (event.target as HTMLInputElement).value,
+                                        })
+                                      }
+                                      placeholder='e.g. 4AT1'
+                                      disabled={!canEdit}
+                                    />
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+            {partsError && (
+              <p className='flex items-center gap-1 text-sm text-rose-600'>
+                <AlertCircle size={14} /> {partsError}
+              </p>
+            )}
+            <div className='flex flex-wrap justify-end gap-2'>
+              <Button variant='ghost' onClick={() => updateBomEntries([])} disabled={!canEdit}>
+                Clear BOM
+              </Button>
+              <Button onClick={handleSavePartsAndBom} disabled={!canEdit}>
+                {partsStatus ? 'Saved' : 'Save parts & BOM'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  )
 
 
   const renderWorkOrders = () => {
@@ -3558,6 +3563,8 @@ export default function ProjectPage({
                 ? documentsCount
               : tab.value === 'workOrders'
                 ? project.wos.length
+              : tab.value === 'parts'
+                ? partsCatalog.length
                 : tab.value === 'info'
                 ? (hasProjectInfo ? 1 : 0)
                 : tasks.length
@@ -3586,6 +3593,8 @@ export default function ProjectPage({
             ? renderTasks()
             : activeTab === 'info'
             ? renderProjectInfo()
+            : activeTab === 'parts'
+            ? renderPartsDatabase()
             : activeTab === 'files'
             ? renderProjectFiles()
             : renderWorkOrders()}
