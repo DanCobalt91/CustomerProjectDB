@@ -6485,18 +6485,20 @@ function AppContent() {
     projectId: string,
     info: ProjectInfo | null,
   ) {
-    if (!info?.bomEntries || info.bomEntries.length === 0) {
-      return
-    }
-
     const customer = db.find(entry => entry.id === customerId)
     const project = customer?.projects.find(entry => entry.id === projectId)
     if (!customer || !project) {
       return
     }
 
-    const partsById = new Map((info.partsCatalog ?? []).map(part => [part.id, part]))
-    const rows = info.bomEntries
+    const bomInfo = info ?? project.info
+    if (!bomInfo?.bomEntries || bomInfo.bomEntries.length === 0) {
+      return
+    }
+
+    const partsCatalog = bomInfo.partsCatalog ?? project.info?.partsCatalog ?? []
+    const partsById = new Map(partsCatalog.map(part => [part.id, part]))
+    const rows = bomInfo.bomEntries
       .map(entry => {
         const part = partsById.get(entry.partId)
         const partNumber = part?.partNumber ?? entry.partId
