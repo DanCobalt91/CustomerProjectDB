@@ -14,8 +14,10 @@ import type {
   ProjectFile,
   ProjectFileCategory,
   ProjectInfo,
+  ProjectBomEntry,
   ProjectMachine,
   ProjectOnsiteReport,
+  ProjectPart,
   ProjectStatusLogEntry,
   ProjectStatus,
   ProjectTask,
@@ -1360,6 +1362,73 @@ function createLocalStorageStorage(): StorageApi {
         (raw as { targetCompletionDate?: unknown }).targetCompletionDate,
     )
 
+    const partsCatalog: ProjectPart[] = []
+    const partsValue =
+      (raw as { partsCatalog?: unknown; partsDatabase?: unknown }).partsCatalog ??
+      (raw as { partsDatabase?: unknown }).partsDatabase
+    if (Array.isArray(partsValue)) {
+      for (const entry of partsValue) {
+        if (!entry || typeof entry !== 'object') {
+          continue
+        }
+        const entryRaw = entry as Record<string, unknown>
+        const idRaw = toOptionalString((entryRaw as { id?: unknown }).id)
+        const partNumber = toOptionalString(
+          (entryRaw as { partNumber?: unknown; partNo?: unknown }).partNumber ??
+            (entryRaw as { partNo?: unknown }).partNo,
+        )
+        const description = toOptionalString((entryRaw as { description?: unknown }).description)
+        const supplier = toOptionalString((entryRaw as { supplier?: unknown }).supplier)
+        const manufacturerNumber = toOptionalString(
+          (entryRaw as { manufacturerNumber?: unknown; manufacturerNo?: unknown }).manufacturerNumber ??
+            (entryRaw as { manufacturerNo?: unknown }).manufacturerNo,
+        )
+        if (!partNumber && !description && !supplier && !manufacturerNumber) {
+          continue
+        }
+        partsCatalog.push({
+          id: idRaw || createId(),
+          partNumber: partNumber ?? '',
+          description: description ?? '',
+          supplier: supplier ?? '',
+          manufacturerNumber: manufacturerNumber ?? '',
+        })
+      }
+    }
+
+    const bomEntries: ProjectBomEntry[] = []
+    const bomValue =
+      (raw as { bomEntries?: unknown; bom?: unknown }).bomEntries ?? (raw as { bom?: unknown }).bom
+    if (Array.isArray(bomValue)) {
+      for (const entry of bomValue) {
+        if (!entry || typeof entry !== 'object') {
+          continue
+        }
+        const entryRaw = entry as Record<string, unknown>
+        const idRaw = toOptionalString((entryRaw as { id?: unknown }).id)
+        const partId = toOptionalString(
+          (entryRaw as { partId?: unknown; partID?: unknown; part?: unknown }).partId ??
+            (entryRaw as { partID?: unknown }).partID ??
+            (entryRaw as { part?: unknown }).part,
+        )
+        const quantityValue = normalizeNumberValue((entryRaw as { quantity?: unknown }).quantity)
+        const designations = toOptionalString(
+          (entryRaw as { designations?: unknown; designation?: unknown }).designations ??
+            (entryRaw as { designation?: unknown }).designation,
+        )
+        if (!partId || !Number.isFinite(quantityValue)) {
+          continue
+        }
+        const quantity = Math.max(1, Math.floor(quantityValue as number))
+        bomEntries.push({
+          id: idRaw || createId(),
+          partId,
+          quantity,
+          ...(designations ? { designations } : {}),
+        })
+      }
+    }
+
     const info: ProjectInfo = {}
     if (machines.length > 0) info.machines = machines
     if (cobaltOrderNumber) info.cobaltOrderNumber = cobaltOrderNumber
@@ -1368,6 +1437,8 @@ function createLocalStorageStorage(): StorageApi {
     if (salespersonName) info.salespersonName = salespersonName
     if (startDate) info.startDate = startDate
     if (proposedCompletionDate) info.proposedCompletionDate = proposedCompletionDate
+    if (partsCatalog.length > 0) info.partsCatalog = partsCatalog
+    if (bomEntries.length > 0) info.bomEntries = bomEntries
 
     const hasInfo = Object.values(info).some(value => {
       if (Array.isArray(value)) {
@@ -1869,6 +1940,23 @@ function createLocalStorageStorage(): StorageApi {
       salespersonName: info.salespersonName,
       startDate: info.startDate,
       proposedCompletionDate: info.proposedCompletionDate,
+      partsCatalog: info.partsCatalog
+        ? info.partsCatalog.map(part => ({
+            id: part.id,
+            partNumber: part.partNumber,
+            description: part.description,
+            supplier: part.supplier,
+            manufacturerNumber: part.manufacturerNumber,
+          }))
+        : undefined,
+      bomEntries: info.bomEntries
+        ? info.bomEntries.map(entry => ({
+            id: entry.id,
+            partId: entry.partId,
+            quantity: entry.quantity,
+            designations: entry.designations,
+          }))
+        : undefined,
     }
   }
 

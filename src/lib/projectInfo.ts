@@ -1,4 +1,4 @@
-import type { ProjectInfo, ProjectMachine, User } from '../types'
+import type { ProjectBomEntry, ProjectInfo, ProjectMachine, ProjectPart, User } from '../types'
 import { createId } from './id'
 
 export type ProjectInfoDraftDefaults = {
@@ -28,6 +28,23 @@ export type ProjectInfoDraft = {
   salespersonId: string
   startDate: string
   proposedCompletionDate: string
+  partsCatalog: ProjectPartDraft[]
+  bomEntries: ProjectBomEntryDraft[]
+}
+
+export type ProjectPartDraft = {
+  id: string
+  partNumber: string
+  description: string
+  supplier: string
+  manufacturerNumber: string
+}
+
+export type ProjectBomEntryDraft = {
+  id: string
+  partId: string
+  quantity: string
+  designations: string
 }
 
 export function createProjectInfoDraft(
@@ -121,6 +138,21 @@ export function createProjectInfoDraft(
     salespersonId,
     startDate: info?.startDate ?? defaults.startDate ?? '',
     proposedCompletionDate: info?.proposedCompletionDate ?? defaults.proposedCompletionDate ?? '',
+    partsCatalog:
+      info?.partsCatalog?.map(part => ({
+        id: part.id,
+        partNumber: part.partNumber,
+        description: part.description ?? '',
+        supplier: part.supplier ?? '',
+        manufacturerNumber: part.manufacturerNumber ?? '',
+      })) ?? [],
+    bomEntries:
+      info?.bomEntries?.map(entry => ({
+        id: entry.id,
+        partId: entry.partId,
+        quantity: Number.isFinite(entry.quantity) ? String(entry.quantity) : '',
+        designations: entry.designations ?? '',
+      })) ?? [],
   }
 }
 
@@ -216,6 +248,53 @@ export function parseProjectInfoDraft(
     return { info: null, error: 'Enter a valid proposed completion date (YYYY-MM-DD).' }
   }
 
+  const partsCatalog: ProjectPart[] = []
+  const seenPartNumbers = new Set<string>()
+  for (const part of draft.partsCatalog) {
+    const partNumber = part.partNumber.trim()
+    const description = part.description.trim()
+    const supplier = part.supplier.trim()
+    const manufacturerNumber = part.manufacturerNumber.trim()
+    if (!partNumber && !description && !supplier && !manufacturerNumber) {
+      continue
+    }
+    if (!partNumber) {
+      return { info: null, error: 'Enter a part number for each saved part.' }
+    }
+    const normalizedPartNumber = partNumber.toLowerCase()
+    if (seenPartNumbers.has(normalizedPartNumber)) {
+      return { info: null, error: 'Part numbers in the database must be unique.' }
+    }
+    seenPartNumbers.add(normalizedPartNumber)
+    partsCatalog.push({
+      id: part.id || createId(),
+      partNumber,
+      description,
+      supplier,
+      manufacturerNumber,
+    })
+  }
+
+  const partIds = new Set(partsCatalog.map(part => part.id))
+  const bomEntries: ProjectBomEntry[] = []
+  for (const entry of draft.bomEntries) {
+    const partId = entry.partId.trim()
+    if (!partId || !partIds.has(partId)) {
+      continue
+    }
+    const quantityValue = Number(entry.quantity)
+    if (!Number.isFinite(quantityValue) || quantityValue <= 0) {
+      return { info: null, error: 'Enter a valid quantity for each selected BOM line.' }
+    }
+    const designations = entry.designations.trim()
+    bomEntries.push({
+      id: entry.id || createId(),
+      partId,
+      quantity: Math.floor(quantityValue),
+      ...(designations ? { designations } : {}),
+    })
+  }
+
   let salespersonId: string | undefined
   let salespersonName: string | undefined
   if (draft.salespersonId) {
@@ -235,6 +314,8 @@ export function parseProjectInfoDraft(
   if (salespersonName) info.salespersonName = salespersonName
   if (startDate) info.startDate = startDate
   if (proposedCompletionDate) info.proposedCompletionDate = proposedCompletionDate
+  if (partsCatalog.length > 0) info.partsCatalog = partsCatalog
+  if (bomEntries.length > 0) info.bomEntries = bomEntries
 
   const hasInfo = Object.values(info).some(value => {
     if (Array.isArray(value)) {
