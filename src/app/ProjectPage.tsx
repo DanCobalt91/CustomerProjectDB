@@ -132,7 +132,7 @@ const PROJECT_FILE_METADATA: Record<ProjectFileCategory, { label: string; descri
   },
   bom: {
     label: 'Bill of Materials',
-    description: 'Auto-generated BOM PDFs created when you save the BOM builder.',
+    description: 'Auto-generated BOM PDFs created when you save a project BOM.',
   },
 }
 
@@ -169,7 +169,6 @@ const TASK_STATUS_META: Record<ProjectTaskStatus, { badgeClass: string; swatchCl
 const PROJECT_TABS = [
   { value: 'tasks', label: 'Tasks' },
   { value: 'info', label: 'Project Info' },
-  { value: 'parts', label: 'BOM Builder' },
   { value: 'files', label: 'Project Files' },
   { value: 'workOrders', label: 'Work Orders' },
 ] as const
@@ -426,6 +425,7 @@ export default function ProjectPage({
   const [partSearch, setPartSearch] = useState('')
   const [partsError, setPartsError] = useState<string | null>(null)
   const [partsStatus, setPartsStatus] = useState<string | null>(null)
+  const [isBomBuilderOpen, setIsBomBuilderOpen] = useState(false)
   const [woForm, setWoForm] = useState({ number: '', type: 'Build' as WOType, note: '' })
   const [woError, setWoError] = useState<string | null>(null)
   const [isAddingWo, setIsAddingWo] = useState(false)
@@ -804,6 +804,7 @@ export default function ProjectPage({
     setOnsiteReportError(null)
     setOnsiteHasSignature(false)
     setRemovingOnsiteReportId(null)
+    setIsBomBuilderOpen(false)
     onsiteSignatureStrokesRef.current = []
     onsiteActiveSignatureStrokeRef.current = null
     setOnsiteReportDraft(buildDefaultOnsiteReportDraft())
@@ -1005,6 +1006,16 @@ export default function ProjectPage({
   const clearPartsFeedback = () => {
     if (partsError) setPartsError(null)
     if (partsStatus) setPartsStatus(null)
+  }
+
+  const openBomBuilder = () => {
+    setPartSearch('')
+    clearPartsFeedback()
+    setIsBomBuilderOpen(true)
+  }
+
+  const closeBomBuilder = () => {
+    setIsBomBuilderOpen(false)
   }
 
   const updateBomEntries = (nextEntries: ProjectInfoDraft['bomEntries']) => {
@@ -1892,14 +1903,29 @@ export default function ProjectPage({
       const files = documents[category] ?? []
       const errorMessage = fileErrors[category]
       const hasFiles = files.length > 0
+      const isBomCategory = category === 'bom'
       if (!hasFiles && !allowEmpty) {
         return null
       }
       return (
         <div key={category} className='rounded-2xl border border-slate-200/70 bg-white/90'>
           <div className='border-b border-slate-200/70 px-5 py-4'>
-            <div className='text-sm font-semibold text-slate-800'>{metadata.label}</div>
-            <p className='mt-1 text-xs text-slate-500'>{metadata.description}</p>
+            <div className='flex flex-wrap items-start justify-between gap-3'>
+              <div>
+                <div className='text-sm font-semibold text-slate-800'>{metadata.label}</div>
+                <p className='mt-1 text-xs text-slate-500'>{metadata.description}</p>
+              </div>
+              {isBomCategory && (
+                <Button
+                  variant='outline'
+                  onClick={openBomBuilder}
+                  disabled={!canEdit}
+                  title={canEdit ? 'Create a new BOM' : 'Read-only access'}
+                >
+                  <FileText size={16} /> Create new BOM
+                </Button>
+              )}
+            </div>
           </div>
           {hasFiles ? (
             <div className='space-y-3 px-5 py-4'>
@@ -2673,12 +2699,12 @@ export default function ProjectPage({
     )
   }
 
-  const renderPartsDatabase = () => (
+  const renderBomBuilder = () => (
     <div className='space-y-6'>
       <section className='space-y-6 rounded-2xl border border-slate-200/70 bg-white/80 p-5 shadow-sm'>
         <div className='flex flex-wrap items-start justify-between gap-3'>
           <div className='space-y-1'>
-            <div className='text-sm font-semibold text-slate-800'>BOM builder</div>
+            <div className='text-sm font-semibold text-slate-800'>Create BOM</div>
             <p className='text-xs text-slate-500'>
               Select items from the shared parts database and generate a bill of materials preview.
             </p>
@@ -3430,9 +3456,7 @@ export default function ProjectPage({
                 ? documentsCount
               : tab.value === 'workOrders'
                 ? project.wos.length
-              : tab.value === 'parts'
-                ? partsCatalog.length
-                : tab.value === 'info'
+              : tab.value === 'info'
                 ? (hasProjectInfo ? 1 : 0)
                 : tasks.length
             return (
@@ -3460,14 +3484,47 @@ export default function ProjectPage({
             ? renderTasks()
             : activeTab === 'info'
             ? renderProjectInfo()
-            : activeTab === 'parts'
-            ? renderPartsDatabase()
             : activeTab === 'files'
             ? renderProjectFiles()
             : renderWorkOrders()}
         </div>
       </CardContent>
       </Card>
+      <AnimatePresence>
+        {isBomBuilderOpen && (
+          <motion.div
+            key='bom-builder-dialog'
+            className='fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4'
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={closeBomBuilder}
+          >
+            <motion.div
+              className='w-full max-w-6xl'
+              initial={{ scale: 0.96, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.96, opacity: 0 }}
+              onClick={event => event.stopPropagation()}
+            >
+              <Card className='panel flex max-h-[90vh] flex-col overflow-hidden'>
+                <CardHeader className='flex items-center justify-between'>
+                  <div className='flex items-center gap-2'>
+                    <FileText size={18} />
+                    <span className='font-medium'>Create BOM</span>
+                  </div>
+                  <Button variant='ghost' onClick={closeBomBuilder} title='Close'>
+                    <X size={16} />
+                  </Button>
+                </CardHeader>
+                <CardContent className='max-h-full overflow-y-auto pr-1'>
+                  {renderBomBuilder()}
+                </CardContent>
+              </Card>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       <AnimatePresence>
         {isTaskModalOpen && (
           <motion.div
