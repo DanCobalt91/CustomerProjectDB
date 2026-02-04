@@ -103,6 +103,23 @@ export type ProjectInfo = {
   salespersonName?: string;
   startDate?: string;
   proposedCompletionDate?: string;
+  partsCatalog?: ProjectPart[];
+  bomEntries?: ProjectBomEntry[];
+};
+
+export type ProjectPart = {
+  id: string;
+  partNumber: string;
+  description: string;
+  supplier?: string;
+  manufacturerNumber?: string;
+};
+
+export type ProjectBomEntry = {
+  id: string;
+  partId: string;
+  quantity: number;
+  designations?: string;
 };
 
 export const BUSINESS_DAYS = [
