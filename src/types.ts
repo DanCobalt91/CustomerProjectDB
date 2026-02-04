@@ -7,13 +7,14 @@ export type WO = {
   note?: string;
 };
 
-export type ProjectFileCategory = 'fds' | 'electrical' | 'mechanical' | 'installation';
+export type ProjectFileCategory = 'fds' | 'electrical' | 'mechanical' | 'installation' | 'bom';
 
 export const PROJECT_FILE_CATEGORIES: ProjectFileCategory[] = [
   'fds',
   'electrical',
   'mechanical',
   'installation',
+  'bom',
 ];
 
 export const PROJECT_STATUS_OPTIONS = ['Active', 'Complete'] as const;
