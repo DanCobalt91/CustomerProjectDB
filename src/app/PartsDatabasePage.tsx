@@ -16,6 +16,7 @@ type PartsDatabasePageProps = {
 const emptyPartForm = {
   partNumber: '',
   description: '',
+  category: '',
   supplier: '',
   manufacturerNumber: '',
 }
@@ -30,6 +31,7 @@ function partsCatalogEqual(a: ProjectPart[], b: ProjectPart[]): boolean {
       part.id === other.id &&
       part.partNumber === other.partNumber &&
       part.description === other.description &&
+      (part.category ?? '') === (other.category ?? '') &&
       part.supplier === other.supplier &&
       part.manufacturerNumber === other.manufacturerNumber
     )
@@ -53,6 +55,12 @@ export default function PartsDatabasePage({
   }, [partsCatalog])
 
   const normalizedPartSearch = partSearch.trim().toLowerCase()
+  const categoryOptions = useMemo(() => {
+    const categories = new Set(
+      draftCatalog.map(part => part.category?.trim()).filter((value): value is string => Boolean(value)),
+    )
+    return Array.from(categories).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
+  }, [draftCatalog])
   const filteredParts = useMemo(() => {
     const sorted = [...draftCatalog].sort((a, b) =>
       b.partNumber.localeCompare(a.partNumber, undefined, { sensitivity: 'base' }),
@@ -64,6 +72,7 @@ export default function PartsDatabasePage({
       const haystack = [
         part.partNumber,
         part.description,
+        part.category ?? '',
         part.supplier ?? '',
         part.manufacturerNumber ?? '',
       ]
@@ -88,7 +97,7 @@ export default function PartsDatabasePage({
     clearPartsFeedback()
   }
 
-  const handleAddPart = () => {
+  const handleAddPart = async () => {
     if (!canEdit) {
       setPartsError('You have read-only access.')
       return
@@ -96,6 +105,7 @@ export default function PartsDatabasePage({
     clearPartsFeedback()
     const partNumber = partForm.partNumber.trim()
     const description = partForm.description.trim()
+    const category = partForm.category.trim()
     const supplier = partForm.supplier.trim()
     const manufacturerNumber = partForm.manufacturerNumber.trim()
     if (!partNumber) {
@@ -109,17 +119,31 @@ export default function PartsDatabasePage({
       setPartsError('That part number already exists in the database.')
       return
     }
-    updatePartsCatalog([
+    const nextCatalog = [
       ...draftCatalog,
       {
         id: createId(),
         partNumber,
         description,
+        category,
         supplier,
         manufacturerNumber,
       },
-    ])
+    ]
+    updatePartsCatalog(nextCatalog)
     setPartForm(emptyPartForm)
+    setIsSaving(true)
+    try {
+      const saved = await onSavePartsCatalog(nextCatalog)
+      setDraftCatalog(saved)
+      setPartsError(null)
+      setPartsStatus('Part added and saved.')
+    } catch (error) {
+      console.error('Failed to save parts database', error)
+      setPartsError('Failed to auto-save the part. Please try again.')
+    } finally {
+      setIsSaving(false)
+    }
   }
 
   const handleRemovePart = (partId: string) => {
@@ -182,14 +206,14 @@ export default function PartsDatabasePage({
                       setPartSearch((event.target as HTMLInputElement).value)
                       clearPartsFeedback()
                     }}
-                    placeholder='Search part no, description, supplier…'
+                    placeholder='Search part no, description, category, supplier…'
                   />
                 </div>
               </div>
 
               <div className='rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 p-4'>
                 <div className='text-xs font-semibold uppercase tracking-wide text-slate-500'>Add new part</div>
-                <div className='mt-3 grid gap-3 md:grid-cols-4'>
+                <div className='mt-3 grid gap-3 md:grid-cols-5'>
                   <div>
                     <Label htmlFor='part-number'>Part no.</Label>
                     <Input
@@ -217,6 +241,22 @@ export default function PartsDatabasePage({
                         }))
                       }
                       placeholder='e.g. E-stop button'
+                      disabled={!canEdit}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor='part-category'>Category</Label>
+                    <Input
+                      id='part-category'
+                      list='part-category-options'
+                      value={partForm.category}
+                      onChange={event =>
+                        setPartForm(prev => ({
+                          ...prev,
+                          category: (event.target as HTMLInputElement).value,
+                        }))
+                      }
+                      placeholder='Electrical Components'
                       disabled={!canEdit}
                     />
                   </div>
@@ -251,8 +291,13 @@ export default function PartsDatabasePage({
                     />
                   </div>
                 </div>
+                <datalist id='part-category-options'>
+                  {categoryOptions.map(category => (
+                    <option key={category} value={category} />
+                  ))}
+                </datalist>
                 <div className='mt-3 flex flex-wrap items-center justify-between gap-2'>
-                  <Button onClick={handleAddPart} disabled={!canEdit}>
+                  <Button onClick={handleAddPart} disabled={!canEdit || isSaving}>
                     <Plus size={16} /> Add part
                   </Button>
                   <div className='text-xs text-slate-500'>
@@ -269,6 +314,7 @@ export default function PartsDatabasePage({
                       <tr>
                         <th className='px-3 py-2'>Part no.</th>
                         <th className='px-3 py-2'>Description</th>
+                        <th className='px-3 py-2'>Category</th>
                         <th className='px-3 py-2'>Supplier</th>
                         <th className='px-3 py-2'>Manufacturer no.</th>
                         <th className='px-3 py-2'>Actions</th>
@@ -277,7 +323,7 @@ export default function PartsDatabasePage({
                     <tbody className='divide-y divide-slate-200/70 bg-white/90'>
                       {filteredParts.length === 0 ? (
                         <tr>
-                          <td className='px-3 py-4 text-sm text-slate-400' colSpan={5}>
+                          <td className='px-3 py-4 text-sm text-slate-400' colSpan={6}>
                             {draftCatalog.length === 0
                               ? 'No parts are in the database yet.'
                               : 'No parts match this search yet.'}
@@ -303,6 +349,18 @@ export default function PartsDatabasePage({
                                 onChange={event =>
                                   handleUpdatePart(part.id, {
                                     description: (event.target as HTMLInputElement).value,
+                                  })
+                                }
+                                disabled={!canEdit}
+                              />
+                            </td>
+                            <td className='px-3 py-3'>
+                              <Input
+                                list='part-category-options'
+                                value={part.category ?? ''}
+                                onChange={event =>
+                                  handleUpdatePart(part.id, {
+                                    category: (event.target as HTMLInputElement).value,
                                   })
                                 }
                                 disabled={!canEdit}

@@ -111,6 +111,7 @@ export type ProjectPart = {
   id: string;
   partNumber: string;
   description: string;
+  category?: string;
   supplier?: string;
   manufacturerNumber?: string;
 };
