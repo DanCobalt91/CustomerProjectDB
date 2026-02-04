@@ -1195,18 +1195,23 @@ function createLocalStorageStorage(): StorageApi {
           (entryRaw as { partNo?: unknown }).partNo,
       )
       const description = toOptionalString((entryRaw as { description?: unknown }).description)
+      const category = toOptionalString(
+        (entryRaw as { category?: unknown; catagory?: unknown }).category ??
+          (entryRaw as { catagory?: unknown }).catagory,
+      )
       const supplier = toOptionalString((entryRaw as { supplier?: unknown }).supplier)
       const manufacturerNumber = toOptionalString(
         (entryRaw as { manufacturerNumber?: unknown; manufacturerNo?: unknown }).manufacturerNumber ??
           (entryRaw as { manufacturerNo?: unknown }).manufacturerNo,
       )
-      if (!partNumber && !description && !supplier && !manufacturerNumber) {
+      if (!partNumber && !description && !category && !supplier && !manufacturerNumber) {
         continue
       }
       partsCatalog.push({
         id: idRaw || createId(),
         partNumber: partNumber ?? '',
         description: description ?? '',
+        category: category ?? '',
         supplier: supplier ?? '',
         manufacturerNumber: manufacturerNumber ?? '',
       })
@@ -1983,6 +1988,7 @@ function createLocalStorageStorage(): StorageApi {
             id: part.id,
             partNumber: part.partNumber,
             description: part.description,
+            category: part.category,
             supplier: part.supplier,
             manufacturerNumber: part.manufacturerNumber,
           }))
@@ -2003,6 +2009,7 @@ function createLocalStorageStorage(): StorageApi {
       id: part.id,
       partNumber: part.partNumber,
       description: part.description,
+      category: part.category,
       supplier: part.supplier,
       manufacturerNumber: part.manufacturerNumber,
     }

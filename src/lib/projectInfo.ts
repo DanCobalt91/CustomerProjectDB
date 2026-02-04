@@ -36,6 +36,7 @@ export type ProjectPartDraft = {
   id: string
   partNumber: string
   description: string
+  category: string
   supplier: string
   manufacturerNumber: string
 }
@@ -143,6 +144,7 @@ export function createProjectInfoDraft(
         id: part.id,
         partNumber: part.partNumber,
         description: part.description ?? '',
+        category: part.category ?? '',
         supplier: part.supplier ?? '',
         manufacturerNumber: part.manufacturerNumber ?? '',
       })) ?? [],
@@ -253,9 +255,10 @@ export function parseProjectInfoDraft(
   for (const part of draft.partsCatalog) {
     const partNumber = part.partNumber.trim()
     const description = part.description.trim()
+    const category = part.category.trim()
     const supplier = part.supplier.trim()
     const manufacturerNumber = part.manufacturerNumber.trim()
-    if (!partNumber && !description && !supplier && !manufacturerNumber) {
+    if (!partNumber && !description && !category && !supplier && !manufacturerNumber) {
       continue
     }
     if (!partNumber) {
@@ -270,6 +273,7 @@ export function parseProjectInfoDraft(
       id: part.id || createId(),
       partNumber,
       description,
+      ...(category ? { category } : {}),
       supplier,
       manufacturerNumber,
     })

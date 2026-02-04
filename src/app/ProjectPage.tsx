@@ -492,6 +492,7 @@ export default function ProjectPage({
         id: part.id,
         partNumber: part.partNumber,
         description: part.description ?? '',
+        category: part.category ?? '',
         supplier: part.supplier ?? '',
         manufacturerNumber: part.manufacturerNumber ?? '',
       })),
@@ -513,6 +514,7 @@ export default function ProjectPage({
       const haystack = [
         part.partNumber,
         part.description,
+        part.category ?? '',
         part.supplier ?? '',
         part.manufacturerNumber ?? '',
       ]
@@ -2693,7 +2695,7 @@ export default function ProjectPage({
                     setPartSearch((event.target as HTMLInputElement).value)
                     clearPartsFeedback()
                   }}
-                  placeholder='Search part no, description, supplier…'
+                  placeholder='Search part no, description, category, supplier…'
                 />
               </div>
             </div>
@@ -2721,6 +2723,7 @@ export default function ProjectPage({
                       <th className='px-3 py-2'>Select</th>
                       <th className='px-3 py-2'>Part no.</th>
                       <th className='px-3 py-2'>Description</th>
+                      <th className='px-3 py-2'>Category</th>
                       <th className='px-3 py-2'>Supplier</th>
                       <th className='px-3 py-2'>Manufacturer no.</th>
                       <th className='px-3 py-2'>Qty</th>
@@ -2729,7 +2732,7 @@ export default function ProjectPage({
                   <tbody className='divide-y divide-slate-200/70 bg-white/90'>
                     {filteredParts.length === 0 ? (
                       <tr>
-                        <td className='px-3 py-4 text-sm text-slate-400' colSpan={6}>
+                        <td className='px-3 py-4 text-sm text-slate-400' colSpan={7}>
                           {partsCatalog.length === 0
                             ? 'No parts are in the database yet.'
                             : 'No parts match this search yet.'}
@@ -2751,6 +2754,7 @@ export default function ProjectPage({
                             </td>
                             <td className='px-3 py-3 font-semibold text-slate-700'>{part.partNumber}</td>
                             <td className='px-3 py-3'>{part.description || '—'}</td>
+                            <td className='px-3 py-3'>{part.category || '—'}</td>
                             <td className='px-3 py-3'>{part.supplier || '—'}</td>
                             <td className='px-3 py-3'>{part.manufacturerNumber || '—'}</td>
                             <td className='px-3 py-3'>
